@@ -46,7 +46,10 @@ class ExtractionExtractorTest(unittest.TestCase):
             {
               "source_var": "strategic flexibility",
               "target_var": "firm performance",
+              "relation_type": "direct",
+              "model_tag": "main_model",
               "direction": "positive",
+              "verification": "supported",
               "evidence_anchor": "Results paragraph 1"
             }
           ],
@@ -112,7 +115,7 @@ class ExtractionExtractorTest(unittest.TestCase):
         client = _FakeLLMClient(
             """
             {
-              "relations": [{"source_var": "A", "target_var": "B", "direction": "positive", "evidence_anchor": "Results"}],
+              "relations": [{"source_var": "A", "target_var": "B", "relation_type":"direct", "model_tag":"main_model", "direction": "positive", "verification":"supported", "evidence_anchor": "Results"}],
               "variable_level_theory_grounding": [{"variable": "A", "theory": "attention-based view", "evidence_anchor": "Hypotheses"}],
               "relation_level_theory_grounding": [{"source_var": "A", "target_var": "B", "theory": "attention-based view", "evidence_anchor": "Hypotheses"}],
               "hypotheses": [{"label": "H1", "statement": "A positively affects B.", "verification": "supported", "evidence_anchor": "Results"}],
@@ -132,6 +135,19 @@ class ExtractionExtractorTest(unittest.TestCase):
     def test_parse_extraction_response_rejects_missing_required_sections(self) -> None:
         response_text = '{"relations": [], "hypotheses": [], "citations": []}'
 
+        with self.assertRaises(ValueError):
+            parse_extraction_response(response_text)
+
+    def test_parse_extraction_response_rejects_invalid_relation_semantics(self) -> None:
+        response_text = """
+        {
+          "relations": [{"source_var": "A", "target_var": "B", "relation_type": "direct", "model_tag": "robustness", "direction": "positive", "verification": "supported", "evidence_anchor": "x"}],
+          "variable_level_theory_grounding": [],
+          "relation_level_theory_grounding": [],
+          "hypotheses": [],
+          "citations": []
+        }
+        """
         with self.assertRaises(ValueError):
             parse_extraction_response(response_text)
 

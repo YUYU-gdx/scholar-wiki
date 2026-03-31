@@ -97,6 +97,8 @@ class Neo4jRepoTest(unittest.TestCase):
         self.assertTrue(any("CITES" in query for query in queries))
         self.assertTrue(all(parameters["paper_id"] == "paper-1" for parameters in params))
         relation_params = next(parameters for query, parameters in driver.calls if "MENTIONS_RELATION" in query)
+        relation_query = next(query for query, _ in driver.calls if "MENTIONS_RELATION" in query)
+        self.assertIn("source_var", relation_query)
         self.assertEqual(relation_params["source_var"], "A")
         self.assertEqual(relation_params["target_var"], "B")
         self.assertEqual(relation_params["direction"], "positive")

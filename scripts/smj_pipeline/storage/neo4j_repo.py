@@ -16,6 +16,7 @@ class Neo4jRepo:
                     MERGE (s:Variable {name: $source_var})
                     MERGE (t:Variable {name: $target_var})
                     MERGE (p)-[:MENTIONS_RELATION {
+                      source_var: $source_var,
                       relation_type: $relation_type,
                       direction: $direction,
                       verification: $verification,
