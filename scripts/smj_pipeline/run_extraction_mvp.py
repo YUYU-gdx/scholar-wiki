@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, Iterable, Iterator, Protocol
@@ -26,6 +27,7 @@ _EXTRACTOR_MOD = _load_sibling_module("smj_pipeline_extraction_extractor", "extr
 _VALIDATOR_MOD = _load_sibling_module("smj_pipeline_extraction_validator", "extraction/validator.py")
 _REVIEW_QUEUE_MOD = _load_sibling_module("smj_pipeline_extraction_review_queue", "extraction/review_queue.py")
 _METRICS_MOD = _load_sibling_module("smj_pipeline_evaluation_metrics", "evaluation/metrics.py")
+_ZHIPU_MOD = _load_sibling_module("smj_pipeline_llm_zhipu_client", "llm/zhipu_client.py")
 
 classify_document = _QUALIFIER_MOD.classify_document
 locate_main_model_evidence = _LOCATOR_MOD.locate_main_model_evidence
@@ -35,6 +37,7 @@ build_review_queue = _REVIEW_QUEUE_MOD.build_review_queue
 write_review_queue_jsonl = _REVIEW_QUEUE_MOD.write_review_queue_jsonl
 calculate_metrics = _METRICS_MOD.calculate_metrics
 render_report = _METRICS_MOD.render_report
+ZhipuChatCompletionsClient = _ZHIPU_MOD.ZhipuChatCompletionsClient
 
 
 class LLMClient(Protocol):
@@ -262,14 +265,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-size", type=int, default=100)
     parser.add_argument("--review-queue-jsonl", type=Path, default=None)
     parser.add_argument("--report-output", type=Path, default=None)
+    parser.add_argument("--llm-provider", choices=["zhipu"], default="zhipu")
+    parser.add_argument("--llm-model", default="glm-4.5-flash")
+    parser.add_argument("--llm-api-key-env", default="ZHIPU_API_KEY")
+    parser.add_argument("--llm-base-url", default="https://open.bigmodel.cn/api/paas/v4/chat/completions")
     return parser.parse_args()
+
+
+def _build_default_llm_client(args: argparse.Namespace) -> LLMClient:
+    provider = str(args.llm_provider).strip().lower()
+    if provider != "zhipu":
+        raise ValueError(f"unsupported llm provider: {provider}")
+
+    env_name = str(args.llm_api_key_env).strip()
+    api_key = os.getenv(env_name, "").strip()
+    if not api_key:
+        raise RuntimeError(f"missing API key in environment variable: {env_name}")
+
+    return ZhipuChatCompletionsClient(
+        api_key=api_key,
+        model=str(args.llm_model).strip(),
+        base_url=str(args.llm_base_url).strip(),
+    )
 
 
 def main() -> None:
     args = parse_args()
+    llm_client = _build_default_llm_client(args)
     artifacts = run(
         args.input_manifest,
         sample_size=args.sample_size,
+        llm_client=llm_client,
         review_queue_jsonl=args.review_queue_jsonl,
         report_output_path=args.report_output,
     )
