@@ -1,0 +1,379 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMJ Graph Atlas</title>
+  <style>
+    :root {
+      --bg: #060911;
+      --fg: #ecf2ff;
+      --muted: #a7b7db;
+      --line: rgba(160, 184, 235, 0.3);
+      --panel: rgba(9, 13, 24, 0.82);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(1000px 700px at 12% 8%, #1a2d55 0%, var(--bg) 58%, #03050a 100%);
+      color: var(--fg);
+      font-family: "IBM Plex Sans", "PingFang SC", sans-serif;
+      overflow: hidden;
+    }
+    #app { position: relative; width: 100%; height: 100%; }
+    #scene { position: absolute; inset: 0; }
+    #hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      backdrop-filter: blur(10px);
+    }
+    #title { font-weight: 700; letter-spacing: .3px; margin-right: auto; }
+    #status { color: var(--muted); font-size: 12px; }
+    .chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    #panel {
+      position: absolute;
+      z-index: 20;
+      right: 12px;
+      top: 64px;
+      width: min(420px, 44vw);
+      max-height: calc(100% - 78px);
+      overflow: auto;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      backdrop-filter: blur(10px);
+    }
+    #panel h3 { margin: 0 0 8px; font-size: 15px; }
+    #details { margin: 0; padding-left: 18px; display: grid; gap: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .setting-row { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .setting-row label { min-width: 84px; font-size: 12px; color: var(--muted); }
+    .setting-row input[type="color"] { width: 36px; height: 24px; border: none; background: transparent; }
+    .setting-row button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(17, 25, 45, 0.85);
+      color: var(--fg);
+      font-size: 12px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+    #loading {
+      position: absolute;
+      inset: 0;
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: rgba(4, 8, 16, 0.76);
+      backdrop-filter: blur(4px);
+    }
+    #loading.hidden { display: none; }
+    .spinner {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 4px solid rgba(255,255,255,.22);
+      border-top-color: #7bd8f6;
+      animation: spin .8s linear infinite;
+    }
+    #loadingText { font-size: 13px; color: var(--fg); }
+    #loadingSub { font-size: 12px; color: var(--muted); }
+    #tooltip {
+      position: absolute;
+      z-index: 40;
+      display: none;
+      pointer-events: none;
+      max-width: min(340px, 72vw);
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: rgba(7, 11, 20, 0.92);
+      color: var(--fg);
+      font-size: 12px;
+    }
+    code { color: #9fd08f; font-family: Consolas, monospace; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 980px) {
+      #hud { flex-wrap: wrap; }
+      #panel { left: 12px; right: 12px; top: auto; bottom: 12px; width: auto; max-height: 46%; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="scene"></div>
+  <div id="hud">
+    <div id="title">SMJ Graph Atlas (Full Load)</div>
+    <span class="chip">Nodes <span id="nodesCount">-</span></span>
+    <span class="chip">Edges <span id="edgesCount">-</span></span>
+    <span class="chip">Papers <span id="papersCount">-</span></span>
+    <div id="status">等待加载</div>
+  </div>
+  <aside id="panel">
+    <h3>显示设置</h3>
+    <div class="setting-row"><label>节点颜色</label><input id="nodeColor" type="color" /></div>
+    <div class="setting-row"><label>正向效应</label><input id="posColor" type="color" /></div>
+    <div class="setting-row"><label>负向效应</label><input id="negColor" type="color" /></div>
+    <div class="setting-row"><label>非线性</label><input id="nonlinearColor" type="color" /></div>
+    <div class="setting-row"><label>背景色</label><input id="bgColor" type="color" /></div>
+    <div class="setting-row"><label></label><button id="resetTheme">恢复默认</button></div>
+    <h3 style="margin-top: 12px;">详情</h3>
+    <ul id="details"></ul>
+  </aside>
+  <div id="loading">
+    <div class="spinner"></div>
+    <div id="loadingText">正在加载图谱</div>
+    <div id="loadingSub">初始化中...</div>
+  </div>
+  <div id="tooltip"></div>
+</div>
+
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script src="https://unpkg.com/3d-force-graph@1.77.0/dist/3d-force-graph.min.js"></script>
+<script>
+(() => {
+  const DEFAULT_THEME = {
+    nodeColor: '#7bd8f6',
+    positiveColor: '#53d39a',
+    negativeColor: '#f07178',
+    nonlinearColor: '#f6c95b',
+    backgroundColor: '#060911'
+  };
+  const THEME_KEY = 'smj_graph_theme_v1';
+
+  const detailsEl = document.getElementById('details');
+  const statusEl = document.getElementById('status');
+  const nodesCountEl = document.getElementById('nodesCount');
+  const edgesCountEl = document.getElementById('edgesCount');
+  const papersCountEl = document.getElementById('papersCount');
+  const tooltipEl = document.getElementById('tooltip');
+  const loadingEl = document.getElementById('loading');
+  const loadingTextEl = document.getElementById('loadingText');
+  const loadingSubEl = document.getElementById('loadingSub');
+
+  const nodeColorInput = document.getElementById('nodeColor');
+  const posColorInput = document.getElementById('posColor');
+  const negColorInput = document.getElementById('negColor');
+  const nonlinearColorInput = document.getElementById('nonlinearColor');
+  const bgColorInput = document.getElementById('bgColor');
+  const resetThemeBtn = document.getElementById('resetTheme');
+
+  const mouse = { x: 0, y: 0 };
+  let graphData = { nodes: [], links: [] };
+  let theme = loadTheme();
+
+  function loadTheme() {
+    try {
+      const raw = localStorage.getItem(THEME_KEY);
+      if (!raw) return { ...DEFAULT_THEME };
+      return { ...DEFAULT_THEME, ...JSON.parse(raw) };
+    } catch {
+      return { ...DEFAULT_THEME };
+    }
+  }
+
+  function saveTheme() {
+    localStorage.setItem(THEME_KEY, JSON.stringify(theme));
+  }
+
+  function setLoading(stage, sub) {
+    loadingTextEl.textContent = stage;
+    loadingSubEl.textContent = sub || '';
+  }
+
+  function hideLoading() {
+    loadingEl.classList.add('hidden');
+  }
+
+  function setStatus(s) { statusEl.textContent = s; }
+  function setDetails(lines) { detailsEl.innerHTML = lines.map(v => `<li>${v}</li>`).join(''); }
+
+  function edgeColor(edge) {
+    const effect = String(edge.display_effect_class || '').toLowerCase();
+    if (effect === 'negative') return theme.negativeColor;
+    if (effect === 'positive') return theme.positiveColor;
+    return theme.nonlinearColor;
+  }
+
+  function applyTheme() {
+    nodeColorInput.value = theme.nodeColor;
+    posColorInput.value = theme.positiveColor;
+    negColorInput.value = theme.negativeColor;
+    nonlinearColorInput.value = theme.nonlinearColor;
+    bgColorInput.value = theme.backgroundColor;
+    document.documentElement.style.setProperty('--bg', theme.backgroundColor);
+    Graph.nodeColor(() => theme.nodeColor)
+      .linkColor(edgeColor)
+      .linkDirectionalArrowColor(edgeColor)
+      .backgroundColor('rgba(0,0,0,0)');
+    Graph.graphData(graphData);
+    saveTheme();
+  }
+
+  window.addEventListener('pointermove', (e) => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+    if (tooltipEl.style.display === 'block') {
+      tooltipEl.style.left = (mouse.x + 12) + 'px';
+      tooltipEl.style.top = (mouse.y + 12) + 'px';
+    }
+  });
+
+  const Graph = ForceGraph3D()(document.getElementById('scene'))
+    .backgroundColor('rgba(0,0,0,0)')
+    .showNavInfo(false)
+    .nodeVal(4.0)
+    .nodeColor(() => theme.nodeColor)
+    .linkColor(edgeColor)
+    .linkOpacity(0.82)
+    .linkWidth(link => 0.8 + (Number(link.strength) || 0.2) * 2.1)
+    .linkDirectionalArrowLength(link => 4.2 + (Number(link.strength) || 0.2) * 4.2)
+    .linkDirectionalArrowRelPos(1)
+    .linkDirectionalArrowResolution(12)
+    .linkDirectionalArrowColor(edgeColor)
+    .cooldownTicks(120)
+    .onNodeHover(node => {
+      if (!node) {
+        tooltipEl.style.display = 'none';
+        return;
+      }
+      tooltipEl.style.display = 'block';
+      tooltipEl.style.left = (mouse.x + 12) + 'px';
+      tooltipEl.style.top = (mouse.y + 12) + 'px';
+      tooltipEl.innerHTML = `<b>变量</b><br>${node.label || node.name || node.id}`;
+    })
+    .onLinkHover(link => {
+      if (!link) {
+        tooltipEl.style.display = 'none';
+        return;
+      }
+      tooltipEl.style.display = 'block';
+      tooltipEl.style.left = (mouse.x + 12) + 'px';
+      tooltipEl.style.top = (mouse.y + 12) + 'px';
+      tooltipEl.innerHTML = [
+        `<b>关系</b>`,
+        `${link.source.label || link.source.name} → ${link.target.label || link.target.name}`,
+        `方向: <code>${link.direction || '-'}</code>`,
+        `展示分类: <code>${link.display_effect_class || '-'}</code>`
+      ].join('<br>');
+    })
+    .onNodeClick(async node => {
+      if (!node) return;
+      setStatus('读取节点邻接关系...');
+      const links = graphData.links.filter(l => (l.source.id || l.source) === node.id || (l.target.id || l.target) === node.id);
+      setDetails([
+        `<b>变量</b>: ${node.label || node.name || node.id}`,
+        `关联边数: <code>${links.length}</code>`,
+        `提示: 点击边查看论文证据`
+      ]);
+      setStatus('就绪');
+    })
+    .onLinkClick(async link => {
+      if (!link) return;
+      setStatus('读取论文详情...');
+      try {
+        const pid = encodeURIComponent(link.paper_id || link.doi || '');
+        const res = await fetch(`/paper/${pid}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const paper = await res.json();
+        setDetails([
+          `<b>关系</b>: ${(link.source.label || link.source.name)} → ${(link.target.label || link.target.name)}`,
+          `方向: <code>${link.direction || '-'}</code>`,
+          `展示分类: <code>${link.display_effect_class || '-'}</code>`,
+          `验证: <code>${link.verification || '-'}</code>`,
+          `关系类型: <code>${link.relation_type || '-'}</code>`,
+          `DOI: <code>${paper.doi || link.doi || '-'}</code>`,
+          `证据锚点: ${link.evidence_anchor || '-'}`
+        ]);
+      } catch (err) {
+        setDetails([`读取论文详情失败: ${err.message}`]);
+      } finally {
+        setStatus('就绪');
+      }
+    });
+
+  Graph.cameraPosition({ x: 0, y: 28, z: 240 });
+  const controls = Graph.controls();
+  if (controls) {
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.rotateSpeed = 0.95;
+    controls.zoomSpeed = 0.9;
+    controls.enabled = false;
+  }
+
+  function bindThemeEvents() {
+    nodeColorInput.addEventListener('input', () => { theme.nodeColor = nodeColorInput.value; applyTheme(); });
+    posColorInput.addEventListener('input', () => { theme.positiveColor = posColorInput.value; applyTheme(); });
+    negColorInput.addEventListener('input', () => { theme.negativeColor = negColorInput.value; applyTheme(); });
+    nonlinearColorInput.addEventListener('input', () => { theme.nonlinearColor = nonlinearColorInput.value; applyTheme(); });
+    bgColorInput.addEventListener('input', () => { theme.backgroundColor = bgColorInput.value; applyTheme(); });
+    resetThemeBtn.addEventListener('click', () => {
+      theme = { ...DEFAULT_THEME };
+      applyTheme();
+    });
+  }
+
+  async function loadAll() {
+    setLoading('正在加载图谱', '读取数据...');
+    const res = await fetch('/graph/full');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const payload = await res.json();
+
+    setLoading('正在加载图谱', '构建图数据...');
+    graphData = {
+      nodes: payload.nodes || [],
+      links: payload.edges || []
+    };
+    nodesCountEl.textContent = String(graphData.nodes.length);
+    edgesCountEl.textContent = String(graphData.links.length);
+    papersCountEl.textContent = String((payload.meta || {}).paper_count ?? '-');
+
+    setLoading('正在加载图谱', '渲染中...');
+    Graph.graphData(graphData);
+
+    await new Promise(resolve => setTimeout(resolve, 500));
+    if (controls) controls.enabled = true;
+    hideLoading();
+    setStatus('就绪');
+    setDetails([
+      '<b>全量加载已完成</b>',
+      `节点: <code>${graphData.nodes.length}</code>`,
+      `边: <code>${graphData.links.length}</code>`,
+      '说明: 正向/负向/非线性三色区分，方向由箭头表示。'
+    ]);
+  }
+
+  bindThemeEvents();
+  applyTheme();
+
+  loadAll().catch(err => {
+    setStatus('加载失败');
+    setLoading('加载失败', err.message);
+    setDetails([`错误: ${err.message}`, '请确保通过 serve_graph_api.py 打开页面。']);
+  });
+})();
+</script>
+</body>
+</html>

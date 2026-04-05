@@ -6,8 +6,10 @@ from dataclasses import dataclass
 ALLOWED_DIRECTIONS = {
     "positive",
     "negative",
+    "u_shaped",
     "u_shape",
     "inverted_u",
+    "non_directional",
     "non_significant",
 }
 

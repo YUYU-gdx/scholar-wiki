@@ -32,6 +32,7 @@ _ZHIPU_MOD = _load_sibling_module("smj_pipeline_llm_zhipu_client", "llm/zhipu_cl
 classify_document = _QUALIFIER_MOD.classify_document
 locate_main_model_evidence = _LOCATOR_MOD.locate_main_model_evidence
 extract_records = _EXTRACTOR_MOD.extract_records
+extract_records_with_raw = _EXTRACTOR_MOD.extract_records_with_raw
 validate_relation_records = _VALIDATOR_MOD.validate_relation_records
 build_review_queue = _REVIEW_QUEUE_MOD.build_review_queue
 write_review_queue_jsonl = _REVIEW_QUEUE_MOD.write_review_queue_jsonl
@@ -41,11 +42,12 @@ ZhipuChatCompletionsClient = _ZHIPU_MOD.ZhipuChatCompletionsClient
 
 
 class LLMClient(Protocol):
-    def complete(self, prompt: str) -> str: ...
+    def complete(self, user_content: str, system_prompt: str | None = None) -> str: ...
 
 
 class NullLLMClient:
-    def complete(self, prompt: str) -> str:
+    def complete(self, user_content: str, system_prompt: str | None = None) -> str:
+        _ = user_content, system_prompt
         raise RuntimeError("LLM client not configured. Provide --llm-response-json for offline test or inject a real client.")
 
 
@@ -68,6 +70,12 @@ class RunArtifacts:
     report_markdown: str
 
 
+@dataclass(slots=True)
+class _InlineRejectedRecord:
+    record: dict[str, Any]
+    reason_codes: list[str]
+
+
 def run(
     input_manifest: Path | str | Iterable[dict[str, object]],
     sample_size: int = 100,
@@ -77,6 +85,7 @@ def run(
     project_root: Path | str | None = None,
     review_queue_jsonl: Path | str | None = None,
     report_output_path: Path | str | None = None,
+    raw_output_jsonl: Path | str | None = None,
 ) -> RunArtifacts:
     if sample_size < 0:
         raise ValueError("sample_size must be non-negative")
@@ -102,6 +111,7 @@ def run(
     }
 
     rejected_records_acc: list[object] = []
+    raw_outputs: list[dict[str, Any]] = []
 
     for row in _iter_manifest_rows(input_manifest):
         if class_a_used >= sample_size:
@@ -121,9 +131,30 @@ def run(
 
         if doc_class == "A":
             class_a_used += 1
-            bundle, rejected = _process_class_a_record(row, html, llm, postgres_repo, neo4j_repo)
-            rejected_records_acc.extend(rejected)
-            _accumulate_stats(stats, bundle)
+            try:
+                bundle, rejected, raw_record = _process_class_a_record(row, html, llm, postgres_repo, neo4j_repo)
+                rejected_records_acc.extend(rejected)
+                _accumulate_stats(stats, bundle)
+                raw_outputs.append(raw_record)
+            except Exception as exc:
+                rejected_records_acc.append(
+                    _InlineRejectedRecord(
+                        record={
+                            "paper_id": str(row.get("paper_id", "")),
+                            "doi": str(row.get("doi", "")),
+                            "error": str(exc),
+                        },
+                        reason_codes=["PROCESSING_ERROR"],
+                    )
+                )
+                raw_outputs.append(
+                    {
+                        "paper_id": str(row.get("paper_id", "")),
+                        "doi": str(row.get("doi", "")),
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                )
         else:
             class_c_skipped += 1
 
@@ -138,6 +169,8 @@ def run(
     if review_queue_jsonl is not None:
         queue = build_review_queue(rejected_records_acc)
         write_review_queue_jsonl(queue, Path(review_queue_jsonl))
+    if raw_output_jsonl is not None:
+        _write_jsonl(Path(raw_output_jsonl), raw_outputs)
 
     metrics_obj = calculate_metrics(stats)
     report = render_report(metrics_obj, {"run_id": "mvp-local", "sample_size": denominator_used})
@@ -153,15 +186,16 @@ def _process_class_a_record(
     llm_client: LLMClient,
     postgres_repo: object | None,
     neo4j_repo: object | None,
-) -> tuple[object, list[object]]:
+) -> tuple[object, list[object], dict[str, Any]]:
     evidence_spans = locate_main_model_evidence(html)
-    bundle = extract_records(evidence_spans, llm_client)
+    bundle, raw_response = extract_records_with_raw(html, llm_client)
 
     validation = validate_relation_records(bundle.relations)
     bundle.relations = validation.accepted_records
 
     paper_id = str(row.get("paper_id") or row.get("doi") or "")
     payload = {
+        "paper_domains": list(getattr(bundle, "paper_domains", [])),
         "relations": bundle.relations,
         "variable_level_theory_grounding": bundle.variable_level_theory_grounding,
         "relation_level_theory_grounding": bundle.relation_level_theory_grounding,
@@ -173,7 +207,15 @@ def _process_class_a_record(
     if paper_id and neo4j_repo is not None:
         getattr(neo4j_repo, "project_bundle")(paper_id, payload)
 
-    return bundle, validation.rejected_records
+    raw_record = {
+        "paper_id": paper_id,
+        "doi": str(row.get("doi", "")),
+        "status": "ok",
+        "evidence_spans": len(evidence_spans),
+        "paper_domains": list(getattr(bundle, "paper_domains", [])),
+        "raw_response": raw_response,
+    }
+    return bundle, validation.rejected_records, raw_record
 
 
 def _accumulate_stats(stats: dict[str, int], bundle: object) -> None:
@@ -259,14 +301,23 @@ def _iter_jsonl_lines(lines: Iterable[str]) -> Iterator[dict[str, object]]:
         yield payload
 
 
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="\n") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False))
+            f.write("\n")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run extraction MVP over a local manifest JSONL.")
     parser.add_argument("--input-manifest", required=True, type=Path)
     parser.add_argument("--sample-size", type=int, default=100)
     parser.add_argument("--review-queue-jsonl", type=Path, default=None)
     parser.add_argument("--report-output", type=Path, default=None)
+    parser.add_argument("--raw-output-jsonl", type=Path, default=None)
     parser.add_argument("--llm-provider", choices=["zhipu"], default="zhipu")
-    parser.add_argument("--llm-model", default="glm-4.5-flash")
+    parser.add_argument("--llm-model", default="GLM-4.7-Flash")
     parser.add_argument("--llm-api-key-env", default="ZHIPU_API_KEY")
     parser.add_argument("--llm-base-url", default="https://open.bigmodel.cn/api/paas/v4/chat/completions")
     return parser.parse_args()
@@ -298,6 +349,7 @@ def main() -> None:
         llm_client=llm_client,
         review_queue_jsonl=args.review_queue_jsonl,
         report_output_path=args.report_output,
+        raw_output_jsonl=args.raw_output_jsonl,
     )
     print(json.dumps({"summary": artifacts.summary.to_dict(), "metrics": artifacts.metrics}, ensure_ascii=True, indent=2))
 
