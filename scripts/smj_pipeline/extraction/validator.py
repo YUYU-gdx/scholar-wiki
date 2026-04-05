@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import importlib.util
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -17,6 +18,9 @@ class RejectedRecord:
 class ValidationResult:
     accepted_records: list[dict[str, Any]]
     rejected_records: list[RejectedRecord]
+
+
+_ABBR_PATTERN = re.compile(r"^[A-Z][A-Z0-9/&-]{1,7}$")
 
 
 def validate_relation_records(records: list[dict[str, Any]]) -> ValidationResult:
@@ -55,11 +59,36 @@ def _collect_reason_codes(record: dict[str, Any], schemas_module: Any) -> list[s
     if record.get("verification") not in schemas_module.ALLOWED_VERIFICATION:
         reason_codes.append("INVALID_VERIFICATION")
 
+    source_var = str(record.get("source_var", "")).strip()
+    target_var = str(record.get("target_var", "")).strip()
+    unresolved_abbr = bool(record.get("unresolved_abbr", False))
+    if (_looks_like_abbreviation(source_var) or _looks_like_abbreviation(target_var)) and not unresolved_abbr:
+        reason_codes.append("ABBR_AS_PRIMARY_NAME")
+    if unresolved_abbr and not str(record.get("abbr_form", "")).strip():
+        reason_codes.append("MISSING_ABBR_FORM")
+
+    if str(record.get("relation_type_std", "")).strip() == "moderation":
+        if not str(record.get("moderator_var", "")).strip():
+            reason_codes.append("MISSING_MODERATOR_VAR")
+        moderated = record.get("moderated_relation")
+        if not isinstance(moderated, dict):
+            reason_codes.append("MISSING_MODERATED_RELATION_REF")
+        else:
+            if not str(moderated.get("source_var", "")).strip() or not str(moderated.get("target_var", "")).strip():
+                reason_codes.append("MISSING_MODERATED_RELATION_REF")
+
     return reason_codes
 
 
 def _normalize_record(record: dict[str, Any]) -> dict[str, Any]:
     return dict(sorted(record.items()))
+
+
+def _looks_like_abbreviation(text: str) -> bool:
+    token = str(text or "").strip()
+    if not token or " " in token:
+        return False
+    return bool(_ABBR_PATTERN.match(token))
 
 
 def _load_sibling_module(module_name: str, filename: str) -> Any:

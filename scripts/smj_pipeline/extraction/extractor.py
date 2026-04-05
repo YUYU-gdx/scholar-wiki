@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any, Protocol
 
@@ -16,6 +17,9 @@ _REQUIRED_KEYS = (
     "citations",
 )
 _OPTIONAL_LIST_KEYS = ("paper_domains",)
+_ABBR_PATTERN = re.compile(r"^[A-Z][A-Z0-9/&-]{1,7}$")
+_FULL_WITH_ABBR_TEMPLATE = r"([A-Za-z][A-Za-z0-9\- ]{{2,80}}?)\s*\(\s*{abbr}\s*\)"
+_ABBR_WITH_FULL_TEMPLATE = r"{abbr}\s*\(\s*([A-Za-z][A-Za-z0-9\- ]{{2,80}}?)\s*\)"
 
 
 class LLMClient(Protocol):
@@ -131,6 +135,21 @@ def _validate_semantics(payload: dict[str, list[dict[str, Any]]]) -> None:
             isinstance(v, str) for v in row.get("target_aliases", [])
         ):
             raise ValueError(f"relations[{i}].target_aliases must be list[str]")
+        source_var = str(row.get("source_var", "")).strip()
+        target_var = str(row.get("target_var", "")).strip()
+        unresolved_abbr = bool(row.get("unresolved_abbr", False))
+        if (_looks_like_abbreviation(source_var) or _looks_like_abbreviation(target_var)) and not unresolved_abbr:
+            raise ValueError(f"relations[{i}] contains abbreviation as primary name without unresolved_abbr")
+        if unresolved_abbr and not str(row.get("abbr_form", "")).strip():
+            raise ValueError(f"relations[{i}].abbr_form is required when unresolved_abbr=true")
+        if str(row.get("relation_type_std", "")).strip() == "moderation":
+            if not str(row.get("moderator_var", "")).strip():
+                raise ValueError(f"relations[{i}].moderator_var is required for moderation")
+            mr = row.get("moderated_relation")
+            if not isinstance(mr, dict):
+                raise ValueError(f"relations[{i}].moderated_relation is required for moderation")
+            if not str(mr.get("source_var", "")).strip() or not str(mr.get("target_var", "")).strip():
+                raise ValueError(f"relations[{i}].moderated_relation.source_var/target_var are required")
 
     for i, row in enumerate(payload["variable_level_theory_grounding"]):
         _require_non_empty(row, ("variable", "theory", "evidence_anchor"), f"variable_level_theory_grounding[{i}]")
@@ -163,18 +182,118 @@ def _normalize_relation_row(row: dict[str, Any]) -> dict[str, Any]:
     direction = str(row.get("direction", "")).strip()
 
     normalized = dict(row)
-    normalized["source_var"] = source
-    normalized["target_var"] = target
-    normalized["source_aliases"] = _coerce_string_list(row.get("source_aliases", [source]))
-    normalized["target_aliases"] = _coerce_string_list(row.get("target_aliases", [target]))
-    normalized["source_canonical_var_id"] = str(row.get("source_canonical_var_id", "")).strip() or f"var::{_slug(source)}"
-    normalized["target_canonical_var_id"] = str(row.get("target_canonical_var_id", "")).strip() or f"var::{_slug(target)}"
+    source_aliases = _coerce_string_list(row.get("source_aliases", [source]))
+    target_aliases = _coerce_string_list(row.get("target_aliases", [target]))
+    source_name, source_unresolved, source_abbr_form, source_name_resolved_by = _resolve_primary_name(
+        source, source_aliases
+    )
+    target_name, target_unresolved, target_abbr_form, target_name_resolved_by = _resolve_primary_name(
+        target, target_aliases
+    )
+    normalized["source_var"] = source_name
+    normalized["target_var"] = target_name
+    normalized["source_aliases"] = _coerce_string_list([source_name, source, *source_aliases, source_abbr_form])
+    normalized["target_aliases"] = _coerce_string_list([target_name, target, *target_aliases, target_abbr_form])
+    normalized["source_canonical_var_id"] = str(row.get("source_canonical_var_id", "")).strip() or f"var::{_slug(source_name)}"
+    normalized["target_canonical_var_id"] = str(row.get("target_canonical_var_id", "")).strip() or f"var::{_slug(target_name)}"
+    unresolved_abbr = source_unresolved or target_unresolved
+    abbr_forms = _coerce_string_list(
+        [
+            source_abbr_form if source_unresolved else "",
+            target_abbr_form if target_unresolved else "",
+        ]
+    )
+    normalized["unresolved_abbr"] = unresolved_abbr
+    normalized["abbr_form"] = ",".join(abbr_forms)
+    if source_name_resolved_by == "postprocess" or target_name_resolved_by == "postprocess":
+        normalized["name_resolution_source"] = "postprocess"
+    elif unresolved_abbr:
+        normalized["name_resolution_source"] = "fallback"
+    else:
+        normalized["name_resolution_source"] = str(row.get("name_resolution_source", "")).strip() or "prompt"
 
     relation_form = str(row.get("relation_form", "")).strip().lower()
+    nonlinear_directions = {
+        "u_shape",
+        "u_shaped",
+        "inverted_u",
+        "j_shaped",
+        "inverse_j_shaped",
+        "s_shaped",
+        "threshold",
+        "hump_shaped",
+        "n_shaped",
+        "non_monotonic",
+        "non_directional",
+        "non_significant",
+    }
     if relation_form not in {"linear", "nonlinear"}:
-        relation_form = "nonlinear" if direction in {"u_shape", "u_shaped", "inverted_u", "non_directional"} else "linear"
+        relation_form = "nonlinear" if direction in nonlinear_directions else "linear"
     normalized["relation_form"] = relation_form
+    normalized["nonlinear_pattern"] = str(row.get("nonlinear_pattern", "") or "").strip()
+    relation_type_raw = str(row.get("relation_type", "") or "").strip()
+    normalized["relation_type_raw"] = relation_type_raw
+    normalized["relation_type_std"] = _normalize_relation_type(relation_type_raw)
+    normalized["relation_type"] = normalized["relation_type_std"]
+    normalized["moderator_var"] = str(row.get("moderator_var", "") or "").strip()
+    normalized["mediator_var"] = str(row.get("mediator_var", "") or "").strip()
+    normalized["condition_text"] = str(row.get("condition_text", "") or "").strip()
+    mr = row.get("moderated_relation") if isinstance(row.get("moderated_relation"), dict) else {}
+    normalized["moderated_relation"] = {
+        "source_var": str((mr or {}).get("source_var", "") or "").strip(),
+        "target_var": str((mr or {}).get("target_var", "") or "").strip(),
+        "hypothesis_label": str((mr or {}).get("hypothesis_label", "") or "").strip(),
+    }
     return normalized
+
+
+def _resolve_primary_name(
+    primary: str,
+    aliases: list[str],
+) -> tuple[str, bool, str, str]:
+    name = str(primary or "").strip()
+    alias_pool = _coerce_string_list([name, *aliases])
+    if not _looks_like_abbreviation(name):
+        return name, False, "", "prompt"
+
+    abbr_re = re.escape(name)
+    patterns = (
+        re.compile(_FULL_WITH_ABBR_TEMPLATE.format(abbr=abbr_re), flags=re.IGNORECASE),
+        re.compile(_ABBR_WITH_FULL_TEMPLATE.format(abbr=abbr_re), flags=re.IGNORECASE),
+    )
+    for alias in alias_pool:
+        for pattern in patterns:
+            m = pattern.search(alias)
+            if not m:
+                continue
+            full_name = re.sub(r"\s+", " ", str(m.group(1) or "").strip())
+            if full_name and not _looks_like_abbreviation(full_name):
+                return full_name, False, name, "postprocess"
+    return name, True, name, "fallback"
+
+
+def _looks_like_abbreviation(text: str) -> bool:
+    token = str(text or "").strip()
+    if not token or " " in token:
+        return False
+    return bool(_ABBR_PATTERN.match(token))
+
+
+def _normalize_relation_type(value: str) -> str:
+    t = str(value or "").strip().lower()
+    if not t:
+        return "unspecified"
+    if "moder" in t:
+        return "moderation"
+    if "mediat" in t:
+        return "mediation"
+    if "direct" in t:
+        return "direct"
+    if "interact" in t:
+        return "interaction"
+    if "curv" in t or "nonlinear" in t or "u-sh" in t or "u_sh" in t:
+        return "nonlinear_effect"
+    return "other"
 
 
 def _coerce_string_list(value: Any) -> list[str]:

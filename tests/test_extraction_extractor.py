@@ -206,6 +206,62 @@ Here is the extracted payload:
         self.assertIn("Strategic Management", bundle.paper_domains)
         self.assertIn("Management", bundle.paper_domains)
 
+    def test_parse_extraction_response_resolves_full_name_from_aliases(self) -> None:
+        response_text = """
+        {
+          "relations": [
+            {
+              "source_var": "TMT",
+              "target_var": "firm performance",
+              "source_aliases": ["Top management team (TMT)"],
+              "target_aliases": ["firm performance"],
+              "relation_type": "direct",
+              "model_tag": "main_model",
+              "direction": "positive",
+              "verification": "supported",
+              "evidence_anchor": "Hypothesis testing"
+            }
+          ],
+          "variable_level_theory_grounding": [],
+          "relation_level_theory_grounding": [],
+          "hypotheses": [],
+          "citations": []
+        }
+        """
+        bundle = parse_extraction_response(response_text)
+        rel = bundle.relations[0]
+        self.assertEqual(rel["source_var"], "Top management team")
+        self.assertFalse(rel["unresolved_abbr"])
+        self.assertEqual(rel["name_resolution_source"], "postprocess")
+        self.assertIn("TMT", rel["source_aliases"])
+
+    def test_parse_extraction_response_marks_unresolved_abbreviation(self) -> None:
+        response_text = """
+        {
+          "relations": [
+            {
+              "source_var": "TMT",
+              "target_var": "firm performance",
+              "relation_type": "direct",
+              "model_tag": "main_model",
+              "direction": "positive",
+              "verification": "supported",
+              "evidence_anchor": "Hypothesis testing"
+            }
+          ],
+          "variable_level_theory_grounding": [],
+          "relation_level_theory_grounding": [],
+          "hypotheses": [],
+          "citations": []
+        }
+        """
+        bundle = parse_extraction_response(response_text)
+        rel = bundle.relations[0]
+        self.assertEqual(rel["source_var"], "TMT")
+        self.assertTrue(rel["unresolved_abbr"])
+        self.assertEqual(rel["abbr_form"], "TMT")
+        self.assertEqual(rel["name_resolution_source"], "fallback")
+
 
 if __name__ == "__main__":
     unittest.main()

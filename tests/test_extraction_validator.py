@@ -165,6 +165,42 @@ class ExtractionValidatorTest(unittest.TestCase):
                 ],
             )
 
+    def test_rejects_abbreviation_primary_name_without_unresolved_flag(self) -> None:
+        result = validate_relation_records(
+            [
+                {
+                    "paper_id": "p6",
+                    "source_var": "TMT",
+                    "target_var": "Firm performance",
+                    "model_tag": "main_model",
+                    "direction": "positive",
+                    "verification": "supported",
+                    "evidence_anchor": "Results",
+                }
+            ]
+        )
+        self.assertEqual(result.accepted_records, [])
+        self.assertIn("ABBR_AS_PRIMARY_NAME", result.rejected_records[0].reason_codes)
+
+    def test_rejects_unresolved_abbreviation_without_abbr_form(self) -> None:
+        result = validate_relation_records(
+            [
+                {
+                    "paper_id": "p7",
+                    "source_var": "TMT",
+                    "target_var": "Firm performance",
+                    "model_tag": "main_model",
+                    "direction": "positive",
+                    "verification": "supported",
+                    "evidence_anchor": "Results",
+                    "unresolved_abbr": True,
+                    "abbr_form": " ",
+                }
+            ]
+        )
+        self.assertEqual(result.accepted_records, [])
+        self.assertIn("MISSING_ABBR_FORM", result.rejected_records[0].reason_codes)
+
 
 if __name__ == "__main__":
     unittest.main()
