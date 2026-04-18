@@ -9,6 +9,18 @@ from pathlib import Path
 import sys
 from typing import Any, Iterable, Iterator, Protocol
 
+def _load_env_utils():
+    module_path = Path(__file__).resolve().parent / "env_utils.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_env_utils_for_run_extraction_mvp", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_ENV_UTILS = _load_env_utils()
 
 def _load_sibling_module(module_name: str, relative_path: str):
     module_path = Path(__file__).resolve().parent / relative_path
@@ -26,19 +38,17 @@ _LOCATOR_MOD = _load_sibling_module("smj_pipeline_extraction_locator", "extracti
 _EXTRACTOR_MOD = _load_sibling_module("smj_pipeline_extraction_extractor", "extraction/extractor.py")
 _VALIDATOR_MOD = _load_sibling_module("smj_pipeline_extraction_validator", "extraction/validator.py")
 _REVIEW_QUEUE_MOD = _load_sibling_module("smj_pipeline_extraction_review_queue", "extraction/review_queue.py")
-_METRICS_MOD = _load_sibling_module("smj_pipeline_evaluation_metrics", "evaluation/metrics.py")
 _ZHIPU_MOD = _load_sibling_module("smj_pipeline_llm_zhipu_client", "llm/zhipu_client.py")
+_NVIDIA_MOD = _load_sibling_module("smj_pipeline_llm_nvidia_client", "llm/nvidia_client.py")
 
 classify_document = _QUALIFIER_MOD.classify_document
 locate_main_model_evidence = _LOCATOR_MOD.locate_main_model_evidence
-extract_records = _EXTRACTOR_MOD.extract_records
 extract_records_with_raw = _EXTRACTOR_MOD.extract_records_with_raw
 validate_relation_records = _VALIDATOR_MOD.validate_relation_records
 build_review_queue = _REVIEW_QUEUE_MOD.build_review_queue
 write_review_queue_jsonl = _REVIEW_QUEUE_MOD.write_review_queue_jsonl
-calculate_metrics = _METRICS_MOD.calculate_metrics
-render_report = _METRICS_MOD.render_report
 ZhipuChatCompletionsClient = _ZHIPU_MOD.ZhipuChatCompletionsClient
+NvidiaChatCompletionsClient = _NVIDIA_MOD.NvidiaChatCompletionsClient
 
 
 class LLMClient(Protocol):
@@ -48,7 +58,7 @@ class LLMClient(Protocol):
 class NullLLMClient:
     def complete(self, user_content: str, system_prompt: str | None = None) -> str:
         _ = user_content, system_prompt
-        raise RuntimeError("LLM client not configured. Provide --llm-response-json for offline test or inject a real client.")
+        raise RuntimeError("LLM client not configured.")
 
 
 @dataclass(slots=True, eq=True)
@@ -101,13 +111,11 @@ def run(
 
     stats = {
         "eligible_docs": 0,
-        "extracted_relations": 0,
-        "complete_relations": 0,
-        "hypotheses_total": 0,
-        "hypotheses_correct": 0,
-        "relations_with_theory": 0,
-        "citations_total": 0,
-        "citations_locatable": 0,
+        "extractable_yes_docs": 0,
+        "main_effects_total": 0,
+        "moderations_total": 0,
+        "interactions_total": 0,
+        "validated_main_effects": 0,
     }
 
     rejected_records_acc: list[object] = []
@@ -172,12 +180,18 @@ def run(
     if raw_output_jsonl is not None:
         _write_jsonl(Path(raw_output_jsonl), raw_outputs)
 
-    metrics_obj = calculate_metrics(stats)
-    report = render_report(metrics_obj, {"run_id": "mvp-local", "sample_size": denominator_used})
+    metrics = {
+        "extractable_rate": _ratio(stats["extractable_yes_docs"], stats["eligible_docs"]),
+        "mean_main_effects_per_doc": _ratio(stats["main_effects_total"], stats["eligible_docs"]),
+        "mean_moderations_per_doc": _ratio(stats["moderations_total"], stats["eligible_docs"]),
+        "mean_interactions_per_doc": _ratio(stats["interactions_total"], stats["eligible_docs"]),
+        "main_effect_validation_rate": _ratio(stats["validated_main_effects"], max(1, stats["main_effects_total"])),
+    }
+    report = _render_report(metrics, {"run_id": "mvp-local", "sample_size": denominator_used})
     if report_output_path is not None:
         Path(report_output_path).write_text(report, encoding="utf-8")
 
-    return RunArtifacts(summary=summary, metrics=asdict(metrics_obj), report_markdown=report)
+    return RunArtifacts(summary=summary, metrics=metrics, report_markdown=report)
 
 
 def _process_class_a_record(
@@ -190,17 +204,33 @@ def _process_class_a_record(
     evidence_spans = locate_main_model_evidence(html)
     bundle, raw_response = extract_records_with_raw(html, llm_client)
 
-    validation = validate_relation_records(bundle.relations)
-    bundle.relations = validation.accepted_records
+    validation = validate_relation_records(bundle.direct_effects)
+    bundle.direct_effects = validation.accepted_records
+    if getattr(bundle, "main_effects", None):
+        bundle.main_effects = [_to_main_effect_from_direct(r) for r in bundle.direct_effects]
 
     paper_id = str(row.get("paper_id") or row.get("doi") or "")
     payload = {
+        "doi": str(row.get("doi") or paper_id),
+        "offline_html_path": str(row.get("offline_html_path") or row.get("full_html_path") or ""),
+        "article_url": str(row.get("article_url") or ""),
+        "publication_date": str(row.get("publication_date") or row.get("pub_date") or ""),
+        "online_date": str(row.get("online_date") or ""),
+        "publication_year": _infer_publication_year(row),
+        "paper_citation_count": _coerce_optional_int(row.get("paper_citation_count") or row.get("citation_count")),
+        "metadata_source": "manifest_or_model",
         "paper_domains": list(getattr(bundle, "paper_domains", [])),
-        "relations": bundle.relations,
-        "variable_level_theory_grounding": bundle.variable_level_theory_grounding,
-        "relation_level_theory_grounding": bundle.relation_level_theory_grounding,
-        "hypotheses": bundle.hypotheses,
-        "citations": bundle.citations,
+        "extractability_status": getattr(bundle, "extractability_status", ""),
+        "paper_type": getattr(bundle, "paper_type", ""),
+        "extractability_reason": getattr(bundle, "extractability_reason", ""),
+        "extractability_evidence_section": getattr(bundle, "extractability_evidence_section", ""),
+        "main_effects": getattr(bundle, "main_effects", []),
+        "variable_definitions": bundle.variable_definitions,
+        "direct_effects": bundle.direct_effects,
+        "moderations": bundle.moderations,
+        "interactions": bundle.interactions,
+        "context_variables": list(getattr(bundle, "context_variables", [])),
+        "operationalization": dict(getattr(bundle, "operationalization", {}) or {}),
     }
     if paper_id and postgres_repo is not None:
         getattr(postgres_repo, "replace_paper_bundle")(paper_id, payload)
@@ -219,47 +249,38 @@ def _process_class_a_record(
 
 
 def _accumulate_stats(stats: dict[str, int], bundle: object) -> None:
-    relations = list(getattr(bundle, "relations", []))
-    hypotheses = list(getattr(bundle, "hypotheses", []))
-    rel_theory = list(getattr(bundle, "relation_level_theory_grounding", []))
-    citations = list(getattr(bundle, "citations", []))
+    status = str(getattr(bundle, "extractability_status", "")).strip().lower()
+    main_effects = list(getattr(bundle, "main_effects", []))
+    moderations = list(getattr(bundle, "moderations", []))
+    interactions = list(getattr(bundle, "interactions", []))
 
-    stats["extracted_relations"] += len(relations)
-    stats["complete_relations"] += sum(1 for r in relations if _is_complete_relation(r))
-    stats["hypotheses_total"] += len(hypotheses)
-    stats["hypotheses_correct"] += sum(1 for h in hypotheses if _has_valid_verification(h))
-    stats["relations_with_theory"] += _count_relations_with_theory(relations, rel_theory)
-    stats["citations_total"] += len(citations)
-    stats["citations_locatable"] += sum(1 for c in citations if _is_citation_locatable(c))
-
-
-def _is_complete_relation(row: dict[str, object]) -> bool:
-    required = ("source_var", "target_var", "relation_type", "model_tag", "direction", "verification", "evidence_anchor")
-    return all(str(row.get(k, "")).strip() for k in required)
+    if status == "yes":
+        stats["extractable_yes_docs"] += 1
+    stats["main_effects_total"] += len(main_effects)
+    stats["moderations_total"] += len(moderations)
+    stats["interactions_total"] += len(interactions)
+    stats["validated_main_effects"] += len(main_effects)
 
 
-def _has_valid_verification(row: dict[str, object]) -> bool:
-    allowed = {"supported", "partially_supported", "not_supported"}
-    return str(row.get("verification", "")).strip() in allowed
+def _ratio(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(float(numerator) / float(denominator), 6)
 
 
-def _count_relations_with_theory(relations: list[dict[str, object]], rel_theory: list[dict[str, object]]) -> int:
-    theory_pairs = {
-        (str(t.get("source_var", "")), str(t.get("target_var", "")))
-        for t in rel_theory
-        if str(t.get("source_var", "")).strip() and str(t.get("target_var", "")).strip()
-    }
-    return sum(
-        1
-        for r in relations
-        if (str(r.get("source_var", "")), str(r.get("target_var", ""))) in theory_pairs
-    )
-
-
-def _is_citation_locatable(row: dict[str, object]) -> bool:
-    allowed_sections = {"background", "hypothesis", "discussion"}
-    section = str(row.get("section_tag", "")).strip().lower()
-    return section in allowed_sections
+def _render_report(metrics: dict[str, float], meta: dict[str, object]) -> str:
+    lines = [
+        "# SMJ Extraction MVP Report",
+        "",
+        f"- run_id: {meta.get('run_id', '')}",
+        f"- sample_size: {meta.get('sample_size', 0)}",
+        "",
+        "## Metrics",
+    ]
+    for k, v in metrics.items():
+        lines.append(f"- {k}: {v}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _resolve_html(row: dict[str, object], project_root: Path) -> str:
@@ -282,7 +303,7 @@ def _resolve_html(row: dict[str, object], project_root: Path) -> str:
 def _iter_manifest_rows(input_manifest: Path | str | Iterable[dict[str, object]]) -> Iterator[dict[str, object]]:
     if isinstance(input_manifest, (str, Path)):
         path = Path(input_manifest)
-        with path.open("r", encoding="utf-8") as handle:
+        with path.open("r", encoding="utf-8-sig") as handle:
             yield from _iter_jsonl_lines(handle)
         return
 
@@ -309,6 +330,54 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             f.write("\n")
 
 
+def _infer_publication_year(row: dict[str, object]) -> int | None:
+    direct = _coerce_optional_int(row.get("publication_year") or row.get("pub_year") or row.get("year"))
+    if direct is not None:
+        return direct
+    for key in ("publication_date", "pub_date", "online_date"):
+        v = str(row.get(key, "") or "").strip()
+        if len(v) >= 4 and v[:4].isdigit():
+            return int(v[:4])
+    return None
+
+
+def _coerce_optional_int(v: object) -> int | None:
+    if v is None:
+        return None
+    text = str(v).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
+
+
+def _to_main_effect_from_direct(row: dict[str, Any]) -> dict[str, Any]:
+    direction = str(row.get("direction", "") or "").strip().lower()
+    relation_form = str(row.get("relation_form", "") or "").strip().lower()
+    if relation_form == "nonlinear" or direction == "nonlinear":
+        effect = "nonlinear"
+    elif direction == "positive":
+        effect = "+"
+    elif direction == "negative":
+        effect = "-"
+    elif direction:
+        effect = direction
+    else:
+        effect = ""
+    return {
+        "from": str(row.get("source", "") or "").strip(),
+        "to": str(row.get("target", "") or "").strip(),
+        "effect": effect,
+        "hypothesis_label": str(row.get("hypothesis_label", "") or "").strip(),
+        "verification": str(row.get("verification", "") or "").strip(),
+        "evidence_section": str(row.get("evidence_section", "") or "").strip(),
+        "evidence_snippet": str(row.get("evidence_snippet", "") or "").strip(),
+        "description": "",
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run extraction MVP over a local manifest JSONL.")
     parser.add_argument("--input-manifest", required=True, type=Path)
@@ -316,8 +385,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--review-queue-jsonl", type=Path, default=None)
     parser.add_argument("--report-output", type=Path, default=None)
     parser.add_argument("--raw-output-jsonl", type=Path, default=None)
-    parser.add_argument("--llm-provider", choices=["zhipu"], default="zhipu")
-    parser.add_argument("--llm-model", default="GLM-4.7-Flash")
+    parser.add_argument("--llm-provider", choices=["zhipu", "nvidia"], default="zhipu")
+    parser.add_argument("--llm-model", default="glm-4.5")
     parser.add_argument("--llm-api-key-env", default="ZHIPU_API_KEY")
     parser.add_argument("--llm-base-url", default="https://open.bigmodel.cn/api/paas/v4/chat/completions")
     return parser.parse_args()
@@ -325,34 +394,55 @@ def parse_args() -> argparse.Namespace:
 
 def _build_default_llm_client(args: argparse.Namespace) -> LLMClient:
     provider = str(args.llm_provider).strip().lower()
-    if provider != "zhipu":
-        raise ValueError(f"unsupported llm provider: {provider}")
-
-    env_name = str(args.llm_api_key_env).strip()
-    api_key = os.getenv(env_name, "").strip()
-    if not api_key:
-        raise RuntimeError(f"missing API key in environment variable: {env_name}")
-
-    return ZhipuChatCompletionsClient(
-        api_key=api_key,
-        model=str(args.llm_model).strip(),
-        base_url=str(args.llm_base_url).strip(),
-    )
+    api_key = os.getenv(args.llm_api_key_env, "").strip()
+    if provider == "zhipu":
+        if not api_key:
+            raise RuntimeError(f"missing api key env: {args.llm_api_key_env}")
+        return ZhipuChatCompletionsClient(
+            api_key=api_key,
+            model=args.llm_model,
+            base_url=args.llm_base_url,
+        )
+    if provider == "nvidia":
+        if not api_key:
+            raise RuntimeError(f"missing api key env: {args.llm_api_key_env}")
+        return NvidiaChatCompletionsClient(
+            api_key=api_key,
+            model=args.llm_model,
+            base_url=args.llm_base_url,
+        )
+    raise RuntimeError(f"unsupported llm provider: {provider}")
 
 
 def main() -> None:
+    _ENV_UTILS.load_repo_env()
     args = parse_args()
-    llm_client = _build_default_llm_client(args)
+    llm = _build_default_llm_client(args)
     artifacts = run(
-        args.input_manifest,
+        input_manifest=args.input_manifest,
         sample_size=args.sample_size,
-        llm_client=llm_client,
+        llm_client=llm,
         review_queue_jsonl=args.review_queue_jsonl,
         report_output_path=args.report_output,
         raw_output_jsonl=args.raw_output_jsonl,
     )
-    print(json.dumps({"summary": artifacts.summary.to_dict(), "metrics": artifacts.metrics}, ensure_ascii=True, indent=2))
+
+    print(
+        json.dumps(
+            {
+                "summary": artifacts.summary.to_dict(),
+                "metrics": artifacts.metrics,
+                "report_path": str(args.report_output) if args.report_output else None,
+                "review_queue_path": str(args.review_queue_jsonl) if args.review_queue_jsonl else None,
+                "raw_output_path": str(args.raw_output_jsonl) if args.raw_output_jsonl else None,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
     main()
+
+

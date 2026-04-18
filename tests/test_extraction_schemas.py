@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
@@ -14,53 +14,52 @@ _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _MOD
 _SPEC.loader.exec_module(_MOD)
 
-ExtractionSchema = _MOD.ExtractionSchema
+DirectEffectSchema = _MOD.DirectEffectSchema
 
 
 class ExtractionSchemasTest(unittest.TestCase):
-    def test_valid_schema(self) -> None:
-        schema = ExtractionSchema(
-            model_tag="main_model",
+    def test_valid_direct_effect_schema(self) -> None:
+        schema = DirectEffectSchema(
+            source="A",
+            target="B",
             direction="positive",
+            relation_form="linear",
             verification="supported",
-            evidence_anchor="method section",
+            evidence_section="Results",
         )
-        self.assertEqual(schema.model_tag, "main_model")
-
-    def test_rejects_wrong_model_tag(self) -> None:
-        with self.assertRaises(ValueError):
-            ExtractionSchema(
-                model_tag="secondary_model",
-                direction="positive",
-                verification="supported",
-                evidence_anchor="method section",
-            )
+        self.assertEqual(schema.source, "A")
 
     def test_rejects_unknown_direction(self) -> None:
         with self.assertRaises(ValueError):
-            ExtractionSchema(
-                model_tag="main_model",
+            DirectEffectSchema(
+                source="A",
+                target="B",
                 direction="neutral",
+                relation_form="linear",
                 verification="supported",
-                evidence_anchor="method section",
+                evidence_section="Results",
             )
 
     def test_rejects_unknown_verification(self) -> None:
         with self.assertRaises(ValueError):
-            ExtractionSchema(
-                model_tag="main_model",
+            DirectEffectSchema(
+                source="A",
+                target="B",
                 direction="positive",
-                verification="unclear",
-                evidence_anchor="method section",
+                relation_form="linear",
+                verification="partially_supported",
+                evidence_section="Results",
             )
 
-    def test_rejects_empty_evidence_anchor(self) -> None:
+    def test_rejects_empty_evidence_section(self) -> None:
         with self.assertRaises(ValueError):
-            ExtractionSchema(
-                model_tag="main_model",
+            DirectEffectSchema(
+                source="A",
+                target="B",
                 direction="positive",
+                relation_form="linear",
                 verification="supported",
-                evidence_anchor="   ",
+                evidence_section="   ",
             )
 
 

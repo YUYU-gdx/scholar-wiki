@@ -8,6 +8,8 @@ import re
 import sys
 from typing import Any
 
+SUPPLY_CHAIN_ROOT = Path("outputs/smj_supply_chain_batch").resolve()
+
 
 def _load_extractor_module():
     module_path = Path(__file__).resolve().parent / "extraction" / "extractor.py"
@@ -26,48 +28,13 @@ def _slug(text: str) -> str:
     return t or "unknown"
 
 
-def _strength_from_verification(verification: str) -> float:
-    m = {
-        "supported": 1.0,
-        "partially_supported": 0.5,
-        "not_supported": 0.0,
-    }
-    return m.get(str(verification or "").strip(), 0.0)
-
-
-def _display_effect_class(direction: str, relation_form: str) -> str:
-    form = str(relation_form or "").strip().lower()
-    if form == "nonlinear":
-        return "nonlinear"
-    d = str(direction or "").strip().lower()
-    if d == "negative":
-        return "negative"
-    if d == "positive":
-        return "positive"
-    if d in {"u_shape", "u_shaped", "inverted_u", "non_directional", "non_significant"}:
-        return "nonlinear"
-    return "nonlinear"
-
-
-def _normalize_relation_type(value: str) -> str:
-    t = str(value or "").strip().lower()
-    if not t:
-        return "unspecified"
-    if "moder" in t:
-        return "moderation"
-    if "mediat" in t:
-        return "mediation"
-    if "direct" in t:
-        return "direct"
-    if "interact" in t:
-        return "interaction"
-    if "curv" in t or "nonlinear" in t or "u-sh" in t or "u_sh" in t:
-        return "nonlinear_effect"
-    return "other"
+def _canonical_var_id(text: str) -> str:
+    value = " ".join(str(text or "").strip().split())
+    return f"var::{value}" if value else "var::unknown"
 
 
 def _iter_jsonl(path: Path):
-    with path.open("r", encoding="utf-8") as f:
+    with path.open("r", encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -89,73 +56,124 @@ def _coerce_optional_int(value: object) -> int | None:
         return None
 
 
-def _normalize_alias(text: str) -> str:
-    t = re.sub(r"\s+", " ", str(text or "").strip().lower())
-    t = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", t).strip("-")
-    return t
+def _display_effect_class(direction: str, relation_form: str) -> str:
+    form = str(relation_form or "").strip().lower()
+    if form == "nonlinear":
+        return "nonlinear"
+    d = str(direction or "").strip().lower()
+    if d == "negative":
+        return "negative"
+    if d == "positive":
+        return "positive"
+    return "nonlinear"
 
 
-def _looks_like_abbreviation(text: str) -> bool:
-    token = str(text or "").strip()
-    return bool(re.fullmatch(r"[A-Z][A-Z0-9/&-]{1,7}", token))
+def _effect_to_direction_and_form(effect_raw: str) -> tuple[str, str, str]:
+    raw = str(effect_raw or "").strip()
+    t = raw.lower()
+    if t in {"+", "positive"}:
+        return "positive", "linear", ""
+    if t in {"-", "negative"}:
+        return "negative", "linear", ""
+    if "nonlinear" in t or "u" in t or "curve" in t:
+        return "nonlinear", "nonlinear", raw
+    if t in {"mixed", "unclear"}:
+        return t, "linear", ""
+    return "unclear", "linear", raw if raw else ""
 
 
-class _Dsu:
-    def __init__(self) -> None:
-        self.parent: dict[str, str] = {}
+def _main_effect_from_direct(rel: dict[str, Any]) -> dict[str, Any]:
+    direction = str(rel.get("direction", "") or "").strip().lower()
+    relation_form = str(rel.get("relation_form", "") or "").strip().lower()
+    effect = ""
+    if relation_form == "nonlinear" or direction == "nonlinear":
+        effect = "nonlinear"
+    elif direction == "positive":
+        effect = "+"
+    elif direction == "negative":
+        effect = "-"
+    elif direction:
+        effect = direction
+    return {
+        "from": str(rel.get("source", "") or "").strip(),
+        "to": str(rel.get("target", "") or "").strip(),
+        "effect": effect,
+        "hypothesis_label": str(rel.get("hypothesis_label", "") or "").strip(),
+        "verification": str(rel.get("verification", "") or "").strip(),
+        "evidence_section": str(rel.get("evidence_section", "") or "").strip(),
+        "evidence_snippet": str(rel.get("evidence_snippet", "") or "").strip(),
+        "description": "",
+    }
 
-    def find(self, x: str) -> str:
-        p = self.parent.get(x, x)
-        if p != x:
-            p = self.find(p)
-            self.parent[x] = p
-        else:
-            self.parent[x] = x
-        return p
 
-    def union(self, a: str, b: str) -> None:
-        ra = self.find(a)
-        rb = self.find(b)
-        if ra != rb:
-            self.parent[rb] = ra
+def _ensure_node(
+    variable_nodes: dict[str, dict[str, Any]],
+    node_aliases: dict[str, set[str]],
+    node_id: str,
+    label: str,
+    aliases: list[str] | None = None,
+) -> None:
+    n = variable_nodes.setdefault(node_id, {"id": node_id, "type": "variable", "label": label, "name": label, "canonical_var_id": node_id})
+    if label and not str(n.get("label", "")).strip():
+        n["label"] = label
+    node_aliases.setdefault(node_id, set())
+    for v in aliases or []:
+        txt = str(v or "").strip()
+        if txt:
+            node_aliases[node_id].add(txt)
 
 
-def _choose_canonical_name(names: list[str]) -> str:
-    cleaned = [str(n or "").strip() for n in names if str(n or "").strip()]
-    if not cleaned:
-        return "unknown"
-    non_abbr = [n for n in cleaned if not _looks_like_abbreviation(n)]
-    base = non_abbr if non_abbr else cleaned
-    # Prefer richer phrase-like names as canonical display name.
-    return sorted(base, key=lambda x: (len(x.split()), len(x), x.lower()), reverse=True)[0]
+def _fill_node_first_year(nodes: dict[str, dict[str, Any]], edges: list[dict[str, Any]]) -> None:
+    years_by_node: dict[str, list[int]] = {}
+    for edge in edges:
+        year = _coerce_optional_int(edge.get("paper_year"))
+        if year is None:
+            continue
+        source = str(edge.get("source", "")).strip()
+        target = str(edge.get("target", "")).strip()
+        if source:
+            years_by_node.setdefault(source, []).append(year)
+        if target:
+            years_by_node.setdefault(target, []).append(year)
+    for node_id, node in nodes.items():
+        years = years_by_node.get(node_id, [])
+        if years:
+            node["first_year"] = min(years)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export extraction outputs to frontend-friendly graph artifact.")
-    parser.add_argument(
-        "--raw-output-jsonl",
-        type=Path,
-        required=True,
-        help="raw_llm_outputs.jsonl from run_extraction_mvp",
-    )
-    parser.add_argument(
-        "--output-json",
-        type=Path,
-        required=True,
-        help="output frontend artifact json path",
-    )
+    parser.add_argument("--raw-output-jsonl", type=Path, required=True)
+    parser.add_argument("--output-json", type=Path, required=True)
+    parser.add_argument("--allow-non-supply-chain", action="store_true")
     return parser.parse_args()
+
+
+def _enforce_supply_chain_path(path: Path, allow_non_supply_chain: bool, flag_name: str) -> None:
+    resolved = path.resolve()
+    if allow_non_supply_chain:
+        return
+    if SUPPLY_CHAIN_ROOT not in resolved.parents and resolved != SUPPLY_CHAIN_ROOT:
+        raise RuntimeError(
+            f"{flag_name} path is outside supply-chain scope: {resolved}\n"
+            f"allowed root: {SUPPLY_CHAIN_ROOT}\n"
+            "use --allow-non-supply-chain to override explicitly"
+        )
 
 
 def main() -> None:
     args = parse_args()
+    _enforce_supply_chain_path(args.raw_output_jsonl, args.allow_non_supply_chain, "--raw-output-jsonl")
+    _enforce_supply_chain_path(args.output_json, args.allow_non_supply_chain, "--output-json")
     extractor = _load_extractor_module()
 
     variable_nodes: dict[str, dict[str, Any]] = {}
+    node_aliases: dict[str, set[str]] = {}
     edges: list[dict[str, Any]] = []
     moderation_links: list[dict[str, Any]] = []
+    interaction_links: list[dict[str, Any]] = []
     papers: list[dict[str, Any]] = []
-    alias_to_node_ids: dict[str, set[str]] = {}
+    edge_key_seen: set[str] = set()
 
     total = 0
     success = 0
@@ -163,11 +181,7 @@ def main() -> None:
 
     for row in _iter_jsonl(args.raw_output_jsonl):
         total += 1
-        status = str(row.get("status", "")).strip()
-        paper_id = str(row.get("paper_id", "")).strip()
-        doi = str(row.get("doi", "")).strip()
-
-        if status != "ok":
+        if str(row.get("status", "")).strip() != "ok":
             failed += 1
             continue
 
@@ -179,208 +193,214 @@ def main() -> None:
             continue
 
         success += 1
+        paper_id = str(row.get("paper_id", "")).strip()
+        doi = str(row.get("doi", "")).strip()
         paper_payload = {
             "paper_id": paper_id,
             "doi": doi,
             "offline_html_path": str(row.get("offline_html_path", "") or ""),
             "article_url": str(row.get("article_url", "") or ""),
-            "publication_date": str(row.get("publication_date", "") or row.get("pub_date", "") or ""),
+            "publication_date": str(row.get("publication_date", "") or ""),
             "online_date": str(row.get("online_date", "") or ""),
             "publication_year": _coerce_optional_int(row.get("publication_year") or row.get("pub_year") or row.get("year")),
             "paper_citation_count": _coerce_optional_int(row.get("paper_citation_count") or row.get("citation_count")),
             "paper_domains": list(getattr(bundle, "paper_domains", [])),
-            "relations": bundle.relations,
-            "hypotheses": bundle.hypotheses,
-            "variable_level_theory_grounding": bundle.variable_level_theory_grounding,
-            "relation_level_theory_grounding": bundle.relation_level_theory_grounding,
-            "citations": bundle.citations,
+            "extractability_status": bundle.extractability_status,
+            "paper_type": bundle.paper_type,
+            "extractability_reason": bundle.extractability_reason,
+            "extractability_evidence_section": bundle.extractability_evidence_section,
+            "main_effects": list(getattr(bundle, "main_effects", []))
+            or [_main_effect_from_direct(x) for x in list(getattr(bundle, "direct_effects", []))],
+            "interactions": bundle.interactions,
+            "context_variables": list(getattr(bundle, "context_variables", [])),
+            "operationalization": dict(getattr(bundle, "operationalization", {}) or {}),
+            "variable_definitions": list(getattr(bundle, "variable_definitions", []) or []),
         }
         papers.append(paper_payload)
 
-        for rel in bundle.relations:
-            source = str(rel.get("source_var", "")).strip()
-            target = str(rel.get("target_var", "")).strip()
+        for rel in paper_payload["main_effects"]:
+            source = str(rel.get("from", "")).strip()
+            target = str(rel.get("to", "")).strip()
             if not source or not target:
                 continue
+            source_id = _canonical_var_id(source)
+            target_id = _canonical_var_id(target)
+            _ensure_node(variable_nodes, node_aliases, source_id, source, [])
+            _ensure_node(variable_nodes, node_aliases, target_id, target, [])
+            direction, relation_form, relation_form_raw = _effect_to_direction_and_form(str(rel.get("effect", "") or ""))
 
-            source_id = str(rel.get("source_canonical_var_id", "")).strip() or f"var::{_slug(source)}"
-            target_id = str(rel.get("target_canonical_var_id", "")).strip() or f"var::{_slug(target)}"
-            source_aliases = [source, *list(rel.get("source_aliases", []) or [])]
-            target_aliases = [target, *list(rel.get("target_aliases", []) or [])]
-            variable_nodes.setdefault(
-                source_id,
-                {"id": source_id, "type": "variable", "label": source, "name": source},
-            )
-            variable_nodes.setdefault(
-                target_id,
-                {"id": target_id, "type": "variable", "label": target, "name": target},
-            )
-            for alias in source_aliases:
-                norm = _normalize_alias(alias)
-                if norm:
-                    alias_to_node_ids.setdefault(norm, set()).add(source_id)
-            for alias in target_aliases:
-                norm = _normalize_alias(alias)
-                if norm:
-                    alias_to_node_ids.setdefault(norm, set()).add(target_id)
-
-            edge_id = f"edge::{_slug(paper_id)}::{_slug(source)}::{_slug(target)}::{len(edges)}"
-            paper_year = _coerce_optional_int(paper_payload.get("publication_year"))
-            paper_citations = _coerce_optional_int(paper_payload.get("paper_citation_count"))
-            relation_type_std = str(rel.get("relation_type_std", "") or _normalize_relation_type(str(rel.get("relation_type", ""))))
-            relation_type_raw = str(rel.get("relation_type_raw", "") or rel.get("relation_type", ""))
-            moderated = rel.get("moderated_relation") if isinstance(rel.get("moderated_relation"), dict) else {}
-            moderator_var = str(rel.get("moderator_var", "") or "").strip()
-            if relation_type_std == "moderation" and moderator_var and str(moderated.get("source_var", "")).strip() and str(moderated.get("target_var", "")).strip():
-                moderator_id = f"var::{_slug(moderator_var)}"
-                variable_nodes.setdefault(
-                    moderator_id,
-                    {"id": moderator_id, "type": "variable", "label": moderator_var, "name": moderator_var},
-                )
-                moderation_links.append(
-                    {
-                        "id": f"mod::{_slug(paper_id)}::{_slug(moderator_var)}::{len(moderation_links)}",
-                        "paper_id": paper_id,
-                        "doi": doi,
-                        "moderator_var": moderator_var,
-                        "moderator_node_id": moderator_id,
-                        "moderated_relation": {
-                            "source_var": str(moderated.get("source_var", "") or ""),
-                            "target_var": str(moderated.get("target_var", "") or ""),
-                            "hypothesis_label": str(moderated.get("hypothesis_label", "") or ""),
-                        },
-                        "condition_text": str(rel.get("condition_text", "") or ""),
-                        "evidence_section": rel.get("evidence_anchor", ""),
-                        "paper_year": paper_year,
-                    }
-                )
+            evidence = str(rel.get("evidence_section", "") or "").strip()
+            rel_std = "main_effect"
+            dedupe_key = f"{paper_id}|{source_id}|{target_id}|{rel_std}|{evidence}"
+            if dedupe_key in edge_key_seen:
                 continue
+            edge_key_seen.add(dedupe_key)
             edges.append(
                 {
-                    "id": edge_id,
+                    "id": f"edge::{_slug(paper_id)}::{_slug(source)}::{_slug(target)}::{len(edges)}",
                     "source": source_id,
                     "target": target_id,
+                    "source_name_local": source,
+                    "target_name_local": target,
                     "paper_id": paper_id,
                     "doi": doi,
-                    "relation_type_raw": relation_type_raw,
-                    "relation_type_std": relation_type_std,
-                    "relation_type": relation_type_std,
-                    "unresolved_abbr": bool(rel.get("unresolved_abbr", False)),
-                    "abbr_form": str(rel.get("abbr_form", "") or ""),
-                    "name_resolution_source": str(rel.get("name_resolution_source", "") or ""),
-                    "relation_form": rel.get("relation_form", "linear"),
-                    "direction": rel.get("direction", ""),
-                    "display_effect_class": _display_effect_class(
-                        str(rel.get("direction", "")),
-                        str(rel.get("relation_form", "linear")),
-                    ),
+                    "relation_type": "main_effect",
+                    "relation_type_std": rel_std,
+                    "direction": direction,
+                    "relation_form": relation_form,
+                    "relation_form_raw": relation_form_raw,
                     "verification": rel.get("verification", ""),
-                    "strength": _strength_from_verification(str(rel.get("verification", ""))),
-                    "evidence_anchor": rel.get("evidence_anchor", ""),
-                    "evidence_section": rel.get("evidence_anchor", ""),
-                    "paper_year": paper_year,
-                    "citation_stats": {"paper_citation_count": paper_citations},
+                    "evidence_section": evidence,
+                    "evidence_snippet": rel.get("evidence_snippet", ""),
+                    "hypothesis_label": rel.get("hypothesis_label", ""),
+                    "paper_year": paper_payload.get("publication_year"),
+                    "display_effect_class": _display_effect_class(direction, relation_form),
                 }
             )
-    # Global synonym merge: node IDs connected by shared alias collapse into one point.
-    dsu = _Dsu()
-    for node_id in variable_nodes:
-        dsu.find(node_id)
-    for node_ids in alias_to_node_ids.values():
-        node_list = sorted(node_ids)
-        if len(node_list) < 2:
-            continue
-        head = node_list[0]
-        for nid in node_list[1:]:
-            dsu.union(head, nid)
 
-    groups: dict[str, list[str]] = {}
-    for nid in variable_nodes:
-        groups.setdefault(dsu.find(nid), []).append(nid)
+        for mod in bundle.moderations:
+            moderator = str(mod.get("moderator", "")).strip()
+            if not moderator:
+                continue
+            moderator_id = _canonical_var_id(moderator)
+            _ensure_node(variable_nodes, node_aliases, moderator_id, moderator, [])
+            condition_text = str(mod.get("condition_text", "") or "")
+            for target in mod.get("moderated_effects", []) or []:
+                src = str(target.get("source", "")).strip()
+                tgt = str(target.get("target", "")).strip()
+                if not src or not tgt:
+                    continue
+                src_id = _canonical_var_id(src)
+                tgt_id = _canonical_var_id(tgt)
+                _ensure_node(variable_nodes, node_aliases, src_id, src, [])
+                _ensure_node(variable_nodes, node_aliases, tgt_id, tgt, [])
+                moderation_links.append(
+                    {
+                        "id": f"mod::{_slug(paper_id)}::{_slug(moderator)}::{len(moderation_links)}",
+                        "paper_id": paper_id,
+                        "doi": doi,
+                        "moderator_var": moderator,
+                        "moderator_node_id": moderator_id,
+                        "moderated_relation": {
+                            "source_var": src,
+                            "target_var": tgt,
+                            "source_node_id": src_id,
+                            "target_node_id": tgt_id,
+                        },
+                        "direction": mod.get("direction", ""),
+                        "verification": mod.get("verification", ""),
+                        "hypothesis_label": mod.get("hypothesis_label", ""),
+                        "condition_text": condition_text,
+                        "evidence_section": mod.get("evidence_section", ""),
+                        "evidence_snippet": mod.get("evidence_snippet", ""),
+                        "paper_year": paper_payload.get("publication_year"),
+                    }
+                )
 
-    remap: dict[str, str] = {}
-    merged_nodes: dict[str, dict[str, Any]] = {}
-    for members in groups.values():
-        names = [str(variable_nodes[m].get("label", "") or variable_nodes[m].get("name", "") or "") for m in members]
-        canonical_name = _choose_canonical_name(names)
-        canonical_id = f"var::{_slug(canonical_name)}"
-        merged_nodes.setdefault(
-            canonical_id,
-            {"id": canonical_id, "type": "variable", "label": canonical_name, "name": canonical_name},
-        )
-        for old in members:
-            remap[old] = canonical_id
+        for interaction in bundle.interactions:
+            inputs = list(interaction.get("inputs", []) or [])
+            output = str(interaction.get("output", "") or "").strip()
+            if len(inputs) < 2 or not output:
+                continue
+            output_id = _canonical_var_id(output)
+            _ensure_node(variable_nodes, node_aliases, output_id, output, [])
 
-    for edge in edges:
-        edge["source"] = remap.get(str(edge.get("source", "")), str(edge.get("source", "")))
-        edge["target"] = remap.get(str(edge.get("target", "")), str(edge.get("target", "")))
-    for m in moderation_links:
-        old_mid = str(m.get("moderator_node_id", "")).strip()
-        m["moderator_node_id"] = remap.get(old_mid, old_mid)
-        new_mid = str(m.get("moderator_node_id", "")).strip()
-        node = merged_nodes.get(new_mid)
+            resolved_input_ids: list[str] = []
+            resolved_input_names: list[str] = []
+            for input_name in inputs:
+                in_name = str(input_name or "").strip()
+                if not in_name:
+                    continue
+                in_id = _canonical_var_id(in_name)
+                _ensure_node(variable_nodes, node_aliases, in_id, in_name, [])
+                resolved_input_ids.append(in_id)
+                resolved_input_names.append(in_name)
+
+            if len(resolved_input_ids) < 2:
+                continue
+
+            moderator = str(interaction.get("moderator", "") or "").strip()
+            moderator_id = _canonical_var_id(moderator) if moderator else ""
+            if moderator and moderator_id:
+                _ensure_node(variable_nodes, node_aliases, moderator_id, moderator, [])
+
+            interaction_links.append(
+                {
+                    "id": f"int::{_slug(paper_id)}::{len(interaction_links)}",
+                    "paper_id": paper_id,
+                    "doi": doi,
+                    "inputs": resolved_input_names,
+                    "input_node_ids": resolved_input_ids,
+                    "output": output,
+                    "output_node_id": output_id,
+                    "interaction_type": str(interaction.get("type", "") or ""),
+                    "moderator": moderator,
+                    "moderator_node_id": moderator_id,
+                    "effect": str(interaction.get("effect", "") or ""),
+                    "verification": str(interaction.get("verification", "") or ""),
+                    "hypothesis_label": str(interaction.get("hypothesis_label", "") or ""),
+                    "evidence_section": str(interaction.get("evidence_section", "") or ""),
+                    "evidence_snippet": str(interaction.get("evidence_snippet", "") or ""),
+                    "description": str(interaction.get("description", "") or ""),
+                    "paper_year": paper_payload.get("publication_year"),
+                }
+            )
+            interaction_type_text = str(interaction.get("type", "") or "").strip().lower()
+            if "moderat" in interaction_type_text and moderator_id:
+                for idx, src_name in enumerate(resolved_input_names):
+                    src_id = resolved_input_ids[idx] if idx < len(resolved_input_ids) else ""
+                    if not src_id or src_id == moderator_id:
+                        continue
+                    moderation_links.append(
+                        {
+                            "id": f"mod::from_inter::{_slug(paper_id)}::{len(moderation_links)}",
+                            "paper_id": paper_id,
+                            "doi": doi,
+                            "moderator_var": moderator,
+                            "moderator_node_id": moderator_id,
+                            "moderated_relation": {
+                                "source_var": src_name,
+                                "target_var": output,
+                                "source_node_id": src_id,
+                                "target_node_id": output_id,
+                            },
+                            "direction": str(interaction.get("effect", "") or ""),
+                            "verification": str(interaction.get("verification", "") or ""),
+                            "hypothesis_label": str(interaction.get("hypothesis_label", "") or ""),
+                            "condition_text": "",
+                            "evidence_section": str(interaction.get("evidence_section", "") or ""),
+                            "evidence_snippet": str(interaction.get("evidence_snippet", "") or ""),
+                            "paper_year": paper_payload.get("publication_year"),
+                        }
+                    )
+
+    _fill_node_first_year(variable_nodes, edges)
+    for node_id, aliases in node_aliases.items():
+        node = variable_nodes.get(node_id)
         if node is not None:
-            m["moderator_var"] = str(node.get("label", "") or m.get("moderator_var", ""))
+            node["aliases"] = sorted(aliases)
+            node["alias_count"] = len(aliases)
 
-    for paper in papers:
-        relations = list(paper.get("relations", []) or [])
-        for rel in relations:
-            src_old = str(rel.get("source_canonical_var_id", "")).strip() or f"var::{_slug(str(rel.get('source_var', '')))}"
-            tgt_old = str(rel.get("target_canonical_var_id", "")).strip() or f"var::{_slug(str(rel.get('target_var', '')))}"
-            src_new = remap.get(src_old, src_old)
-            tgt_new = remap.get(tgt_old, tgt_old)
-            rel["source_canonical_var_id"] = src_new
-            rel["target_canonical_var_id"] = tgt_new
-            if src_new in merged_nodes:
-                rel["source_var"] = str(merged_nodes[src_new].get("label", "") or rel.get("source_var", ""))
-            if tgt_new in merged_nodes:
-                rel["target_var"] = str(merged_nodes[tgt_new].get("label", "") or rel.get("target_var", ""))
-
-    edge_years_by_node: dict[str, list[int]] = {}
-    citation_by_node: dict[str, list[int]] = {}
-    all_years: list[int] = []
-    for edge in edges:
-        src = str(edge.get("source", "")).strip()
-        tgt = str(edge.get("target", "")).strip()
-        year = _coerce_optional_int(edge.get("paper_year"))
-        paper_citation = _coerce_optional_int((edge.get("citation_stats", {}) or {}).get("paper_citation_count"))
-        if year is not None:
-            edge_years_by_node.setdefault(src, []).append(year)
-            edge_years_by_node.setdefault(tgt, []).append(year)
-        if paper_citation is not None:
-            citation_by_node.setdefault(src, []).append(paper_citation)
-            citation_by_node.setdefault(tgt, []).append(paper_citation)
-    for node_id, node in merged_nodes.items():
-        years = edge_years_by_node.get(node_id, [])
-        citations = citation_by_node.get(node_id, [])
-        first_year = min(years) if years else None
-        if first_year is not None:
-            all_years.append(first_year)
-        node["first_year"] = first_year
-        node["citation_stats"] = {
-            "max_citation_count": max(citations) if citations else None,
-            "mean_citation_count": (sum(citations) / len(citations)) if citations else None,
-        }
-
-    artifact = {
+    out_payload = {
         "meta": {
             "total_rows": total,
             "success_rows": success,
             "failed_rows": failed,
-            "node_count": len(merged_nodes),
+            "node_count": len(variable_nodes),
             "edge_count": len(edges),
             "paper_count": len(papers),
-            "year_range": {"min": min(all_years) if all_years else None, "max": max(all_years) if all_years else None},
+            "interaction_count": len(interaction_links),
         },
-        "nodes": list(merged_nodes.values()),
+        "nodes": list(variable_nodes.values()),
         "edges": edges,
         "moderation_links": moderation_links,
+        "interaction_links": interaction_links,
         "papers": papers,
     }
 
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
-    args.output_json.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"output": str(args.output_json), "meta": artifact["meta"]}, ensure_ascii=False, indent=2))
+    args.output_json.write_text(json.dumps(out_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(out_payload["meta"], ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

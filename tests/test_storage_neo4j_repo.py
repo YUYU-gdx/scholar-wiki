@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
@@ -17,44 +17,30 @@ _SPEC.loader.exec_module(_MOD)
 Neo4jRepo = _MOD.Neo4jRepo
 
 
-def _bundle() -> dict[str, list[dict[str, str]]]:
+def _bundle() -> dict[str, object]:
     return {
-        "relations": [
+        "extractability_status": "yes",
+        "paper_type": "quantitative_empirical",
+        "direct_effects": [
             {
-                "source_var": "A",
-                "target_var": "B",
-                "relation_type": "direct",
-                "model_tag": "main_model",
+                "source": "A",
+                "target": "B",
+                "direction": "positive",
+                "relation_form": "linear",
+                "verification": "supported",
+                "evidence_section": "Results",
+            }
+        ],
+        "moderations": [
+            {
+                "moderator": "M",
+                "moderated_effects": [{"source": "A", "target": "B"}],
                 "direction": "positive",
                 "verification": "supported",
+                "evidence_section": "Results",
             }
         ],
-        "variable_level_theory_grounding": [
-            {
-                "variable": "A",
-                "theory": "dynamic capabilities",
-            }
-        ],
-        "relation_level_theory_grounding": [
-            {
-                "source_var": "A",
-                "target_var": "B",
-                "theory": "dynamic capabilities",
-            }
-        ],
-        "hypotheses": [
-            {
-                "label": "H1",
-                "statement": "A positively affects B.",
-                "verification": "supported",
-            }
-        ],
-        "citations": [
-            {
-                "citation_key": "Teece2007",
-                "source_text": "Teece (2007)",
-            }
-        ],
+        "interactions": [],
     }
 
 
@@ -81,28 +67,17 @@ class _FakeDriver:
 
 
 class Neo4jRepoTest(unittest.TestCase):
-    def test_project_bundle_emits_queries_for_relations_theory_hypotheses_and_citations(self) -> None:
+    def test_project_bundle_emits_queries_for_new_payload(self) -> None:
         driver = _FakeDriver()
         repo = Neo4jRepo(driver)
-
         repo.project_bundle("paper-1", _bundle())
 
-        self.assertEqual(len(driver.calls), 5)
-        queries = [query for query, _ in driver.calls]
-        params = [parameters for _, parameters in driver.calls]
-
-        self.assertTrue(any("MENTIONS_RELATION" in query for query in queries))
-        self.assertTrue(any("GROUNDED_IN" in query for query in queries))
-        self.assertTrue(any("SUPPORTS_HYPOTHESIS" in query for query in queries))
-        self.assertTrue(any("CITES" in query for query in queries))
-        self.assertTrue(all(parameters["paper_id"] == "paper-1" for parameters in params))
-        relation_params = next(parameters for query, parameters in driver.calls if "MENTIONS_RELATION" in query)
-        relation_query = next(query for query, _ in driver.calls if "MENTIONS_RELATION" in query)
-        self.assertIn("source_var", relation_query)
-        self.assertEqual(relation_params["source_var"], "A")
-        self.assertEqual(relation_params["target_var"], "B")
-        self.assertEqual(relation_params["direction"], "positive")
+        queries = [q for q, _ in driver.calls]
+        self.assertTrue(any("DIRECT_EFFECT" in q for q in queries))
+        self.assertTrue(any("MODERATES" in q for q in queries))
+        self.assertTrue(all(p["paper_id"] == "paper-1" for _, p in driver.calls))
 
 
 if __name__ == "__main__":
     unittest.main()
+

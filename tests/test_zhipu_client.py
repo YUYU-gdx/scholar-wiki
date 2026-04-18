@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 import json
@@ -17,6 +17,7 @@ sys.modules[_SPEC.name] = _MOD
 _SPEC.loader.exec_module(_MOD)
 
 ZhipuChatCompletionsClient = _MOD.ZhipuChatCompletionsClient
+_build_zhipu_jwt = _MOD._build_zhipu_jwt
 
 
 class _FakeResponse:
@@ -34,16 +35,24 @@ class _FakeResponse:
 
 
 class ZhipuClientTest(unittest.TestCase):
+    def test_build_zhipu_jwt_shape(self) -> None:
+        token = _build_zhipu_jwt("id123", "secret123")
+        self.assertEqual(len(token.split(".")), 3)
+
     def test_complete_parses_string_content(self) -> None:
         payload = {
             "choices": [
-                {"message": {"content": "{\"relations\": [], \"variable_level_theory_grounding\": [], \"relation_level_theory_grounding\": [], \"hypotheses\": [], \"citations\": []}"}}
+                {
+                    "message": {
+                        "content": "{\"extractability_status\":\"yes\",\"paper_type\":\"quantitative_empirical\",\"extractability_reason\":\"x\",\"extractability_evidence_section\":\"Methods\",\"variable_definitions\":[],\"direct_effects\":[],\"moderations\":[],\"interactions\":[]}"
+                    }
+                }
             ]
         }
         client = ZhipuChatCompletionsClient(api_key="k")
         with patch.object(_MOD.urllib.request, "urlopen", return_value=_FakeResponse(payload)):
             text = client.complete("hello")
-        self.assertIn('"relations"', text)
+        self.assertIn('"extractability_status"', text)
 
     def test_complete_parses_content_parts(self) -> None:
         payload = {

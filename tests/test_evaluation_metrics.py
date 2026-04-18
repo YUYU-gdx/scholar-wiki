@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
@@ -24,52 +24,42 @@ class EvaluationMetricsTest(unittest.TestCase):
         result = calculate_metrics(
             {
                 "eligible_docs": 100,
-                "extracted_relations": 80,
-                "complete_relations": 72,
-                "hypotheses_total": 50,
-                "hypotheses_correct": 45,
-                "relations_with_theory": 60,
-                "citations_total": 40,
-                "citations_locatable": 30,
+                "extractable_yes_docs": 80,
+                "direct_effects_total": 120,
+                "moderations_total": 40,
+                "validated_direct_effects": 100,
             }
         )
         self.assertEqual(
             result,
             MetricsResult(
-                relation_coverage=0.8,
-                field_completeness=0.9,
-                hypothesis_verification_accuracy=0.9,
-                theory_traceability=0.75,
-                citation_locatability=0.75,
+                extractable_rate=0.8,
+                mean_direct_effects_per_doc=1.2,
+                mean_moderations_per_doc=0.4,
+                direct_effect_validation_rate=100 / 120,
             ),
         )
 
     def test_calculate_metrics_handles_zero_denominator(self) -> None:
         result = calculate_metrics({})
-        self.assertEqual(result.relation_coverage, 0.0)
-        self.assertEqual(result.field_completeness, 0.0)
-        self.assertEqual(result.hypothesis_verification_accuracy, 0.0)
-        self.assertEqual(result.theory_traceability, 0.0)
-        self.assertEqual(result.citation_locatability, 0.0)
+        self.assertEqual(result.extractable_rate, 0.0)
+        self.assertEqual(result.mean_direct_effects_per_doc, 0.0)
+        self.assertEqual(result.mean_moderations_per_doc, 0.0)
+        self.assertEqual(result.direct_effect_validation_rate, 0.0)
 
-    def test_render_report_uses_template_and_formats_percentages(self) -> None:
+    def test_render_report_uses_template(self) -> None:
         report = render_report(
             MetricsResult(
-                relation_coverage=0.8,
-                field_completeness=0.9,
-                hypothesis_verification_accuracy=0.9,
-                theory_traceability=0.75,
-                citation_locatability=0.75,
+                extractable_rate=0.8,
+                mean_direct_effects_per_doc=1.2,
+                mean_moderations_per_doc=0.4,
+                direct_effect_validation_rate=0.9,
             ),
             {"run_id": "r-001", "sample_size": 100},
         )
         self.assertIn("Run ID: `r-001`", report)
-        self.assertIn("Sample Size (Class A denominator): `100`", report)
-        self.assertIn("Relation coverage: `80.00%`", report)
-        self.assertIn("Field completeness: `90.00%`", report)
-        self.assertIn("Hypothesis verification accuracy: `90.00%`", report)
-        self.assertIn("Theory traceability: `75.00%`", report)
-        self.assertIn("Citation locatability: `75.00%`", report)
+        self.assertIn("Extractable rate: `80.00%`", report)
+        self.assertIn("Direct-effect validation rate: `90.00%`", report)
 
 
 if __name__ == "__main__":

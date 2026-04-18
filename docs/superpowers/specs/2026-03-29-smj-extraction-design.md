@@ -1,93 +1,93 @@
-﻿# SMJ Extraction and Knowledge Base Design (Subproject 2)
+﻿# SMJ 抽取与知识库设计（子项目 2）
 
-Date: 2026-03-29
-Status: Draft (pending user review)
+日期：2026-03-29  
+状态：草稿（待用户评审）
 
-## 1. Goals and Scope
+## 1. 目标与范围
 
-This design defines the extraction and knowledge-base layer for local papers, focused on variable relationships, theory grounding, hypothesis verification, and citation edges for downstream 3D graph visualization.
+本设计定义本地论文的抽取与知识库层，重点覆盖：变量关系、理论依据、假设验证、引用关系，为后续 3D 图谱可视化提供结构化数据。
 
-In scope:
-- Use local papers only (current corpus is mainly SMJ)
-- No OCR in this phase
-- Process fulltext-qualified documents only
-- Dual storage: PostgreSQL (source of truth) + Neo4j (graph projection)
+范围内：
+- 仅处理本地论文（当前主要是 SMJ）
+- 当前阶段不做 OCR
+- 仅处理可判定为全文的文档
+- 双存储：PostgreSQL（事实源）+ Neo4j（图投影）
 
-Out of scope:
-- OCR pipeline
-- Control variables extraction
-- Robustness/appendix model extraction
-- Sentence-level citation intent classification
+范围外：
+- OCR 管线
+- 控制变量抽取
+- 稳健性/附录模型抽取
+- 句级引用意图分类
 
-## 2. Input Qualification
+## 2. 输入分级
 
-### 2.1 Document classes
-- Class A (fulltext): eligible for formal extraction
-- Class B (abstract + references only): skip directly
-- Class C (broken structure or missing key fields): queue for remediation
+### 2.1 文档类别
+- Class A（全文）：可进入正式抽取
+- Class B（仅摘要 + 参考文献）：直接跳过
+- Class C（结构损坏或关键字段缺失）：进入修复队列
 
-### 2.2 Class A rule
-Must satisfy both:
-1. Has at least one major body block among `Hypotheses` or `Results`
-2. Has at least one main-model result table or equivalent main-model statistical paragraph
+### 2.2 Class A 判定
+必须同时满足：
+1. 至少包含 `Hypotheses` 或 `Results` 主体块之一
+2. 至少包含一处主模型结果表或等价统计段落
 
-Rules confirmed:
-- Class B does not count toward the 100-paper sample denominator
-- Only Class A enters extraction
+确认规则：
+- Class B 不计入 100 篇样本分母
+- 仅 Class A 进入抽取
 
-## 3. Extraction Targets
+## 3. 抽取目标
 
-### 3.1 Variable roles and relation types
-Variable roles:
-- independent
-- dependent
-- moderator
-- mediator
+### 3.1 变量角色与关系类型
+变量角色：
+- 自变量
+- 因变量
+- 调节变量
+- 中介变量
 
-Not extracted:
-- control variables
+不抽取：
+- 控制变量
 
-Relation types:
+关系类型：
 - direct
 - moderation
 - mediation
 
-### 3.2 Required relation fields
-- direction: `positive | negative | u_shape | inverted_u | non_significant`
-- effect strength: main-model stats only (for example beta, OR/HR, r, CI, p)
-- hypothesis verification: `supported | partially_supported | not_supported`
-- evidence anchor: text span/table ref/section tag
+### 3.2 关系必备字段
+- 方向：`positive | negative | u_shape | inverted_u | non_significant`
+- 效应强度：仅主模型统计值（例如 beta、OR/HR、r、CI、p）
+- 假设验证：`supported | partially_supported | not_supported`
+- 证据锚点：文本片段/表格编号/章节标记
 
-### 3.3 Two theory-grounding categories
-- Variable-level theory grounding (why a variable is defined/valid)
-- Relation-level theory grounding (why A->B should hold)
+### 3.3 两类理论依据
+- 变量级理论依据（变量为何成立/如何定义）
+- 关系级理论依据（为何 A->B 应成立）
 
-## 4. Citation Extraction
+## 4. 引用抽取
 
-Phase-1 output:
-- `Paper A -> Paper B (cited)` edge
-- citation location tag: `background | hypothesis | discussion`
+阶段 1 输出：
+- `Paper A -> Paper B (cited)` 边
+- 引用位置标签：`background | hypothesis | discussion`
 
-Not in phase-1:
-- sentence-level citation motivation classification
+阶段 1 暂不包含：
+- 句级引用动机分类
 
-## 5. Architecture (Recommended Hybrid)
+## 5. 架构（推荐：混合抽取）
 
-Use a hybrid extraction flow: rule-based localization + LLM structured extraction + rule-based validation.
+采用“规则定位 + LLM 结构化 + 规则校验”的混合流程。
 
-Pipeline:
-1. Document normalization parse (HTML/PDF text layer)
-2. Section and main-model localization (Hypotheses/Results/Table)
-3. Candidate relation extraction (variables/hypotheses/stats)
-4. LLM normalization (roles, direction, strength, verification, two theory categories)
-5. Rule validation (consistency, format, main-model constraint)
-6. Write facts to PostgreSQL and project graph to Neo4j
-7. Route failed validations to review queue
+流程：
+1. 文档标准化解析（HTML/PDF 文本层）
+2. 章节与主模型证据定位（Hypotheses/Results/Table）
+3. 候选关系抽取（变量/假设/统计）
+4. LLM 结构化归一（角色、方向、强度、验证、两类理论）
+5. 规则校验（一致性、格式、主模型约束）
+6. 写入 PostgreSQL，并将图查询所需字段投影到 Neo4j
+7. 失败项进入 review queue
 
-## 6. Data Model (MVP)
+## 6. 数据模型（MVP）
 
-### 6.1 PostgreSQL (source of truth)
-Core tables:
+### 6.1 PostgreSQL（事实源）
+核心表：
 - `paper`
 - `variable`
 - `hypothesis`
@@ -97,72 +97,72 @@ Core tables:
 - `evidence`
 - `citation_edge`
 
-Constraints:
-- Every formal `relation` must link to at least one `evidence`
-- `model_tag` must be `main_model`
+约束：
+- 每条正式 `relation` 必须关联至少一条 `evidence`
+- `model_tag` 必须为 `main_model`
 
-### 6.2 Neo4j (query projection)
-Core node labels:
+### 6.2 Neo4j（查询投影）
+核心节点：
 - `Paper`
 - `Variable`
 - `Theory`
 - `Hypothesis`
 
-Core edges:
+核心关系：
 - `(:Variable)-[:AFFECTS {type,direction,strength,...}]->(:Variable)`
 - `(:Variable)-[:GROUNDED_BY]->(:Theory)`
 - `(:RelationProxy)-[:JUSTIFIED_BY]->(:Theory)`
 - `(:Paper)-[:CITES {section_tag}]->(:Paper)`
 
-Note:
-- Neo4j stores graph-query fields only
-- Detailed evidence remains in PostgreSQL and is linked by IDs
+说明：
+- Neo4j 只保留图查询必要字段
+- 详细证据留在 PostgreSQL，通过 ID 关联
 
-## 7. Validation and Failure Handling
+## 7. 校验与失败处理
 
-Validation checks:
-- hypothesis label consistency (H1/H2a vs conclusion)
-- direction/stat-sign consistency
-- effect-strength format validity
-- main-model-only enforcement (exclude robustness/appendix)
+校验项：
+- 假设标签一致性（H1/H2a 与结论是否匹配）
+- 方向与显著性一致性
+- 强度字段格式有效性
+- 主模型约束（排除 robustness/appendix）
 
-Failure categories:
+失败分类：
 - `parse_failed`
 - `main_model_uncertain`
 - `hypothesis_mismatch`
 - `effect_conflict`
 - `evidence_missing`
 
-Policy:
-- Failed items go to review queue
-- Raw candidate and evidence are retained for human correction
+策略：
+- 失败项进入 review queue
+- 保留候选值与证据，供人工修正
 
-## 8. MVP Acceptance
+## 8. MVP 验收
 
-Sample policy:
-- Class A only
-- 100-paper baseline (Class B excluded from denominator)
+样本策略：
+- 仅 Class A
+- 100 篇基线（Class B 不计入分母）
 
-Acceptance metrics:
-- valid relation coverage on Class A
-- field completeness (direction/strength/verification/evidence)
-- hypothesis-verification accuracy
-- traceability of both theory categories
-- citation-edge locatability
+验收指标：
+- Class A 关系抽取覆盖率
+- 字段完整性（方向/强度/验证/证据）
+- 假设验证准确率
+- 两类理论依据可追溯性
+- 引用边可定位率
 
-## 9. Risks and Mitigations
+## 9. 风险与缓解
 
-Risks:
-- heterogeneous writing styles in older papers
-- noisy table structures causing stat misalignment
-- same-name variables with semantic drift across papers
+风险：
+- 老论文写作风格差异大
+- 表格结构噪声导致统计值错配
+- 同名变量在不同论文语义漂移
 
-Mitigations:
-- start with 100-paper high-precision baseline and refine rules
-- maintain variable normalization dictionary with review loop
-- prioritize review queue by high-impact relations
+缓解：
+- 先做 100 篇高精度基线，再迭代规则
+- 维护变量归一化词典并引入复核闭环
+- 优先人工复核高影响关系
 
-## 10. Next Step
+## 10. 下一步
 
-After user approval of this design:
-- create implementation plan (module boundaries, schema, sample-run and evaluation plan)
+用户确认本设计后：
+- 进入实施计划阶段（模块边界、数据模式、样本跑批与评估方案）

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -6,29 +6,24 @@ from pathlib import Path
 
 @dataclass(slots=True)
 class MetricsResult:
-    relation_coverage: float
-    field_completeness: float
-    hypothesis_verification_accuracy: float
-    theory_traceability: float
-    citation_locatability: float
+    extractable_rate: float
+    mean_direct_effects_per_doc: float
+    mean_moderations_per_doc: float
+    direct_effect_validation_rate: float
 
 
 def calculate_metrics(stats: dict[str, int]) -> MetricsResult:
     eligible_docs = int(stats.get("eligible_docs", 0))
-    extracted_relations = int(stats.get("extracted_relations", 0))
-    complete_relations = int(stats.get("complete_relations", 0))
-    hypotheses_total = int(stats.get("hypotheses_total", 0))
-    hypotheses_correct = int(stats.get("hypotheses_correct", 0))
-    relations_with_theory = int(stats.get("relations_with_theory", 0))
-    citations_total = int(stats.get("citations_total", 0))
-    citations_locatable = int(stats.get("citations_locatable", 0))
+    extractable_yes_docs = int(stats.get("extractable_yes_docs", 0))
+    direct_effects_total = int(stats.get("direct_effects_total", 0))
+    moderations_total = int(stats.get("moderations_total", 0))
+    validated_direct_effects = int(stats.get("validated_direct_effects", 0))
 
     return MetricsResult(
-        relation_coverage=_ratio(extracted_relations, eligible_docs),
-        field_completeness=_ratio(complete_relations, extracted_relations),
-        hypothesis_verification_accuracy=_ratio(hypotheses_correct, hypotheses_total),
-        theory_traceability=_ratio(relations_with_theory, extracted_relations),
-        citation_locatability=_ratio(citations_locatable, citations_total),
+        extractable_rate=_ratio(extractable_yes_docs, eligible_docs),
+        mean_direct_effects_per_doc=_ratio(direct_effects_total, eligible_docs),
+        mean_moderations_per_doc=_ratio(moderations_total, eligible_docs),
+        direct_effect_validation_rate=_ratio(validated_direct_effects, direct_effects_total),
     )
 
 
@@ -37,11 +32,10 @@ def render_report(metrics: MetricsResult, context: dict[str, str | int]) -> str:
     return template.format(
         run_id=context.get("run_id", ""),
         sample_size=context.get("sample_size", ""),
-        relation_coverage=_pct(metrics.relation_coverage),
-        field_completeness=_pct(metrics.field_completeness),
-        hypothesis_verification_accuracy=_pct(metrics.hypothesis_verification_accuracy),
-        theory_traceability=_pct(metrics.theory_traceability),
-        citation_locatability=_pct(metrics.citation_locatability),
+        extractable_rate=_pct(metrics.extractable_rate),
+        mean_direct_effects_per_doc=f"{metrics.mean_direct_effects_per_doc:.4f}",
+        mean_moderations_per_doc=f"{metrics.mean_moderations_per_doc:.4f}",
+        direct_effect_validation_rate=_pct(metrics.direct_effect_validation_rate),
     )
 
 

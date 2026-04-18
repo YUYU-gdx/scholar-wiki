@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import hmac
+import hashlib
 import time
 import urllib.error
 import urllib.request
+import base64
 from typing import Any
 
 
@@ -11,7 +14,7 @@ class ZhipuChatCompletionsClient:
     def __init__(
         self,
         api_key: str,
-        model: str = "glm-4.5-flash",
+        model: str = "GLM-4.7-Flash",
         base_url: str = "https://open.bigmodel.cn/api/paas/v4/chat/completions",
         timeout_seconds: int = 120,
         temperature: float = 0.0,
@@ -26,21 +29,21 @@ class ZhipuChatCompletionsClient:
         self.temperature = temperature
         self.max_retries = max_retries
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, user_content: str, system_prompt: str | None = None) -> str:
+        messages: list[dict[str, str]] = []
+        if system_prompt is not None and str(system_prompt).strip():
+            messages.append({"role": "system", "content": str(system_prompt)})
+        messages.append({"role": "user", "content": str(user_content)})
+
         payload = {
             "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            "messages": messages,
             "temperature": self.temperature,
             "stream": False,
         }
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {self._build_auth_token()}",
             "Content-Type": "application/json",
         }
 
@@ -69,6 +72,13 @@ class ZhipuChatCompletionsClient:
             raise last_error
         raise RuntimeError("zhipu completion failed without explicit error")
 
+    def _build_auth_token(self) -> str:
+        # Zhipu API keys are commonly in "<id>.<secret>" format and require JWT-like signing.
+        if "." not in self.api_key:
+            return self.api_key
+        api_id, secret = self.api_key.split(".", 1)
+        return _build_zhipu_jwt(api_id, secret)
+
 
 def _extract_content_text(payload: dict[str, Any]) -> str:
     choices = payload.get("choices")
@@ -90,3 +100,20 @@ def _extract_content_text(payload: dict[str, Any]) -> str:
         if parts:
             return "".join(parts)
     raise ValueError("invalid zhipu response: unsupported content shape")
+
+
+def _build_zhipu_jwt(api_id: str, secret: str, ttl_seconds: int = 1800) -> str:
+    now_ms = int(time.time() * 1000)
+    exp_ms = now_ms + ttl_seconds * 1000
+    header = {"alg": "HS256", "sign_type": "SIGN"}
+    body = {"api_key": api_id, "exp": exp_ms, "timestamp": now_ms}
+    header_b64 = _b64url(json.dumps(header, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    body_b64 = _b64url(json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    signing_input = f"{header_b64}.{body_b64}".encode("utf-8")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    sig_b64 = _b64url(signature)
+    return f"{header_b64}.{body_b64}.{sig_b64}"
+
+
+def _b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")

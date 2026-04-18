@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
@@ -50,12 +50,13 @@ def write_review_queue_csv(queue: ReviewQueue, output_path: str | Path) -> None:
     fieldnames = [
         "reason_codes",
         "paper_id",
-        "source_var",
-        "target_var",
-        "model_tag",
+        "source",
+        "target",
         "direction",
+        "relation_form",
         "verification",
-        "evidence_anchor",
+        "evidence_section",
+        "hypothesis_label",
     ]
     with output.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -65,11 +66,12 @@ def write_review_queue_csv(queue: ReviewQueue, output_path: str | Path) -> None:
                 {
                     "reason_codes": "|".join(item.reason_codes),
                     "paper_id": item.record.get("paper_id", ""),
-                    "source_var": item.record.get("source_var", ""),
-                    "target_var": item.record.get("target_var", ""),
-                    "model_tag": item.record.get("model_tag", ""),
+                    "source": item.record.get("source", ""),
+                    "target": item.record.get("target", ""),
                     "direction": item.record.get("direction", ""),
+                    "relation_form": item.record.get("relation_form", ""),
                     "verification": item.record.get("verification", ""),
-                    "evidence_anchor": item.record.get("evidence_anchor", ""),
+                    "evidence_section": item.record.get("evidence_section", ""),
+                    "hypothesis_label": item.record.get("hypothesis_label", ""),
                 }
             )

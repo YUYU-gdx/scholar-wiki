@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
+import re
 from typing import Any
 
 try:
@@ -14,7 +14,7 @@ except Exception:  # pragma: no cover
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Export graph artifact from PostgreSQL tables.")
-    p.add_argument("--dsn", required=True, help="PostgreSQL DSN, e.g. postgresql://user:pass@host:5432/db")
+    p.add_argument("--dsn", required=True)
     p.add_argument("--output-json", type=Path, required=True)
     return p.parse_args()
 
@@ -25,44 +25,9 @@ def _slug(text: str) -> str:
     return t or "unknown"
 
 
-def _strength_from_verification(verification: str) -> float:
-    m = {
-        "supported": 1.0,
-        "partially_supported": 0.5,
-        "not_supported": 0.0,
-    }
-    return m.get(str(verification or "").strip(), 0.0)
-
-
-def _display_effect_class(direction: str, relation_form: str) -> str:
-    form = str(relation_form or "").strip().lower()
-    if form == "nonlinear":
-        return "nonlinear"
-    d = str(direction or "").strip().lower()
-    if d == "negative":
-        return "negative"
-    if d == "positive":
-        return "positive"
-    if d in {"u_shape", "u_shaped", "inverted_u", "non_directional", "non_significant"}:
-        return "nonlinear"
-    return "nonlinear"
-
-
-def _normalize_relation_type(value: str) -> str:
-    t = str(value or "").strip().lower()
-    if not t:
-        return "unspecified"
-    if "moder" in t:
-        return "moderation"
-    if "mediat" in t:
-        return "mediation"
-    if "direct" in t:
-        return "direct"
-    if "interact" in t:
-        return "interaction"
-    if "curv" in t or "nonlinear" in t or "u-sh" in t or "u_sh" in t:
-        return "nonlinear_effect"
-    return "other"
+def _canonical_var_id(text: str) -> str:
+    value = " ".join(str(text or "").strip().split())
+    return f"var::{value}" if value else "var::unknown"
 
 
 def _fetch_all(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -75,7 +40,20 @@ def _fetch_all(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> list[dict[s
         return out
 
 
-def _coerce_int(value: object) -> int | None:
+def _loads_json_list(raw: object) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed if str(x).strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _coerce_optional_int(value: object) -> int | None:
     if value is None:
         return None
     text = str(value).strip()
@@ -87,44 +65,65 @@ def _coerce_int(value: object) -> int | None:
         return None
 
 
-def _normalize_alias(text: str) -> str:
-    t = re.sub(r"\s+", " ", str(text or "").strip().lower())
-    t = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", t).strip("-")
-    return t
+def _display_effect_class(direction: str, relation_form: str) -> str:
+    form = str(relation_form or "").strip().lower()
+    if form == "nonlinear":
+        return "nonlinear"
+    d = str(direction or "").strip().lower()
+    if d == "negative":
+        return "negative"
+    if d == "positive":
+        return "positive"
+    return "nonlinear"
 
 
-def _looks_like_abbreviation(text: str) -> bool:
-    token = str(text or "").strip()
-    return bool(re.fullmatch(r"[A-Z][A-Z0-9/&-]{1,7}", token))
+def _effect_symbol_from_direction(direction: str, relation_form: str) -> str:
+    form = str(relation_form or "").strip().lower()
+    d = str(direction or "").strip().lower()
+    if form == "nonlinear" or d == "nonlinear":
+        return "nonlinear"
+    if d == "positive":
+        return "+"
+    if d == "negative":
+        return "-"
+    if d in {"mixed", "unclear"}:
+        return d
+    return ""
 
 
-class _Dsu:
-    def __init__(self) -> None:
-        self.parent: dict[str, str] = {}
-
-    def find(self, x: str) -> str:
-        p = self.parent.get(x, x)
-        if p != x:
-            p = self.find(p)
-            self.parent[x] = p
-        else:
-            self.parent[x] = x
-        return p
-
-    def union(self, a: str, b: str) -> None:
-        ra = self.find(a)
-        rb = self.find(b)
-        if ra != rb:
-            self.parent[rb] = ra
+def _ensure_node(
+    variable_nodes: dict[str, dict[str, Any]],
+    node_aliases: dict[str, set[str]],
+    node_id: str,
+    label: str,
+    aliases: list[str] | None = None,
+) -> None:
+    n = variable_nodes.setdefault(node_id, {"id": node_id, "type": "variable", "label": label, "name": label, "canonical_var_id": node_id})
+    if label and not str(n.get("label", "")).strip():
+        n["label"] = label
+    node_aliases.setdefault(node_id, set())
+    for v in aliases or []:
+        txt = str(v or "").strip()
+        if txt:
+            node_aliases[node_id].add(txt)
 
 
-def _choose_canonical_name(names: list[str]) -> str:
-    cleaned = [str(n or "").strip() for n in names if str(n or "").strip()]
-    if not cleaned:
-        return "unknown"
-    non_abbr = [n for n in cleaned if not _looks_like_abbreviation(n)]
-    base = non_abbr if non_abbr else cleaned
-    return sorted(base, key=lambda x: (len(x.split()), len(x), x.lower()), reverse=True)[0]
+def _fill_node_first_year(nodes: dict[str, dict[str, Any]], edges: list[dict[str, Any]]) -> None:
+    years_by_node: dict[str, list[int]] = {}
+    for edge in edges:
+        year = _coerce_optional_int(edge.get("paper_year"))
+        if year is None:
+            continue
+        source = str(edge.get("source", "")).strip()
+        target = str(edge.get("target", "")).strip()
+        if source:
+            years_by_node.setdefault(source, []).append(year)
+        if target:
+            years_by_node.setdefault(target, []).append(year)
+    for node_id, node in nodes.items():
+        years = years_by_node.get(node_id, [])
+        if years:
+            node["first_year"] = min(years)
 
 
 def main() -> None:
@@ -133,474 +132,434 @@ def main() -> None:
 
     args = parse_args()
     with psycopg.connect(args.dsn) as conn:
-        try:
-            papers_rows = _fetch_all(
-                conn,
-                """
-                SELECT
-                  paper_id,
-                  doi,
-                  offline_html_path,
-                  article_url,
-                  publication_date,
-                  online_date,
-                  publication_year,
-                  paper_citation_count
-                FROM papers
-                ORDER BY paper_id
-                """,
-            )
-        except Exception:
-            papers_rows = _fetch_all(
-                conn,
-                """
-                SELECT
-                  paper_id,
-                  doi,
-                  publication_date,
-                  online_date,
-                  publication_year,
-                  paper_citation_count
-                FROM papers
-                ORDER BY paper_id
-                """,
-            )
-        try:
-            rel_rows = _fetch_all(
-                conn,
-                """
-                SELECT
-                  id AS relation_row_id,
-                  paper_id, source_var, target_var,
-                  source_canonical_var_id, target_canonical_var_id,
-                  source_alias_text, target_alias_text,
-                  unresolved_abbr, abbr_form, name_resolution_source,
-                  relation_type, relation_type_raw, relation_type_std, model_tag, relation_form, direction, verification, evidence_anchor,
-                  moderator_var, mediator_var, condition_text, moderated_source_var, moderated_target_var, moderated_hypothesis_label
-                FROM relations
-                ORDER BY paper_id
-                """,
-            )
-        except Exception:
-            rel_rows = _fetch_all(
-                conn,
-                """
-                SELECT
-                  id AS relation_row_id,
-                  paper_id, source_var, target_var,
-                  source_canonical_var_id, target_canonical_var_id,
-                  source_alias_text, target_alias_text,
-                  relation_type, model_tag, relation_form, direction, verification, evidence_anchor
-                FROM relations
-                ORDER BY paper_id
-                """,
-            )
-        domain_rows = _fetch_all(
+        papers_rows = _fetch_all(
             conn,
             """
-            SELECT paper_id, domain
-            FROM paper_domains
-            ORDER BY paper_id, domain
-            """,
-        )
-        alias_rows = _fetch_all(
-            conn,
-            """
-            SELECT paper_id, relation_row_id, canonical_var_id, alias_text, role
-            FROM alias_mentions
-            ORDER BY paper_id, relation_row_id, role
-            """,
-        )
-        hyp_rows = _fetch_all(
-            conn,
-            """
-            SELECT paper_id, label, statement, verification, evidence_anchor
-            FROM hypotheses
+            SELECT
+              paper_id, doi, offline_html_path, article_url, publication_date, online_date,
+              publication_year, paper_citation_count,
+              extractability_status, paper_type, extractability_reason, extractability_evidence_section
+            FROM papers
             ORDER BY paper_id
             """,
         )
-        vtg_rows = _fetch_all(
+        domain_rows = _fetch_all(conn, "SELECT paper_id, domain FROM paper_domains ORDER BY paper_id, domain")
+        context_rows = _fetch_all(conn, "SELECT paper_id, variable_name FROM context_variables ORDER BY paper_id, id")
+        operationalization_rows = _fetch_all(
             conn,
             """
-            SELECT paper_id, variable_name, theory, evidence_anchor
-            FROM variable_theory_grounding
-            ORDER BY paper_id
+            SELECT paper_id, variable_name, operationalized_as_json
+            FROM operationalizations
+            ORDER BY paper_id, id
             """,
         )
-        rtg_rows = _fetch_all(
+        def_rows = _fetch_all(
             conn,
             """
-            SELECT paper_id, source_var, target_var, theory, evidence_anchor
-            FROM relation_theory_grounding
-            ORDER BY paper_id
+            SELECT paper_id, variable_name, aliases_json, definition_text, evidence_section
+            FROM variable_definitions
+            ORDER BY paper_id, id
             """,
         )
-        cite_rows = _fetch_all(
+        effect_rows = _fetch_all(
             conn,
             """
-            SELECT paper_id, citation_key, source_text, evidence_anchor
-            FROM citations
-            ORDER BY paper_id
+            SELECT
+              paper_id, source_var, target_var,
+              source_canonical_var_id, target_canonical_var_id,
+              source_alias_json, target_alias_json,
+              direction, relation_form, relation_form_raw, hypothesis_label,
+              verification, evidence_section, evidence_snippet
+            FROM direct_effects
+            ORDER BY paper_id, id
             """,
         )
-
+        mod_rows = _fetch_all(
+            conn,
+            """
+            SELECT
+              m.id, m.paper_id, m.moderator_var, m.moderator_canonical_var_id, m.moderator_alias_json,
+              m.direction, m.hypothesis_label, m.verification, m.evidence_section, m.evidence_snippet,
+              t.source_var, t.target_var, t.source_canonical_var_id, t.target_canonical_var_id
+            FROM moderations m
+            LEFT JOIN moderation_targets t ON t.moderation_id = m.id
+            ORDER BY m.paper_id, m.id, t.id
+            """,
+        )
+        interaction_rows = _fetch_all(
+            conn,
+            """
+            SELECT
+              i.id, i.paper_id, i.output_var, i.output_canonical_var_id,
+              i.interaction_type, i.moderator_var, i.moderator_canonical_var_id,
+              i.effect, i.hypothesis_label, i.verification, i.evidence_section,
+              i.evidence_snippet, i.description,
+              inp.input_var, inp.input_canonical_var_id, inp.input_order
+            FROM interactions i
+            LEFT JOIN interaction_inputs inp ON inp.interaction_id = i.id
+            ORDER BY i.paper_id, i.id, inp.input_order
+            """,
+        )
     variable_nodes: dict[str, dict[str, Any]] = {}
+    node_aliases: dict[str, set[str]] = {}
     edges: list[dict[str, Any]] = []
     moderation_links: list[dict[str, Any]] = []
+    interaction_links: list[dict[str, Any]] = []
     papers_map: dict[str, dict[str, Any]] = {}
-    alias_to_node_ids: dict[str, set[str]] = {}
+    edge_key_seen: set[str] = set()
 
     for p in papers_rows:
-        paper_id = str(p.get("paper_id", "")).strip()
-        if not paper_id:
+        pid = str(p.get("paper_id", "")).strip()
+        if not pid:
             continue
-        publication_year = _coerce_int(p.get("publication_year"))
-        paper_citation_count = _coerce_int(p.get("paper_citation_count"))
-        papers_map[paper_id] = {
-            "paper_id": paper_id,
-            "doi": str(p.get("doi", "") or paper_id),
+        papers_map[pid] = {
+            "paper_id": pid,
+            "doi": str(p.get("doi", "") or pid),
             "offline_html_path": str(p.get("offline_html_path", "") or ""),
             "article_url": str(p.get("article_url", "") or ""),
             "publication_date": str(p.get("publication_date", "") or ""),
             "online_date": str(p.get("online_date", "") or ""),
-            "publication_year": publication_year,
-            "paper_citation_count": paper_citation_count,
+            "publication_year": p.get("publication_year"),
+            "paper_citation_count": p.get("paper_citation_count"),
+            "extractability_status": str(p.get("extractability_status", "") or ""),
+            "paper_type": str(p.get("paper_type", "") or ""),
+            "extractability_reason": str(p.get("extractability_reason", "") or ""),
+            "extractability_evidence_section": str(p.get("extractability_evidence_section", "") or ""),
             "paper_domains": [],
-            "relations": [],
-            "hypotheses": [],
-            "variable_level_theory_grounding": [],
-            "relation_level_theory_grounding": [],
-            "citations": [],
+            "context_variables": [],
+            "operationalization": {},
+            "variable_definitions": [],
+            "main_effects": [],
+            "moderations": [],
+            "interactions": [],
         }
 
-    domains_by_paper: dict[str, list[str]] = {}
-    for row in domain_rows:
+    for d in domain_rows:
+        pid = str(d.get("paper_id", "")).strip()
+        if pid in papers_map:
+            papers_map[pid]["paper_domains"].append(str(d.get("domain", "") or ""))
+
+    for row in context_rows:
         pid = str(row.get("paper_id", "")).strip()
-        domain = str(row.get("domain", "")).strip()
-        if not pid or not domain:
+        if pid not in papers_map:
             continue
-        domains_by_paper.setdefault(pid, [])
-        if domain not in domains_by_paper[pid]:
-            domains_by_paper[pid].append(domain)
+        txt = str(row.get("variable_name", "") or "").strip()
+        if txt:
+            papers_map[pid]["context_variables"].append(txt)
 
-    alias_by_relation: dict[tuple[str, int], dict[str, list[str]]] = {}
-    for row in alias_rows:
+    for row in operationalization_rows:
         pid = str(row.get("paper_id", "")).strip()
-        rid = int(row.get("relation_row_id") or 0)
-        role = str(row.get("role", "")).strip().lower()
-        alias = str(row.get("alias_text", "")).strip()
-        if not pid or not rid or role not in {"source", "target"} or not alias:
+        if pid not in papers_map:
             continue
-        key = (pid, rid)
-        alias_by_relation.setdefault(key, {"source": [], "target": []})
-        if alias not in alias_by_relation[key][role]:
-            alias_by_relation[key][role].append(alias)
-
-    for rel in rel_rows:
-        paper_id = str(rel.get("paper_id", "")).strip()
-        source = str(rel.get("source_var", "")).strip()
-        target = str(rel.get("target_var", "")).strip()
-        if not paper_id or not source or not target:
+        name = str(row.get("variable_name", "") or "").strip()
+        if not name:
             continue
-        source_id = str(rel.get("source_canonical_var_id", "")).strip() or f"var::{_slug(source)}"
-        target_id = str(rel.get("target_canonical_var_id", "")).strip() or f"var::{_slug(target)}"
-        variable_nodes.setdefault(source_id, {"id": source_id, "type": "variable", "label": source, "name": source})
-        variable_nodes.setdefault(target_id, {"id": target_id, "type": "variable", "label": target, "name": target})
-        relation_row_id = int(rel.get("relation_row_id") or 0)
-        alias_pair = alias_by_relation.get((paper_id, relation_row_id), {"source": [], "target": []})
-        for alias in [source, *alias_pair.get("source", []), str(rel.get("source_alias_text", "") or "")]:
-            norm = _normalize_alias(alias)
-            if norm:
-                alias_to_node_ids.setdefault(norm, set()).add(source_id)
-        for alias in [target, *alias_pair.get("target", []), str(rel.get("target_alias_text", "") or "")]:
-            norm = _normalize_alias(alias)
-            if norm:
-                alias_to_node_ids.setdefault(norm, set()).add(target_id)
-        paper_obj = papers_map.get(paper_id, {})
-        paper_year = _coerce_int(paper_obj.get("publication_year"))
-        paper_citation_count = _coerce_int(paper_obj.get("paper_citation_count"))
-
-        rel_payload = {
-            "source_var": source,
-            "target_var": target,
-            "source_aliases": list(alias_pair["source"]) or [str(rel.get("source_alias_text", "")).strip() or source],
-            "target_aliases": list(alias_pair["target"]) or [str(rel.get("target_alias_text", "")).strip() or target],
-            "source_canonical_var_id": source_id,
-            "target_canonical_var_id": target_id,
-            "unresolved_abbr": bool(rel.get("unresolved_abbr", False)),
-            "abbr_form": str(rel.get("abbr_form", "") or ""),
-            "name_resolution_source": str(rel.get("name_resolution_source", "") or ""),
-            "relation_type_raw": str(rel.get("relation_type_raw", "") or rel.get("relation_type", "") or ""),
-            "relation_type_std": str(rel.get("relation_type_std", "") or _normalize_relation_type(str(rel.get("relation_type", "") or ""))),
-            "relation_type": str(rel.get("relation_type_std", "") or _normalize_relation_type(str(rel.get("relation_type", "") or ""))),
-            "model_tag": str(rel.get("model_tag", "") or ""),
-            "relation_form": str(rel.get("relation_form", "") or "linear"),
-            "direction": str(rel.get("direction", "") or ""),
-            "verification": str(rel.get("verification", "") or ""),
-            "evidence_anchor": str(rel.get("evidence_anchor", "") or ""),
-            "moderator_var": str(rel.get("moderator_var", "") or ""),
-            "mediator_var": str(rel.get("mediator_var", "") or ""),
-            "condition_text": str(rel.get("condition_text", "") or ""),
-            "moderated_relation": {
-                "source_var": str(rel.get("moderated_source_var", "") or ""),
-                "target_var": str(rel.get("moderated_target_var", "") or ""),
-                "hypothesis_label": str(rel.get("moderated_hypothesis_label", "") or ""),
-            },
+        papers_map[pid]["operationalization"][name] = {
+            "operationalized_as": _loads_json_list(row.get("operationalized_as_json"))
         }
-        papers_map.setdefault(
-            paper_id,
-            {
-                "paper_id": paper_id,
-                "doi": paper_id,
-                "paper_domains": [],
-                "relations": [],
-                "hypotheses": [],
-                "variable_level_theory_grounding": [],
-                "relation_level_theory_grounding": [],
-                "citations": [],
-            },
-        )["relations"].append(rel_payload)
 
-        if rel_payload["relation_type_std"] == "moderation" and rel_payload["moderator_var"] and rel_payload["moderated_relation"]["source_var"] and rel_payload["moderated_relation"]["target_var"]:
-            moderator_id = f"var::{_slug(rel_payload['moderator_var'])}"
-            variable_nodes.setdefault(moderator_id, {"id": moderator_id, "type": "variable", "label": rel_payload["moderator_var"], "name": rel_payload["moderator_var"]})
-            moderation_links.append(
-                {
-                    "id": f"mod::{_slug(paper_id)}::{_slug(rel_payload['moderator_var'])}::{len(moderation_links)}",
-                    "paper_id": paper_id,
-                    "doi": str(paper_obj.get("doi", "") or paper_id),
-                    "moderator_var": rel_payload["moderator_var"],
-                    "moderator_node_id": moderator_id,
-                    "moderated_relation": rel_payload["moderated_relation"],
-                    "condition_text": rel_payload["condition_text"],
-                    "evidence_section": rel_payload["evidence_anchor"],
-                    "paper_year": paper_year,
-                }
-            )
-            continue
-
-        edges.append(
-            {
-                "id": f"edge::{_slug(paper_id)}::{_slug(source)}::{_slug(target)}::{len(edges)}",
-                "source": source_id,
-                "target": target_id,
-                "paper_id": paper_id,
-                "doi": paper_id,
-                "relation_type_raw": rel_payload["relation_type_raw"],
-                "relation_type_std": rel_payload["relation_type_std"],
-                "relation_type": rel_payload["relation_type_std"],
-                "relation_form": rel_payload["relation_form"],
-                "direction": rel_payload["direction"],
-                "display_effect_class": _display_effect_class(rel_payload["direction"], rel_payload["relation_form"]),
-                "verification": rel_payload["verification"],
-                "strength": _strength_from_verification(rel_payload["verification"]),
-                "evidence_anchor": rel_payload["evidence_anchor"],
-                "evidence_section": rel_payload["evidence_anchor"],
-                "paper_year": paper_year,
-                "citation_stats": {"paper_citation_count": paper_citation_count},
-            }
-        )
-
-    for row in hyp_rows:
+    for row in def_rows:
         pid = str(row.get("paper_id", "")).strip()
-        if not pid:
+        if pid not in papers_map:
             continue
-        papers_map.setdefault(
-            pid,
-            {
-                "paper_id": pid,
-                "doi": pid,
-                "paper_domains": [],
-                "relations": [],
-                "hypotheses": [],
-                "variable_level_theory_grounding": [],
-                "relation_level_theory_grounding": [],
-                "citations": [],
-            },
-        )["hypotheses"].append(
-            {
-                "label": str(row.get("label", "") or ""),
-                "statement": str(row.get("statement", "") or ""),
-                "verification": str(row.get("verification", "") or ""),
-                "evidence_anchor": str(row.get("evidence_anchor", "") or ""),
-            }
-        )
-
-    for row in vtg_rows:
-        pid = str(row.get("paper_id", "")).strip()
-        if not pid:
-            continue
-        papers_map.setdefault(
-            pid,
-            {
-                "paper_id": pid,
-                "doi": pid,
-                "paper_domains": [],
-                "relations": [],
-                "hypotheses": [],
-                "variable_level_theory_grounding": [],
-                "relation_level_theory_grounding": [],
-                "citations": [],
-            },
-        )["variable_level_theory_grounding"].append(
+        papers_map[pid]["variable_definitions"].append(
             {
                 "variable": str(row.get("variable_name", "") or ""),
-                "theory": str(row.get("theory", "") or ""),
-                "evidence_anchor": str(row.get("evidence_anchor", "") or ""),
+                "aliases": _loads_json_list(row.get("aliases_json")),
+                "definition": str(row.get("definition_text", "") or ""),
+                "definition_evidence_section": str(row.get("evidence_section", "") or ""),
             }
         )
 
-    for row in rtg_rows:
-        pid = str(row.get("paper_id", "")).strip()
-        if not pid:
+    for rel in effect_rows:
+        pid = str(rel.get("paper_id", "")).strip()
+        source = str(rel.get("source_var", "")).strip()
+        target = str(rel.get("target_var", "")).strip()
+        if pid not in papers_map or not source or not target:
             continue
-        papers_map.setdefault(
-            pid,
-            {
-                "paper_id": pid,
-                "doi": pid,
-                "paper_domains": [],
-                "relations": [],
-                "hypotheses": [],
-                "variable_level_theory_grounding": [],
-                "relation_level_theory_grounding": [],
-                "citations": [],
-            },
-        )["relation_level_theory_grounding"].append(
-            {
-                "source_var": str(row.get("source_var", "") or ""),
-                "target_var": str(row.get("target_var", "") or ""),
-                "theory": str(row.get("theory", "") or ""),
-                "evidence_anchor": str(row.get("evidence_anchor", "") or ""),
-            }
-        )
+        source_id = _canonical_var_id(source)
+        target_id = _canonical_var_id(target)
+        source_aliases = _loads_json_list(rel.get("source_alias_json"))
+        target_aliases = _loads_json_list(rel.get("target_alias_json"))
+        _ensure_node(variable_nodes, node_aliases, source_id, source, source_aliases)
+        _ensure_node(variable_nodes, node_aliases, target_id, target, target_aliases)
 
-    for row in cite_rows:
-        pid = str(row.get("paper_id", "")).strip()
-        if not pid:
-            continue
-        papers_map.setdefault(
-            pid,
-            {
-                "paper_id": pid,
-                "doi": pid,
-                "paper_domains": [],
-                "relations": [],
-                "hypotheses": [],
-                "variable_level_theory_grounding": [],
-                "relation_level_theory_grounding": [],
-                "citations": [],
-            },
-        )["citations"].append(
-            {
-                "citation_key": str(row.get("citation_key", "") or ""),
-                "source_text": str(row.get("source_text", "") or ""),
-                "evidence_anchor": str(row.get("evidence_anchor", "") or ""),
-            }
-        )
-
-    papers = list(papers_map.values())
-    for p in papers:
-        pid = str(p.get("paper_id", "")).strip()
-        p["paper_domains"] = domains_by_paper.get(pid, [])
-
-    dsu = _Dsu()
-    for node_id in variable_nodes:
-        dsu.find(node_id)
-    for node_ids in alias_to_node_ids.values():
-        node_list = sorted(node_ids)
-        if len(node_list) < 2:
-            continue
-        head = node_list[0]
-        for nid in node_list[1:]:
-            dsu.union(head, nid)
-
-    groups: dict[str, list[str]] = {}
-    for nid in variable_nodes:
-        groups.setdefault(dsu.find(nid), []).append(nid)
-
-    remap: dict[str, str] = {}
-    merged_nodes: dict[str, dict[str, Any]] = {}
-    for members in groups.values():
-        names = [str(variable_nodes[m].get("label", "") or variable_nodes[m].get("name", "") or "") for m in members]
-        canonical_name = _choose_canonical_name(names)
-        canonical_id = f"var::{_slug(canonical_name)}"
-        merged_nodes.setdefault(
-            canonical_id,
-            {"id": canonical_id, "type": "variable", "label": canonical_name, "name": canonical_name},
-        )
-        for old in members:
-            remap[old] = canonical_id
-
-    for edge in edges:
-        edge["source"] = remap.get(str(edge.get("source", "")), str(edge.get("source", "")))
-        edge["target"] = remap.get(str(edge.get("target", "")), str(edge.get("target", "")))
-    for m in moderation_links:
-        old_mid = str(m.get("moderator_node_id", "")).strip()
-        m["moderator_node_id"] = remap.get(old_mid, old_mid)
-        new_mid = str(m.get("moderator_node_id", "")).strip()
-        node = merged_nodes.get(new_mid)
-        if node is not None:
-            m["moderator_var"] = str(node.get("label", "") or m.get("moderator_var", ""))
-    for paper in papers:
-        relations = list(paper.get("relations", []) or [])
-        for rel in relations:
-            src_old = str(rel.get("source_canonical_var_id", "")).strip() or f"var::{_slug(str(rel.get('source_var', '')))}"
-            tgt_old = str(rel.get("target_canonical_var_id", "")).strip() or f"var::{_slug(str(rel.get('target_var', '')))}"
-            src_new = remap.get(src_old, src_old)
-            tgt_new = remap.get(tgt_old, tgt_old)
-            rel["source_canonical_var_id"] = src_new
-            rel["target_canonical_var_id"] = tgt_new
-            if src_new in merged_nodes:
-                rel["source_var"] = str(merged_nodes[src_new].get("label", "") or rel.get("source_var", ""))
-            if tgt_new in merged_nodes:
-                rel["target_var"] = str(merged_nodes[tgt_new].get("label", "") or rel.get("target_var", ""))
-
-    edge_years_by_node: dict[str, list[int]] = {}
-    citation_by_node: dict[str, list[int]] = {}
-    all_years: list[int] = []
-    for edge in edges:
-        src = str(edge.get("source", "")).strip()
-        tgt = str(edge.get("target", "")).strip()
-        year = _coerce_int(edge.get("paper_year"))
-        paper_citation = _coerce_int((edge.get("citation_stats", {}) or {}).get("paper_citation_count"))
-        if year is not None:
-            edge_years_by_node.setdefault(src, []).append(year)
-            edge_years_by_node.setdefault(tgt, []).append(year)
-        if paper_citation is not None:
-            citation_by_node.setdefault(src, []).append(paper_citation)
-            citation_by_node.setdefault(tgt, []).append(paper_citation)
-    for node_id, node in merged_nodes.items():
-        years = edge_years_by_node.get(node_id, [])
-        citations = citation_by_node.get(node_id, [])
-        first_year = min(years) if years else None
-        if first_year is not None:
-            all_years.append(first_year)
-        node["first_year"] = first_year
-        node["citation_stats"] = {
-            "max_citation_count": max(citations) if citations else None,
-            "mean_citation_count": (sum(citations) / len(citations)) if citations else None,
+        rel_payload = {
+            "source": source,
+            "target": target,
+            "source_aliases": source_aliases,
+            "target_aliases": target_aliases,
+            "source_canonical_var_id": source_id,
+            "target_canonical_var_id": target_id,
+            "direction": str(rel.get("direction", "") or ""),
+            "relation_form": str(rel.get("relation_form", "") or ""),
+            "relation_form_raw": str(rel.get("relation_form_raw", "") or ""),
+            "hypothesis_label": str(rel.get("hypothesis_label", "") or ""),
+            "verification": str(rel.get("verification", "") or ""),
+            "evidence_section": str(rel.get("evidence_section", "") or ""),
+            "evidence_snippet": str(rel.get("evidence_snippet", "") or ""),
         }
+        papers_map[pid]["main_effects"].append(
+            {
+                "from": source,
+                "to": target,
+                "effect": _effect_symbol_from_direction(rel_payload["direction"], rel_payload["relation_form"]),
+                "hypothesis_label": rel_payload["hypothesis_label"],
+                "verification": rel_payload["verification"],
+                "evidence_section": rel_payload["evidence_section"],
+                "evidence_snippet": rel_payload["evidence_snippet"],
+                "description": "",
+            }
+        )
 
-    artifact = {
+        rel_std = "main_effect"
+        dedupe_key = f"{pid}|{source_id}|{target_id}|{rel_std}|{rel_payload['evidence_section']}"
+        if dedupe_key in edge_key_seen:
+            continue
+        edge_key_seen.add(dedupe_key)
+        edges.append(
+            {
+                "id": f"edge::{_slug(pid)}::{_slug(source)}::{_slug(target)}::{len(edges)}",
+                "source": source_id,
+                "target": target_id,
+                "source_name_local": source,
+                "target_name_local": target,
+                "paper_id": pid,
+                "doi": str(papers_map[pid].get("doi", "") or pid),
+                "relation_type": "main_effect",
+                "relation_type_std": rel_std,
+                "direction": rel_payload["direction"],
+                "relation_form": rel_payload["relation_form"],
+                "verification": rel_payload["verification"],
+                "evidence_section": rel_payload["evidence_section"],
+                "evidence_snippet": rel_payload["evidence_snippet"],
+                "hypothesis_label": rel_payload["hypothesis_label"],
+                "paper_year": papers_map[pid].get("publication_year"),
+                "display_effect_class": _display_effect_class(rel_payload["direction"], rel_payload["relation_form"]),
+            }
+        )
+
+    moderation_group: dict[tuple[str, int], dict[str, Any]] = {}
+    for row in mod_rows:
+        pid = str(row.get("paper_id", "")).strip()
+        mid = int(row.get("id") or 0)
+        if pid not in papers_map or mid <= 0:
+            continue
+        key = (pid, mid)
+        if key not in moderation_group:
+            moderator = str(row.get("moderator_var", "") or "")
+            mod_node = _canonical_var_id(moderator)
+            _ensure_node(variable_nodes, node_aliases, mod_node, moderator, _loads_json_list(row.get("moderator_alias_json")))
+            moderation_group[key] = {
+                "moderator": moderator,
+                "moderator_aliases": _loads_json_list(row.get("moderator_alias_json")),
+                "moderator_node_id": mod_node,
+                "direction": str(row.get("direction", "") or ""),
+                "hypothesis_label": str(row.get("hypothesis_label", "") or ""),
+                "verification": str(row.get("verification", "") or ""),
+                "evidence_section": str(row.get("evidence_section", "") or ""),
+                "evidence_snippet": str(row.get("evidence_snippet", "") or ""),
+                "targets": [],
+            }
+
+        src = str(row.get("source_var", "") or "").strip()
+        tgt = str(row.get("target_var", "") or "").strip()
+        if src and tgt:
+            src_node_id = _canonical_var_id(src)
+            tgt_node_id = _canonical_var_id(tgt)
+            _ensure_node(variable_nodes, node_aliases, src_node_id, src, [])
+            _ensure_node(variable_nodes, node_aliases, tgt_node_id, tgt, [])
+            moderation_group[key]["targets"].append(
+                {
+                    "source": src,
+                    "target": tgt,
+                    "source_node_id": src_node_id,
+                    "target_node_id": tgt_node_id,
+                }
+            )
+
+    for (pid, _mid), item in moderation_group.items():
+        mod_payload = {
+            "moderator": item["moderator"],
+            "moderator_aliases": item["moderator_aliases"],
+            "moderated_effects": [{"source": t["source"], "target": t["target"]} for t in item["targets"]],
+            "direction": item["direction"],
+            "hypothesis_label": item["hypothesis_label"],
+            "verification": item["verification"],
+            "evidence_section": item["evidence_section"],
+            "evidence_snippet": item["evidence_snippet"],
+            "condition_text": "",
+        }
+        papers_map[pid]["moderations"].append(mod_payload)
+
+        for t in item["targets"]:
+            moderation_links.append(
+                {
+                    "id": f"mod::{_slug(pid)}::{_slug(item['moderator'])}::{len(moderation_links)}",
+                    "paper_id": pid,
+                    "doi": str(papers_map[pid].get("doi", "") or pid),
+                    "moderator_var": item["moderator"],
+                    "moderator_node_id": item["moderator_node_id"],
+                    "moderated_relation": {
+                        "source_var": t["source"],
+                        "target_var": t["target"],
+                        "source_node_id": t["source_node_id"],
+                        "target_node_id": t["target_node_id"],
+                    },
+                    "direction": item["direction"],
+                    "verification": item["verification"],
+                    "hypothesis_label": item["hypothesis_label"],
+                    "condition_text": "",
+                    "evidence_section": item["evidence_section"],
+                    "evidence_snippet": item["evidence_snippet"],
+                    "paper_year": papers_map[pid].get("publication_year"),
+                }
+            )
+
+    interaction_group: dict[tuple[str, int], dict[str, Any]] = {}
+    for row in interaction_rows:
+        pid = str(row.get("paper_id", "")).strip()
+        iid = int(row.get("id") or 0)
+        if pid not in papers_map or iid <= 0:
+            continue
+        key = (pid, iid)
+        if key not in interaction_group:
+            output = str(row.get("output_var", "") or "")
+            output_id = _canonical_var_id(output)
+            _ensure_node(variable_nodes, node_aliases, output_id, output, [])
+            moderator = str(row.get("moderator_var", "") or "")
+            moderator_id = _canonical_var_id(moderator) if moderator else ""
+            if moderator and moderator_id:
+                _ensure_node(variable_nodes, node_aliases, moderator_id, moderator, [])
+
+            interaction_group[key] = {
+                "paper_id": pid,
+                "output": output,
+                "output_node_id": output_id,
+                "interaction_type": str(row.get("interaction_type", "") or ""),
+                "moderator": moderator,
+                "moderator_node_id": moderator_id,
+                "effect": str(row.get("effect", "") or ""),
+                "hypothesis_label": str(row.get("hypothesis_label", "") or ""),
+                "verification": str(row.get("verification", "") or ""),
+                "evidence_section": str(row.get("evidence_section", "") or ""),
+                "evidence_snippet": str(row.get("evidence_snippet", "") or ""),
+                "description": str(row.get("description", "") or ""),
+                "paper_year": papers_map[pid].get("publication_year"),
+                "inputs": [],
+                "input_node_ids": [],
+            }
+
+        input_var = str(row.get("input_var", "") or "").strip()
+        if input_var:
+            input_id = _canonical_var_id(input_var)
+            _ensure_node(variable_nodes, node_aliases, input_id, input_var, [])
+            interaction_group[key]["inputs"].append(input_var)
+            interaction_group[key]["input_node_ids"].append(input_id)
+
+    for (pid, _iid), item in interaction_group.items():
+        papers_map[pid]["interactions"].append(
+            {
+                "inputs": list(item["inputs"]),
+                "output": item["output"],
+                "type": item["interaction_type"],
+                "moderator": item["moderator"],
+                "effect": item["effect"],
+                "hypothesis_label": item["hypothesis_label"],
+                "verification": item["verification"],
+                "evidence_section": item["evidence_section"],
+                "evidence_snippet": item["evidence_snippet"],
+                "description": item["description"],
+                "input_canonical_var_ids": list(item["input_node_ids"]),
+                "output_canonical_var_id": item["output_node_id"],
+                "moderator_canonical_var_id": item["moderator_node_id"],
+            }
+        )
+        interaction_links.append(
+            {
+                "id": f"int::{_slug(pid)}::{len(interaction_links)}",
+                "paper_id": pid,
+                "doi": str(papers_map[pid].get("doi", "") or pid),
+                "inputs": list(item["inputs"]),
+                "input_node_ids": list(item["input_node_ids"]),
+                "output": item["output"],
+                "output_node_id": item["output_node_id"],
+                "interaction_type": item["interaction_type"],
+                "moderator": item["moderator"],
+                "moderator_node_id": item["moderator_node_id"],
+                "effect": item["effect"],
+                "verification": item["verification"],
+                "hypothesis_label": item["hypothesis_label"],
+                "evidence_section": item["evidence_section"],
+                "evidence_snippet": item["evidence_snippet"],
+                "description": item["description"],
+                "paper_year": item["paper_year"],
+            }
+        )
+        interaction_type_text = str(item["interaction_type"] or "").strip().lower()
+        moderator_node_id = str(item["moderator_node_id"] or "").strip()
+        moderator_name = str(item["moderator"] or "").strip()
+        output_node_id = str(item["output_node_id"] or "").strip()
+        output_name = str(item["output"] or "").strip()
+        is_moderation_like = (
+            ("moderat" in interaction_type_text)
+            or (moderator_node_id != "" and len(item["input_node_ids"]) >= 2)
+        )
+        if is_moderation_like and moderator_node_id and output_node_id:
+            for idx, source_node_id in enumerate(item["input_node_ids"]):
+                source_node_id = str(source_node_id or "").strip()
+                if not source_node_id or source_node_id == moderator_node_id:
+                    continue
+                source_name = ""
+                if idx < len(item["inputs"]):
+                    source_name = str(item["inputs"][idx] or "").strip()
+                moderation_links.append(
+                    {
+                        "id": f"mod::from_inter::{_slug(pid)}::{len(moderation_links)}",
+                        "paper_id": pid,
+                        "doi": str(papers_map[pid].get("doi", "") or pid),
+                        "moderator_var": moderator_name,
+                        "moderator_node_id": moderator_node_id,
+                        "moderated_relation": {
+                            "source_var": source_name,
+                            "target_var": output_name,
+                            "source_node_id": source_node_id,
+                            "target_node_id": output_node_id,
+                        },
+                        "direction": str(item["effect"] or ""),
+                        "verification": str(item["verification"] or ""),
+                        "hypothesis_label": str(item["hypothesis_label"] or ""),
+                        "condition_text": "",
+                        "evidence_section": str(item["evidence_section"] or ""),
+                        "evidence_snippet": str(item["evidence_snippet"] or ""),
+                        "paper_year": item["paper_year"],
+                    }
+                )
+
+    _fill_node_first_year(variable_nodes, edges)
+    for node_id, aliases in node_aliases.items():
+        node = variable_nodes.get(node_id)
+        if node is not None:
+            node["aliases"] = sorted(aliases)
+            node["alias_count"] = len(aliases)
+
+    payload = {
         "meta": {
-            "total_rows": len(papers),
-            "success_rows": len(papers),
-            "failed_rows": 0,
-            "node_count": len(merged_nodes),
+            "node_count": len(variable_nodes),
             "edge_count": len(edges),
-            "paper_count": len(papers),
-            "year_range": {"min": min(all_years) if all_years else None, "max": max(all_years) if all_years else None},
+            "paper_count": len(papers_map),
+            "interaction_count": len(interaction_links),
         },
-        "nodes": list(merged_nodes.values()),
+        "nodes": list(variable_nodes.values()),
         "edges": edges,
         "moderation_links": moderation_links,
-        "papers": papers,
+        "interaction_links": interaction_links,
+        "papers": list(papers_map.values()),
     }
 
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
-    args.output_json.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"output": str(args.output_json), "meta": artifact["meta"]}, ensure_ascii=False, indent=2))
+    args.output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(payload["meta"], ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

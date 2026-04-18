@@ -1,17 +1,17 @@
-# Variable Alias & Domain Extraction Design
+﻿# 变量同义词与领域提取设计
 
-## Summary
+## 概述
 
-- Add paper-level domain extraction with source priority:
-  1. Wiley metadata `topics.topicLabel`
+- 增加论文级领域提取，并采用来源优先级：
+  1. Wiley 元数据 `topics.topicLabel`
   2. `citation_keywords`
-  3. Model output fallback
-- Add variable alias and canonical-id fields into relation extraction.
-- Add nonlinear relation form and map to UI display classes: `positive|negative|nonlinear`.
+  3. 模型回退补全
+- 在关系抽取中增加变量同义词与 canonical ID。
+- 增加非线性关系形态，并映射到前端三类显示：`positive|negative|nonlinear`。
 
-## JSON Contract
+## JSON 契约
 
-Top-level:
+顶层字段：
 - `paper_domains: string[]`
 - `relations: object[]`
 - `variable_level_theory_grounding: object[]`
@@ -19,7 +19,7 @@ Top-level:
 - `hypotheses: object[]`
 - `citations: object[]`
 
-Relation object required keys:
+`relation` 必填字段：
 - `source_var`
 - `target_var`
 - `source_aliases: string[]`
@@ -33,17 +33,17 @@ Relation object required keys:
 - `verification`
 - `evidence_anchor`
 
-Canonical naming priority:
-1. Hypothesis phrasing
-2. Variable-definition section phrasing
-3. Hypothesis-test table phrasing
+正式变量名优先级：
+1. 假设表述
+2. 变量定义段落/章节
+3. 假设检验表格表述
 
-## Storage Shape
+## 存储结构
 
 - `paper_domains(paper_id, domain, source)`
 - `canonical_variables(canonical_var_id, canonical_name)`
 - `variable_aliases(canonical_var_id, alias_text, alias_norm, source, paper_id)`
-- `relations(...)` includes:
+- `relations(...)` 额外字段：
   - `source_canonical_var_id`
   - `target_canonical_var_id`
   - `source_alias_text`
@@ -51,11 +51,11 @@ Canonical naming priority:
   - `relation_form`
 - `alias_mentions(paper_id, relation_row_id, canonical_var_id, alias_text, alias_norm, role)`
 
-## Frontend Mapping
+## 前端映射
 
-- Edge display class computed as:
-  - `nonlinear` if `relation_form == nonlinear`
-  - else `negative` if direction negative
-  - else `positive` if direction positive
-  - else fallback `nonlinear`
-- UI colors are configurable for all 3 classes.
+- 边显示类别计算规则：
+  - `relation_form == nonlinear` -> `nonlinear`
+  - 否则若方向负向 -> `negative`
+  - 否则若方向正向 -> `positive`
+  - 其他值回退为 `nonlinear`
+- 三类颜色均可由用户配置。

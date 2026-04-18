@@ -6,7 +6,8 @@ import re
 from typing import Iterable
 
 
-_SYSTEM_PROMPT_PATH = Path(__file__).with_name("system_prompt_template.md")
+_PROMPT_ROOT = Path(__file__).resolve().parents[3] / "prompt"
+_SYSTEM_PROMPT_PATH = _PROMPT_ROOT / "extraction_system_prompt.md"
 _REFERENCE_HEADINGS = (
     "references",
     "reference",

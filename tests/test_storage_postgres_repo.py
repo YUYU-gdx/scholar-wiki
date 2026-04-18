@@ -18,53 +18,54 @@ _SPEC.loader.exec_module(_MOD)
 PostgresRepo = _MOD.PostgresRepo
 
 
-def _bundle(
-    relation_target: str = "B",
-    hypothesis_label: str = "H1",
-    citation_key: str = "Teece2007",
-) -> dict[str, list[dict[str, str]]]:
+def _bundle(target: str = "B") -> dict[str, object]:
     return {
-        "relations": [
-            {
-                "source_var": "A",
-                "target_var": relation_target,
-                "relation_type": "direct",
-                "model_tag": "main_model",
-                "direction": "positive",
-                "verification": "supported",
-                "evidence_anchor": "Results paragraph 1",
-            }
-        ],
-        "variable_level_theory_grounding": [
+        "doi": "10.1002/test",
+        "publication_date": "2021-03-01",
+        "online_date": "2021-01-15",
+        "publication_year": 2021,
+        "paper_citation_count": 77,
+        "extractability_status": "yes",
+        "paper_type": "quantitative_empirical",
+        "extractability_reason": "has regression",
+        "extractability_evidence_section": "Methods",
+        "paper_domains": ["strategy"],
+        "variable_definitions": [
             {
                 "variable": "A",
-                "theory": "dynamic capabilities",
-                "evidence_anchor": "Theory section",
+                "aliases": ["alpha"],
+                "definition": "A definition",
+                "definition_evidence_section": "Theory",
             }
         ],
-        "relation_level_theory_grounding": [
+        "direct_effects": [
             {
-                "source_var": "A",
-                "target_var": relation_target,
-                "theory": "dynamic capabilities",
-                "evidence_anchor": "Hypothesis section",
-            }
-        ],
-        "hypotheses": [
-            {
-                "label": hypothesis_label,
-                "statement": f"{hypothesis_label}: A positively affects {relation_target}.",
+                "source": "A",
+                "target": target,
+                "source_aliases": ["A"],
+                "target_aliases": [target],
+                "direction": "positive",
+                "relation_form": "linear",
+                "relation_form_raw": "",
+                "hypothesis_label": "H1",
                 "verification": "supported",
-                "evidence_anchor": "Results paragraph 1",
+                "evidence_section": "Results",
+                "evidence_snippet": "coef > 0",
             }
         ],
-        "citations": [
+        "moderations": [
             {
-                "source_text": "Teece (2007)",
-                "citation_key": citation_key,
-                "evidence_anchor": "Theory section",
+                "moderator": "M",
+                "moderator_aliases": ["M"],
+                "moderated_effects": [{"source": "A", "target": target}],
+                "direction": "positive",
+                "hypothesis_label": "H2",
+                "verification": "supported",
+                "evidence_section": "Results",
+                "evidence_snippet": "interaction > 0",
             }
         ],
+        "interactions": [],
     }
 
 
@@ -77,75 +78,80 @@ class PostgresRepoTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.connection.close()
 
-    def test_apply_schema_and_replace_paper_bundle_persists_source_of_truth_rows(self) -> None:
+    def test_apply_schema_and_replace_paper_bundle_persists_rows(self) -> None:
         self.repo.apply_schema()
-
         self.repo.replace_paper_bundle("paper-1", _bundle())
 
-        papers = self.connection.execute("SELECT paper_id FROM papers").fetchall()
-        relations = self.connection.execute(
-            "SELECT source_var, target_var, relation_type, direction, verification FROM relations"
+        paper = self.connection.execute(
+            "SELECT extractability_status, paper_type, publication_year FROM papers WHERE paper_id = ?",
+            ("paper-1",),
+        ).fetchone()
+        direct_effects = self.connection.execute(
+            "SELECT source_var, target_var, direction, verification FROM direct_effects"
         ).fetchall()
-        variable_grounding = self.connection.execute(
-            "SELECT variable_name, theory FROM variable_theory_grounding"
+        moderations = self.connection.execute(
+            "SELECT moderator_var, direction FROM moderations"
         ).fetchall()
-        relation_grounding = self.connection.execute(
-            "SELECT source_var, target_var, theory FROM relation_theory_grounding"
-        ).fetchall()
-        hypotheses = self.connection.execute(
-            "SELECT label, verification FROM hypotheses"
-        ).fetchall()
-        citations = self.connection.execute(
-            "SELECT citation_key, source_text FROM citations"
+        targets = self.connection.execute(
+            "SELECT source_var, target_var FROM moderation_targets"
         ).fetchall()
 
-        self.assertEqual([row["paper_id"] for row in papers], ["paper-1"])
+        self.assertEqual(dict(paper), {"extractability_status": "yes", "paper_type": "quantitative_empirical", "publication_year": 2021})
+        self.assertEqual([dict(r) for r in direct_effects], [{"source_var": "A", "target_var": "B", "direction": "positive", "verification": "supported"}])
+        self.assertEqual([dict(r) for r in moderations], [{"moderator_var": "M", "direction": "positive"}])
+        self.assertEqual([dict(r) for r in targets], [{"source_var": "A", "target_var": "B"}])
+
+    def test_replace_paper_bundle_overwrites_previous_rows(self) -> None:
+        self.repo.apply_schema()
+        self.repo.replace_paper_bundle("paper-1", _bundle("B"))
+        self.repo.replace_paper_bundle("paper-1", _bundle("C"))
+
+        direct_effects = self.connection.execute(
+            "SELECT target_var FROM direct_effects WHERE paper_id = ?",
+            ("paper-1",),
+        ).fetchall()
+        self.assertEqual([r[0] for r in direct_effects], ["C"])
+
+    def test_moderation_targets_use_provided_canonical_ids(self) -> None:
+        self.repo.apply_schema()
+        b = _bundle("B")
+        b["moderations"] = [
+            {
+                "moderator": "M",
+                "moderator_aliases": ["M"],
+                "moderated_effects": [
+                    {
+                        "source": "A short",
+                        "target": "B short",
+                        "source_canonical_var_id": "var::alpha-canonical",
+                        "target_canonical_var_id": "var::beta-canonical",
+                    }
+                ],
+                "direction": "positive",
+                "hypothesis_label": "H2",
+                "verification": "supported",
+                "evidence_section": "Results",
+                "evidence_snippet": "interaction > 0",
+            }
+        ]
+        self.repo.replace_paper_bundle("paper-1", b)
+
+        targets = self.connection.execute(
+            "SELECT source_var, target_var, source_canonical_var_id, target_canonical_var_id FROM moderation_targets"
+        ).fetchall()
         self.assertEqual(
-            [dict(row) for row in relations],
+            [dict(r) for r in targets],
             [
                 {
-                    "source_var": "A",
-                    "target_var": "B",
-                    "relation_type": "direct",
-                    "direction": "positive",
-                    "verification": "supported",
+                    "source_var": "A short",
+                    "target_var": "B short",
+                    "source_canonical_var_id": "var::alpha-canonical",
+                    "target_canonical_var_id": "var::beta-canonical",
                 }
             ],
         )
-        self.assertEqual([dict(row) for row in variable_grounding], [{"variable_name": "A", "theory": "dynamic capabilities"}])
-        self.assertEqual(
-            [dict(row) for row in relation_grounding],
-            [{"source_var": "A", "target_var": "B", "theory": "dynamic capabilities"}],
-        )
-        self.assertEqual([dict(row) for row in hypotheses], [{"label": "H1", "verification": "supported"}])
-        self.assertEqual([dict(row) for row in citations], [{"citation_key": "Teece2007", "source_text": "Teece (2007)"}])
-
-    def test_replace_paper_bundle_deletes_previous_child_rows_for_same_paper(self) -> None:
-        self.repo.apply_schema()
-        self.repo.replace_paper_bundle("paper-1", _bundle())
-
-        self.repo.replace_paper_bundle(
-            "paper-1",
-            _bundle(relation_target="C", hypothesis_label="H2", citation_key="Barney1991"),
-        )
-
-        relation_rows = self.connection.execute(
-            "SELECT target_var FROM relations WHERE paper_id = ? ORDER BY target_var",
-            ("paper-1",),
-        ).fetchall()
-        hypothesis_rows = self.connection.execute(
-            "SELECT label FROM hypotheses WHERE paper_id = ? ORDER BY label",
-            ("paper-1",),
-        ).fetchall()
-        citation_rows = self.connection.execute(
-            "SELECT citation_key FROM citations WHERE paper_id = ? ORDER BY citation_key",
-            ("paper-1",),
-        ).fetchall()
-
-        self.assertEqual([row["target_var"] for row in relation_rows], ["C"])
-        self.assertEqual([row["label"] for row in hypothesis_rows], ["H2"])
-        self.assertEqual([row["citation_key"] for row in citation_rows], ["Barney1991"])
 
 
 if __name__ == "__main__":
     unittest.main()
+

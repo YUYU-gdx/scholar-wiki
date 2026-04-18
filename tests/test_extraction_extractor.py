@@ -35,59 +35,39 @@ class ExtractionExtractorTest(unittest.TestCase):
     def test_parse_extraction_response_returns_bundle(self) -> None:
         response_text = """
         {
-          "relations": [
-            {
-              "source_var": "strategic flexibility",
-              "target_var": "firm performance",
-              "relation_type": "direct",
-              "model_tag": "main_model",
-              "direction": "positive",
-              "verification": "supported",
-              "evidence_anchor": "Results paragraph 1"
-            }
-          ],
-          "variable_level_theory_grounding": [
+          "extractability_status": "yes",
+          "paper_type": "quantitative_empirical",
+          "extractability_reason": "has regression",
+          "extractability_evidence_section": "Methods",
+          "variable_definitions": [
             {
               "variable": "strategic flexibility",
-              "theory": "dynamic capabilities",
-              "evidence_anchor": "Theory section"
+              "aliases": ["flexibility"],
+              "definition": "firm strategic adaptability",
+              "definition_evidence_section": "Theory"
             }
           ],
-          "relation_level_theory_grounding": [
+          "direct_effects": [
             {
-              "source_var": "strategic flexibility",
-              "target_var": "firm performance",
-              "theory": "dynamic capabilities",
-              "evidence_anchor": "Hypothesis 1"
-            }
-          ],
-          "hypotheses": [
-            {
-              "label": "H1",
-              "statement": "Strategic flexibility positively affects firm performance.",
+              "source": "strategic flexibility",
+              "target": "firm performance",
+              "direction": "positive",
+              "relation_form": "linear",
               "verification": "supported",
-              "evidence_anchor": "Results paragraph 1"
+              "evidence_section": "Results"
             }
           ],
-          "citations": [
-            {
-              "source_text": "Teece (2007)",
-              "citation_key": "Teece2007",
-              "evidence_anchor": "Theory section"
-            }
-          ]
+          "moderations": [],
+          "interactions": []
         }
         """
 
         bundle = parse_extraction_response(response_text)
 
         self.assertIsInstance(bundle, ExtractionBundle)
-        self.assertEqual(bundle.relations[0]["source_var"], "strategic flexibility")
-        self.assertEqual(bundle.variable_level_theory_grounding[0]["theory"], "dynamic capabilities")
-        self.assertEqual(bundle.relation_level_theory_grounding[0]["target_var"], "firm performance")
-        self.assertEqual(bundle.hypotheses[0]["label"], "H1")
-        self.assertEqual(bundle.citations[0]["citation_key"], "Teece2007")
-        self.assertEqual(bundle.paper_domains, [])
+        self.assertEqual(bundle.extractability_status, "yes")
+        self.assertEqual(bundle.direct_effects[0]["source"], "strategic flexibility")
+        self.assertEqual(bundle.variable_definitions[0]["variable"], "strategic flexibility")
 
     def test_extract_records_calls_fake_client_with_system_and_user_messages(self) -> None:
         document_html = """
@@ -98,39 +78,42 @@ class ExtractionExtractorTest(unittest.TestCase):
         client = _FakeLLMClient(
             """
             {
-              "relations": [{"source_var": "A", "target_var": "B", "relation_type":"direct", "model_tag":"main_model", "direction": "positive", "verification":"supported", "evidence_anchor": "Results"}],
-              "variable_level_theory_grounding": [{"variable": "A", "theory": "attention-based view", "evidence_anchor": "Hypotheses"}],
-              "relation_level_theory_grounding": [{"source_var": "A", "target_var": "B", "theory": "attention-based view", "evidence_anchor": "Hypotheses"}],
-              "hypotheses": [{"label": "H1", "statement": "A positively affects B.", "verification": "supported", "evidence_anchor": "Results"}],
-              "citations": [{"source_text": "Ocasio (1997)", "citation_key": "Ocasio1997", "evidence_anchor": "Hypotheses"}]
+              "extractability_status": "yes",
+              "paper_type": "quantitative_empirical",
+              "extractability_reason": "has regression",
+              "extractability_evidence_section": "Methods",
+              "variable_definitions": [],
+              "direct_effects": [{"source": "A", "target": "B", "direction": "positive", "relation_form": "linear", "verification": "supported", "evidence_section": "Results"}],
+              "moderations": [],
+              "interactions": []
             }
             """
         )
 
         bundle = extract_records(document_html, client)
 
-        self.assertEqual(bundle.relations[0]["target_var"], "B")
+        self.assertEqual(bundle.direct_effects[0]["target"], "B")
         self.assertEqual(len(client.user_contents), 1)
         self.assertEqual(len(client.system_prompts), 1)
         self.assertIn("H1 predicts a positive relationship.", client.user_contents[0])
-        self.assertIn("The main model coefficient is positive and significant.", client.user_contents[0])
         self.assertNotIn("Some citation list should be excluded.", client.user_contents[0])
-        self.assertIn('"relations"', client.system_prompts[0])
 
     def test_parse_extraction_response_rejects_missing_required_sections(self) -> None:
-        response_text = '{"relations": [], "hypotheses": [], "citations": []}'
-
+        response_text = '{"extractability_status": "yes", "paper_type": "x"}'
         with self.assertRaises(ValueError):
             parse_extraction_response(response_text)
 
-    def test_parse_extraction_response_rejects_invalid_relation_semantics(self) -> None:
+    def test_parse_extraction_response_rejects_direct_effect_for_non_extractable_doc(self) -> None:
         response_text = """
         {
-          "relations": [{"source_var": "A", "target_var": "B", "relation_type": "direct", "model_tag": "robustness", "direction": "positive", "verification": "supported", "evidence_anchor": "x"}],
-          "variable_level_theory_grounding": [],
-          "relation_level_theory_grounding": [],
-          "hypotheses": [],
-          "citations": []
+          "extractability_status": "no",
+          "paper_type": "conceptual",
+          "extractability_reason": "conceptual paper",
+          "extractability_evidence_section": "Abstract",
+          "variable_definitions": [],
+          "direct_effects": [{"source": "A", "target": "B", "direction": "positive", "relation_form": "linear", "verification": "supported", "evidence_section": "Results"}],
+          "moderations": [],
+          "interactions": []
         }
         """
         with self.assertRaises(ValueError):
@@ -139,128 +122,51 @@ class ExtractionExtractorTest(unittest.TestCase):
     def test_parse_extraction_response_accepts_markdown_fenced_json(self) -> None:
         response_text = """```json
 {
-  "relations": [],
-  "variable_level_theory_grounding": [],
-  "relation_level_theory_grounding": [],
-  "hypotheses": [],
-  "citations": []
+  "extractability_status": "yes",
+  "paper_type": "quantitative_empirical",
+  "extractability_reason": "x",
+  "extractability_evidence_section": "Methods",
+  "variable_definitions": [],
+  "direct_effects": [],
+  "moderations": [],
+  "interactions": []
 }
 ```"""
         bundle = parse_extraction_response(response_text)
-        self.assertEqual(bundle.relations, [])
+        self.assertEqual(bundle.direct_effects, [])
 
-    def test_parse_extraction_response_accepts_text_wrapped_json(self) -> None:
-        response_text = """
-Here is the extracted payload:
-{
-  "relations": [],
-  "variable_level_theory_grounding": [],
-  "relation_level_theory_grounding": [],
-  "hypotheses": [],
-  "citations": []
-}
-"""
-        bundle = parse_extraction_response(response_text)
-        self.assertEqual(bundle.citations, [])
-
-    def test_parse_extraction_response_backfills_alias_and_canonical_fields(self) -> None:
+    def test_parse_extraction_response_keeps_moderation_target_canonical_ids(self) -> None:
         response_text = """
         {
-          "relations": [
-            {"source_var": "A", "target_var": "B", "relation_type": "direct", "model_tag": "main_model", "direction": "inverted_u", "verification": "supported", "evidence_anchor": "t1"}
-          ],
-          "variable_level_theory_grounding": [],
-          "relation_level_theory_grounding": [],
-          "hypotheses": [],
-          "citations": []
-        }
-        """
-        bundle = parse_extraction_response(response_text)
-        rel = bundle.relations[0]
-        self.assertEqual(rel["source_aliases"], ["A"])
-        self.assertEqual(rel["target_aliases"], ["B"])
-        self.assertTrue(rel["source_canonical_var_id"].startswith("var::"))
-        self.assertEqual(rel["relation_form"], "nonlinear")
-
-    def test_extract_records_prefers_html_metadata_domains(self) -> None:
-        document_html = """
-        <meta name="citation_keywords" content="Strategic Management">
-        <script>
-        window.adobeDataLayer.push({"content":{"item":{"topics":[{"taxonomyUri":"global-subject-codes","topicLabel":"Management"}]}}});
-        </script>
-        <section><h2>Hypotheses</h2><p>H1 predicts a positive relationship.</p></section>
-        """
-        client = _FakeLLMClient(
-            """
+          "extractability_status": "yes",
+          "paper_type": "quantitative_empirical",
+          "extractability_reason": "has regression",
+          "extractability_evidence_section": "Methods",
+          "variable_definitions": [],
+          "direct_effects": [],
+          "moderations": [
             {
-              "paper_domains": ["fallback-domain"],
-              "relations": [],
-              "variable_level_theory_grounding": [],
-              "relation_level_theory_grounding": [],
-              "hypotheses": [],
-              "citations": []
-            }
-            """
-        )
-        bundle = extract_records(document_html, client)
-        self.assertIn("Strategic Management", bundle.paper_domains)
-        self.assertIn("Management", bundle.paper_domains)
-
-    def test_parse_extraction_response_resolves_full_name_from_aliases(self) -> None:
-        response_text = """
-        {
-          "relations": [
-            {
-              "source_var": "TMT",
-              "target_var": "firm performance",
-              "source_aliases": ["Top management team (TMT)"],
-              "target_aliases": ["firm performance"],
-              "relation_type": "direct",
-              "model_tag": "main_model",
+              "moderator": "M",
               "direction": "positive",
               "verification": "supported",
-              "evidence_anchor": "Hypothesis testing"
+              "evidence_section": "Results",
+              "moderated_effects": [
+                {
+                  "source": "A short",
+                  "target": "B short",
+                  "source_canonical_var_id": "var::a-canonical",
+                  "target_canonical_var_id": "var::b-canonical"
+                }
+              ]
             }
           ],
-          "variable_level_theory_grounding": [],
-          "relation_level_theory_grounding": [],
-          "hypotheses": [],
-          "citations": []
+          "interactions": []
         }
         """
         bundle = parse_extraction_response(response_text)
-        rel = bundle.relations[0]
-        self.assertEqual(rel["source_var"], "Top management team")
-        self.assertFalse(rel["unresolved_abbr"])
-        self.assertEqual(rel["name_resolution_source"], "postprocess")
-        self.assertIn("TMT", rel["source_aliases"])
-
-    def test_parse_extraction_response_marks_unresolved_abbreviation(self) -> None:
-        response_text = """
-        {
-          "relations": [
-            {
-              "source_var": "TMT",
-              "target_var": "firm performance",
-              "relation_type": "direct",
-              "model_tag": "main_model",
-              "direction": "positive",
-              "verification": "supported",
-              "evidence_anchor": "Hypothesis testing"
-            }
-          ],
-          "variable_level_theory_grounding": [],
-          "relation_level_theory_grounding": [],
-          "hypotheses": [],
-          "citations": []
-        }
-        """
-        bundle = parse_extraction_response(response_text)
-        rel = bundle.relations[0]
-        self.assertEqual(rel["source_var"], "TMT")
-        self.assertTrue(rel["unresolved_abbr"])
-        self.assertEqual(rel["abbr_form"], "TMT")
-        self.assertEqual(rel["name_resolution_source"], "fallback")
+        target = bundle.moderations[0]["moderated_effects"][0]
+        self.assertEqual(target["source_canonical_var_id"], "var::a-canonical")
+        self.assertEqual(target["target_canonical_var_id"], "var::b-canonical")
 
 
 if __name__ == "__main__":
