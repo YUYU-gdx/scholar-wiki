@@ -1,0 +1,36 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+.pytest_cache/
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.uv-cache/
+.uv_cache/
+
+# Local runtime configuration
+.env
+!.env.example
+
+# Local editor / agent state
+.obsidian/
+.learnings/
+
+# Generated run artifacts
+outputs/
+*.log
+*.sqlite3
+*.db
+
+# One-off local probes
+test_glm.py
+prompt_structure_probe.py
+
+# Local copied references (not project source)
+docs/GitNexus/
+docs/mineru_api_docs/
+skills/
