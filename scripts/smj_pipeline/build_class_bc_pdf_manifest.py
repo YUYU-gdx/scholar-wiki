@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pypdf import PdfReader
-
 from mineru_agent_common import (
     canonical_pdf_name,
     find_pdf_for_doi,
@@ -51,7 +49,10 @@ def _collect_rows(path: Path, doc_class: str) -> list[dict[str, Any]]:
 
 def _pdf_page_count(path: Path) -> int:
     try:
-        return len(PdfReader(str(path)).pages)
+        import fitz  # type: ignore
+
+        with fitz.open(str(path)) as doc:
+            return int(doc.page_count)
     except Exception:
         return -1
 
@@ -153,4 +154,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
