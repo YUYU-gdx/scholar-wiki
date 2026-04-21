@@ -46,6 +46,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--poll-interval-seconds", type=float, default=8.0)
     p.add_argument("--max-poll-seconds", type=int, default=3600)
     p.add_argument("--max-inflight", type=int, default=2, help="Provider-safe parallel in-flight parsing tasks.")
+    p.add_argument(
+        "--submission-mode",
+        choices=("coupled", "decoupled"),
+        default="coupled",
+        help="coupled: submit is gated by inflight count; decoupled: submit continues independently of polling/downloading.",
+    )
+    p.add_argument(
+        "--max-submitted-inflight",
+        type=int,
+        default=0,
+        help="Only used when submission-mode=decoupled. 0 means no extra cap.",
+    )
     p.add_argument("--max-retries", type=int, default=3)
     p.add_argument("--retry-delays", default="8,20,60")
     p.add_argument("--daily-page-limit", type=int, default=0, help="0 means unlimited.")
@@ -58,7 +70,14 @@ def parse_args() -> argparse.Namespace:
 
 def _log(message: str) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] {message}", flush=True)
+    line = f"[{ts}] {message}"
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        # Windows console may be GBK; avoid crash on non-GBK file names.
+        safe_line = line.encode(enc, errors="replace").decode(enc, errors="replace")
+        print(safe_line, flush=True)
 
 
 def _now_iso() -> str:
@@ -273,7 +292,14 @@ def _poll_one(
     task_path = _task_dir(task_root, item_id)
 
     poll_url = f"{str(args.base_url).rstrip('/')}/extract-results/batch/{batch_id}"
-    res = requests.get(poll_url, headers=headers, timeout=60)
+    try:
+        res = requests.get(poll_url, headers=headers, timeout=60)
+    except Exception as exc:
+        return {
+            "status": "running",
+            "error": f"poll_exception:{type(exc).__name__}:{exc}",
+            "next_poll_at": time.time() + float(args.poll_interval_seconds),
+        }
     obj: dict[str, Any]
     try:
         obj = res.json()
@@ -314,13 +340,26 @@ def _poll_one(
         zip_http = 0
         zip_path = ""
         if full_zip_url:
-            z = requests.get(full_zip_url, timeout=180)
+            try:
+                z = requests.get(full_zip_url, timeout=180)
+            except Exception as exc:
+                return {
+                    "status": "running",
+                    "error": f"zip_exception:{type(exc).__name__}:{exc}",
+                    "next_poll_at": time.time() + float(args.poll_interval_seconds),
+                }
             zip_http = int(z.status_code)
             if z.status_code == 200:
                 target = task_root.parent / "zips" / f"{safe_id(item_id)}.zip"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(z.content)
                 zip_path = str(target)
+            else:
+                return {
+                    "status": "running",
+                    "error": f"zip_http:{z.status_code}",
+                    "next_poll_at": time.time() + float(args.poll_interval_seconds),
+                }
         return {
             "status": "done",
             "full_zip_url": full_zip_url,
@@ -384,19 +423,22 @@ def main() -> None:
     prepared: list[dict[str, Any]] = []
     for row in rows:
         doi = str(row.get("doi", "")).strip()
+        source_id = str(row.get("source_id", "")).strip()
         pdf_path = str(row.get("pdf_path", "")).strip()
         file_name = str(row.get("file_name", "")).strip()
         page_count = int(row.get("page_count", 0) or 0)
-        if not doi or not pdf_path:
+        if not pdf_path:
             continue
         eligible = bool(row.get("eligible", True))
         if not eligible:
             continue
-        item_id = safe_id(doi, 120)
+        id_base = doi or source_id or pdf_path
+        item_id = safe_id(id_base, 120)
         prepared.append(
             {
                 "item_id": item_id,
                 "doi": doi,
+                "source_id": source_id,
                 "doc_class": str(row.get("doc_class", "")),
                 "pdf_path": pdf_path,
                 "file_name": file_name or Path(pdf_path).name,
@@ -441,6 +483,8 @@ def main() -> None:
                 "pending": len(pending_ids),
                 "resume_inflight": len(inflight_ids),
                 "max_inflight": int(args.max_inflight),
+                "submission_mode": str(args.submission_mode),
+                "max_submitted_inflight": int(args.max_submitted_inflight),
                 "daily_page_limit": int(args.daily_page_limit),
                 "daily_file_limit": int(args.daily_file_limit),
             },
@@ -478,7 +522,9 @@ def main() -> None:
                     items_state[item_id] = entry
                     inflight_ids.discard(item_id)
                     failed_now += 1
-                    _log(f"[poll-timeout] item={item_id} doi={item.get('doi','')}")
+                    daily_state["failed_files"] = int(daily_state.get("failed_files", 0)) + 1
+                    _save_daily_state(daily_state_path, daily_state)
+                    _log(f"[poll-timeout] item={item_id} id={item.get('doi','') or item.get('source_id','')}")
                     continue
 
                 res = _poll_one({**item, **entry}, args, task_root, headers)
@@ -489,14 +535,16 @@ def main() -> None:
                     done_now += 1
                     daily_state["done_files"] = int(daily_state.get("done_files", 0)) + 1
                     _save_daily_state(daily_state_path, daily_state)
-                    _log(f"[done] item={item_id} doi={item.get('doi','')} zip_http={res.get('zip_http',0)}")
+                    _log(
+                        f"[done] item={item_id} id={item.get('doi','') or item.get('source_id','')} zip_http={res.get('zip_http',0)}"
+                    )
                 elif st == "failed":
                     items_state[item_id] = {**entry, **res, "status": "failed", "updated_at": _now_iso()}
                     inflight_ids.discard(item_id)
                     failed_now += 1
                     daily_state["failed_files"] = int(daily_state.get("failed_files", 0)) + 1
                     _save_daily_state(daily_state_path, daily_state)
-                    _log(f"[failed] item={item_id} doi={item.get('doi','')} error={res.get('error','')}")
+                    _log(f"[failed] item={item_id} id={item.get('doi','') or item.get('source_id','')} error={res.get('error','')}")
                 else:
                     items_state[item_id] = {**entry, **res, "status": "running", "updated_at": _now_iso()}
                     _log(f"[poll] item={item_id} state={res.get('poll_state','running')}")
@@ -504,8 +552,18 @@ def main() -> None:
                 checkpoint["updated_at"] = _now_iso()
                 write_json_atomic(checkpoint_path, checkpoint)
 
-        # 2) submit new items while under inflight limit
-        while pending_ids and len(inflight_ids) < int(args.max_inflight):
+        # 2) submit new items
+        # coupled mode: throttle by inflight (legacy behavior)
+        # decoupled mode: submission keeps moving independently of polling/downloading
+        while pending_ids:
+            if str(args.submission_mode) == "coupled":
+                if len(inflight_ids) >= int(args.max_inflight):
+                    break
+            else:
+                cap = int(args.max_submitted_inflight)
+                if cap > 0 and len(inflight_ids) >= cap:
+                    break
+
             next_id = pending_ids[0]
             base = prepared_map[next_id]
             pages = int(base.get("page_count", 0) or 0)
@@ -533,7 +591,7 @@ def main() -> None:
             pending_ids.pop(0)
             entry = items_state.get(next_id, {})
             _log(
-                f"[submit] item={next_id} doi={base.get('doi','')} pages={pages} "
+                f"[submit] item={next_id} id={base.get('doi','') or base.get('source_id','')} pages={pages} "
                 f"daily_pages={daily_state.get('submitted_pages',0)}/{int(args.daily_page_limit)} inflight={len(inflight_ids)}"
             )
             res = _submit_one(base, args, task_root, headers, retry_delays)

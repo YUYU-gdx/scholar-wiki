@@ -24,6 +24,8 @@ _SPEC.loader.exec_module(_MOD)
 make_handler = _MOD.make_handler
 ThreadingHTTPServer = _MOD.ThreadingHTTPServer
 resolve_views_json = _MOD._resolve_views_json
+parse_args = _MOD.parse_args
+relation_summary_from_mention = _MOD._relation_summary_from_mention
 
 
 def _free_port() -> int:
@@ -81,7 +83,41 @@ class ServeGraphApiTest(unittest.TestCase):
             },
         }
 
-        handler = make_handler(self.views, tmp_path)
+        class _FakeLiteratureService:
+            def import_manifest(self, manifest_path: str, options: dict[str, object] | None = None) -> dict[str, object]:
+                _ = options
+                return {"imported_count": 1, "manifest_path": manifest_path}
+
+            def search(
+                self,
+                query: str,
+                top_k: int,
+                levels: list[str],
+                keyword_weight: float,
+                rag_weight: float,
+                include_expanded_context: bool,
+                library_id: str = "",
+            ) -> dict[str, object]:
+                _ = query, top_k, levels, keyword_weight, rag_weight, include_expanded_context, library_id
+                return {
+                    "keyword_hits": [{"id": "k1"}],
+                    "rag_hits": [{"id": "r1"}],
+                    "merged_hits": [{"id": "m1"}],
+                }
+
+            def answer(
+                self,
+                query: str,
+                top_k: int,
+                levels: list[str],
+                keyword_weight: float,
+                rag_weight: float,
+                library_id: str = "",
+            ) -> dict[str, object]:
+                _ = query, top_k, levels, keyword_weight, rag_weight, library_id
+                return {"answer": "mock-answer", "citations": [{"id": "m1"}], "retrieval": {"merged_hits": [{"id": "m1"}]}}
+
+        handler = make_handler(self.views, tmp_path, literature_service=_FakeLiteratureService())
         self.port = _free_port()
         self.server = ThreadingHTTPServer(("127.0.0.1", self.port), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -99,13 +135,30 @@ class ServeGraphApiTest(unittest.TestCase):
             raw = resp.read().decode("utf-8")
             return json.loads(raw)
 
+    def _post_json(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = __import__("urllib.request", fromlist=["Request"]).Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw)
+
     def test_graph_full_returns_all_nodes_and_edges(self) -> None:
         payload = self._get_json("/graph/full")
         self.assertIn("meta", payload)
         self.assertIn("nodes", payload)
         self.assertIn("edges", payload)
+        self.assertIn("isolated_nodes", payload)
+        self.assertIn("paper_map", payload)
         self.assertEqual(len(payload["nodes"]), 2)
         self.assertEqual(len(payload["edges"]), 1)
+        self.assertEqual(payload["meta"]["dataset_library_name"], "供应链")
+        self.assertEqual(payload["meta"]["isolated_node_count"], 0)
+        self.assertTrue(bool(payload["nodes"][0].get("validated_variable")))
         edge = payload["edges"][0]
         self.assertEqual(edge["direction"], "positive")
         self.assertEqual(edge["verification"], "supported")
@@ -152,6 +205,124 @@ class ServeGraphApiTest(unittest.TestCase):
         )
         resolved = resolve_views_json(None, tmp_path)
         self.assertEqual(resolved, active_graph)
+
+    def test_parse_args_defaults_frontend_dir_to_formal_graph_page(self) -> None:
+        orig_argv = sys.argv
+        try:
+            sys.argv = ["serve_graph_api.py"]
+            args = parse_args()
+        finally:
+            sys.argv = orig_argv
+        self.assertEqual(args.frontend_dir, Path("frontend/graph_3d"))
+
+    def test_literature_search_endpoint_returns_two_routes_and_merged(self) -> None:
+        payload = self._get_json("/literature/search?query=test&top_k=3&levels=sentence,paragraph&include_expanded_context=true")
+        self.assertIn("keyword_hits", payload)
+        self.assertIn("rag_hits", payload)
+        self.assertIn("merged_hits", payload)
+
+    def test_literature_import_endpoint_accepts_manifest_path(self) -> None:
+        payload = self._post_json("/literature/import", {"manifest_path": "D:/tmp/manifest.jsonl"})
+        self.assertEqual(payload["imported_count"], 1)
+        self.assertEqual(payload["manifest_path"], "D:/tmp/manifest.jsonl")
+
+    def test_literature_answer_endpoint_returns_answer_and_citations(self) -> None:
+        payload = self._post_json("/literature/answer", {"query": "What?"})
+        self.assertEqual(payload["answer"], "mock-answer")
+        self.assertGreaterEqual(len(payload["citations"]), 1)
+
+    def test_relation_summary_uses_readable_chinese_label_for_moderation(self) -> None:
+        payload = relation_summary_from_mention(
+            {
+                "mention_kind": "moderation",
+                "source_name": "Resilience",
+                "target_name": "Performance",
+                "moderator_name": "Institutional Support",
+                "direction": "positive",
+                "evidence_section": "Theory",
+            }
+        )
+        self.assertEqual(payload["kind"], "moderation")
+        self.assertIn("调节", payload["title"])
+        self.assertNotIn("璋", payload["title"])
+
+
+class ServeGraphApiLiteratureDegradedTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        tmp_path = Path(self.tmp.name)
+        (tmp_path / "index.html").write_text("<html><body>ok</body></html>", encoding="utf-8")
+        self.views = {
+            "meta": {"paper_count": 0},
+            "nodes": {},
+            "edges": [],
+            "edge_index_by_node": {},
+            "overview": {"node_ids": [], "edge_indexes": []},
+            "paper_map": {},
+        }
+
+        self._orig_loader = _MOD._load_literature_service_class
+
+        def _raise_loader():
+            raise RuntimeError("synthetic_unavailable")
+
+        _MOD._load_literature_service_class = _raise_loader
+        handler = make_handler(self.views, tmp_path, literature_service=None, chat_service=object())
+        self.port = _free_port()
+        self.server = ThreadingHTTPServer(("127.0.0.1", self.port), handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        time.sleep(0.05)
+
+    def tearDown(self) -> None:
+        _MOD._load_literature_service_class = self._orig_loader
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=1)
+        self.tmp.cleanup()
+
+    def _get_json(self, path: str) -> tuple[int, dict]:
+        try:
+            with urlopen(f"http://127.0.0.1:{self.port}{path}") as resp:
+                raw = resp.read().decode("utf-8")
+                return int(resp.status), json.loads(raw)
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            return int(exc.code), json.loads(body or "{}")
+
+    def _post_json(self, path: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = __import__("urllib.request", fromlist=["Request"]).Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(req) as resp:
+                raw = resp.read().decode("utf-8")
+                return int(resp.status), json.loads(raw)
+        except HTTPError as exc:
+            raw = exc.read().decode("utf-8")
+            return int(exc.code), json.loads(raw or "{}")
+
+    def test_literature_search_degrades_when_service_unavailable(self) -> None:
+        status, payload = self._get_json("/literature/search?query=test&top_k=3")
+        self.assertEqual(status, 200)
+        self.assertTrue(bool(payload.get("degraded")))
+        self.assertEqual(payload.get("degraded_reason"), "literature_service_unavailable")
+        self.assertEqual(payload.get("keyword_hits"), [])
+        self.assertEqual(payload.get("rag_hits"), [])
+        self.assertEqual(payload.get("merged_hits"), [])
+
+    def test_literature_answer_degrades_when_service_unavailable(self) -> None:
+        status, payload = self._post_json("/literature/answer", {"query": "What?"})
+        self.assertEqual(status, 200)
+        self.assertTrue(bool(payload.get("degraded")))
+        self.assertEqual(payload.get("degraded_reason"), "literature_service_unavailable")
+        self.assertIn("answer", payload)
+        self.assertEqual(payload.get("citations"), [])
+        self.assertEqual(payload.get("retrieval", {}).get("merged_hits"), [])
 
 
 if __name__ == "__main__":

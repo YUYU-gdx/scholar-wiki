@@ -1,0 +1,55 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supply Chain Graph</title>
+  <style>
+    body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f6f8fb;color:#0f172a}
+    .wrap{max-width:1100px;margin:0 auto;padding:24px}
+    .card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:12px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    input{padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;min-width:280px}
+    button,a.btn{padding:10px 14px;border-radius:8px;border:0;background:#0f766e;color:#fff;text-decoration:none;cursor:pointer}
+    .muted{color:#64748b;font-size:13px}
+    pre{white-space:pre-wrap;word-break:break-word;background:#0b1020;color:#dbeafe;padding:12px;border-radius:8px;max-height:360px;overflow:auto}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>供应链图谱前端（frontend 目录托管）</h2>
+    <div class="card row">
+      <a class="btn" href="/frontend/chat/">AI 问答</a>
+      <span class="muted">数据源：supply_chain_theme_extract_20260420_160040</span>
+    </div>
+    <div class="card">
+      <div class="row">
+        <input id="q" placeholder="输入变量关键词，例如 resilience" />
+        <button id="searchBtn">搜索变量</button>
+        <button id="overviewBtn">加载概览</button>
+      </div>
+      <p class="muted" id="meta"></p>
+      <pre id="out">等待加载...</pre>
+    </div>
+  </div>
+  <script>
+    const out = document.getElementById('out');
+    const meta = document.getElementById('meta');
+    async function loadOverview(){
+      const r = await fetch('/graph/overview');
+      const j = await r.json();
+      meta.textContent = `nodes=${(j.nodes||[]).length}, edges=${(j.edges||[]).length}`;
+      out.textContent = JSON.stringify((j.nodes||[]).slice(0,20), null, 2);
+    }
+    async function search(){
+      const q = encodeURIComponent(document.getElementById('q').value.trim() || 'supply chain');
+      const r = await fetch(`/graph/search?query=${q}&top_k=20`);
+      const j = await r.json();
+      out.textContent = JSON.stringify(j, null, 2);
+    }
+    document.getElementById('overviewBtn').onclick = loadOverview;
+    document.getElementById('searchBtn').onclick = search;
+    loadOverview();
+  </script>
+</body>
+</html>

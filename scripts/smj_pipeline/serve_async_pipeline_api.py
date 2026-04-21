@@ -232,6 +232,16 @@ def _maybe_load_run_extraction_mvp():
     return mod
 
 
+def _maybe_load_provider_registry():
+    module_path = Path(__file__).resolve().parent / "llm" / "provider_registry.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_llm_provider_registry_for_async_api", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _maybe_load_mineru_single_runner():
     module_path = Path(__file__).resolve().parent / "mineru_single_pdf_runner.py"
     spec = importlib.util.spec_from_file_location("smj_pipeline_mineru_single_pdf_runner_for_async_api", module_path)
@@ -311,22 +321,28 @@ def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore)
 
 
 def _build_llm_client(run_mod: Any, options: dict[str, Any]) -> Any:
-    provider = str(options.get("llm_provider", "zhipu")).strip().lower()
-    model = str(options.get("llm_model", "")).strip()
-    if provider == "nvidia":
-        key_env = str(options.get("llm_api_key_env", "NVIDIA_API_KEY")).strip() or "NVIDIA_API_KEY"
-        api_key = str(os.getenv(key_env, "")).strip()
-        base_url = str(options.get("llm_base_url", "https://integrate.api.nvidia.com/v1/chat/completions")).strip()
-        if not api_key:
-            return run_mod.NullLLMClient()
-        model_name = model or "z-ai/glm4.7"
-        return run_mod.NvidiaChatCompletionsClient(api_key=api_key, model=model_name, base_url=base_url)
-    key_env = str(options.get("llm_api_key_env", "ZHIPU_API_KEY")).strip() or "ZHIPU_API_KEY"
-    api_key = str(os.getenv(key_env, "")).strip()
-    if not api_key:
+    provider = str(options.get("llm_provider", "")).strip().lower() or None
+    model = str(options.get("llm_model", "")).strip() or None
+    provider_options = {
+        "api_key_env": str(options.get("llm_api_key_env", "")).strip() or None,
+        "base_url": str(options.get("llm_base_url", "")).strip() or None,
+        "api_key": str(options.get("llm_api_key", "")).strip() or None,
+        "timeout_seconds": options.get("llm_timeout_seconds"),
+        "temperature": options.get("llm_temperature"),
+        "max_tokens": options.get("llm_max_tokens"),
+        "max_retries": options.get("llm_max_retries"),
+    }
+    provider_options = {k: v for k, v in provider_options.items() if v not in (None, "")}
+    try:
+        registry_mod = _maybe_load_provider_registry()
+        registry = registry_mod.ProviderRegistry()
+        return registry.create_extraction_client(
+            provider=provider,
+            model=model,
+            options=provider_options,
+        )
+    except Exception:
         return run_mod.NullLLMClient()
-    model_name = model or "glm-4.5-flash"
-    return run_mod.ZhipuChatCompletionsClient(api_key=api_key, model=model_name)
 
 
 def _run_extract_entities(job_id: str, parse_meta: dict[str, Any], run_dir: Path, store: JobStore, options: dict[str, Any]) -> dict[str, Any]:

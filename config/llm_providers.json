@@ -1,0 +1,33 @@
+{
+  "default_provider": "zhipu",
+  "providers": [
+    {
+      "id": "zhipu",
+      "type": "zhipu",
+      "aliases": ["glm"],
+      "api_key_env": "ZHIPU_API_KEY",
+      "default_model": "glm-4.5-flash",
+      "models": ["glm-4.5-flash", "glm-4.5", "glm-4.5-air"],
+      "base_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "timeout_seconds": 120
+    },
+    {
+      "id": "nvidia",
+      "type": "nvidia",
+      "api_key_env": "NVIDIA_API_KEY",
+      "default_model": "z-ai/glm4.7",
+      "models": ["z-ai/glm4.7", "meta/llama-3.1-70b-instruct"],
+      "base_url": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "timeout_seconds": 180
+    },
+    {
+      "id": "deepseek",
+      "type": "openai_compatible",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "default_model": "deepseek-chat",
+      "models": ["deepseek-chat", "deepseek-reasoner"],
+      "base_url": "https://api.deepseek.com/v1/chat/completions",
+      "timeout_seconds": 90
+    }
+  ]
+}

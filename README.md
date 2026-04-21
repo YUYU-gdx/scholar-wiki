@@ -2,7 +2,11 @@
 
 ## 文档入口
 
-- Graph API 文档：`docs/api.md`
+- 项目规约总览（建议先看）：`docs/project_spec_index.md`
+- Graph API 规约：`docs/api.md`
+- 异步端到端 Pipeline API：`docs/async_pipeline_api.md`
+- 数据模型规约：`docs/data_model.md`
+- Run 管理：`docs/run_management.md`
 - 抽取契约设计：`docs/superpowers/specs/2026-04-05-variable-alias-domain-extraction-design.md`
 - SMJ 抽取设计（历史版本）：`docs/superpowers/specs/2026-03-29-smj-extraction-design.md`
 - SMJ 抽取实施计划（历史版本）：`docs/superpowers/plans/2026-03-30-smj-extraction-mvp-plan.md`
@@ -51,6 +55,53 @@ uv run python scripts/smj_pipeline/export_frontend_artifact_from_postgres.py ^
   --output-json outputs/smj_batch_full/frontend_artifact_from_postgres.json
 ```
 
+## 文献基线数据集与数据库全文核查（MVP）
+
+### 1) 全量审计（按目录扫描）
+
+```bash
+uv run python scripts/smj_pipeline/run_literature_dataset_tools.py dataset-audit ^
+  --input-root outputs ^
+  --output-json outputs/literature_base/dataset_audit_report.json
+```
+
+### 2) 构建 base dataset（去重 + 去乱码 + 去空文件）
+
+```bash
+uv run python scripts/smj_pipeline/run_literature_dataset_tools.py dataset-build-base ^
+  --input-root outputs ^
+  --output-dir outputs/literature_base ^
+  --garble-threshold 0.02 ^
+  --budget-cny 100
+```
+
+产物：
+- `outputs/literature_base/base_dataset.jsonl`
+- `outputs/literature_base/rejected_dataset.jsonl`
+- `outputs/literature_base/cost_estimate.md`
+
+### 3) MySQL / PostgreSQL 全文字段核查
+
+```bash
+uv run python scripts/smj_pipeline/run_literature_dataset_tools.py db-check-mysql ^
+  --user root ^
+  --password your_password ^
+  --output-json outputs/literature_base/db_fulltext_check_mysql.json
+```
+
+```bash
+uv run python scripts/smj_pipeline/run_literature_dataset_tools.py db-check-pg ^
+  --dsn postgresql://user:pass@127.0.0.1:5432/dbname ^
+  --output-json outputs/literature_base/db_fulltext_check_pg.json
+```
+
+```bash
+uv run python scripts/smj_pipeline/run_literature_dataset_tools.py db-check-summary ^
+  --mysql-json outputs/literature_base/db_fulltext_check_mysql.json ^
+  --pg-json outputs/literature_base/db_fulltext_check_pg.json ^
+  --output-md outputs/literature_base/db_fulltext_check_summary.md
+```
+
 ## 供应链数据源锁定（当前默认）
 
 - 当前默认运行指针：`outputs/runs/active.json`
@@ -63,6 +114,44 @@ uv run python scripts/smj_pipeline/export_frontend_artifact_from_postgres.py ^
 - 边使用清晰箭头（不再依赖小球流动）。
 - 边按三类效果着色：正向 / 负向 / 非线性。
 - 节点色、正向色、负向色、非线性色、背景色可由用户配置。
+
+## Chat 前端（Vite React）
+
+前端工程目录：`frontend/chat_spa`
+
+```bash
+cd frontend/chat_spa
+npm install
+npm run dev
+```
+
+后端启动（含 `/chat/*`）：
+
+```bash
+uv run python scripts/smj_pipeline/serve_graph_api.py --port 8013
+```
+
+## LLM Provider 配置化（新增）
+
+- 统一配置文件：`config/llm_providers.json`
+- Chat、异步 Pipeline、抽取 MVP 都走同一套 provider 注册表：`scripts/smj_pipeline/llm/provider_registry.py`
+- 新增或替换模型厂商时，优先改配置，不改业务代码。
+
+### 配置文件字段
+
+- `default_provider`：默认 provider id（可写 alias）
+- `providers[].id`：provider 主标识
+- `providers[].aliases`：别名（例如 `glm -> zhipu`）
+- `providers[].type`：`zhipu` / `nvidia` / `openai_compatible`
+- `providers[].api_key_env`：API Key 环境变量名
+- `providers[].default_model`：默认模型
+- `providers[].base_url`：接口地址
+
+### 覆盖配置路径
+
+```bash
+set LLM_PROVIDER_CONFIG_PATH=D:\Code\kn_gragh\config\llm_providers.json
+```
 
 ## SMJ 抽取 MVP 运行器
 
@@ -102,7 +191,7 @@ uv run python scripts/smj_pipeline/run_extraction_mvp.py ^
 - 管线顺序：分类 -> 定位 -> 抽取 -> 校验 -> （可选）入库。
 
 ## 新版解析模型
-当前生产链路统一使用 casepack 对齐字段：`extractability_status`、`main_effects`、`interactions`、`context_variables`、`operationalization`、`non_regression_relations`。  
+当前生产链路统一使用 casepack 对齐字段：`extractability_status`、`main_effects`、`interactions`、`context_variables`、`operationalization`。  
 数据库物理层仍保留 `direct_effects` 等历史表名用于兼容，但逻辑模型以 `main_effects` 为准。
 详细字段见 docs/data_model.md。
 

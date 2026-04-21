@@ -4,7 +4,6 @@ from dataclasses import asdict, dataclass
 import argparse
 import importlib.util
 import json
-import os
 from pathlib import Path
 import sys
 from typing import Any, Iterable, Iterator, Protocol
@@ -40,6 +39,7 @@ _VALIDATOR_MOD = _load_sibling_module("smj_pipeline_extraction_validator", "extr
 _REVIEW_QUEUE_MOD = _load_sibling_module("smj_pipeline_extraction_review_queue", "extraction/review_queue.py")
 _ZHIPU_MOD = _load_sibling_module("smj_pipeline_llm_zhipu_client", "llm/zhipu_client.py")
 _NVIDIA_MOD = _load_sibling_module("smj_pipeline_llm_nvidia_client", "llm/nvidia_client.py")
+_PROVIDER_REGISTRY_MOD = _load_sibling_module("smj_pipeline_llm_provider_registry", "llm/provider_registry.py")
 
 classify_document = _QUALIFIER_MOD.classify_document
 locate_main_model_evidence = _LOCATOR_MOD.locate_main_model_evidence
@@ -385,7 +385,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--review-queue-jsonl", type=Path, default=None)
     parser.add_argument("--report-output", type=Path, default=None)
     parser.add_argument("--raw-output-jsonl", type=Path, default=None)
-    parser.add_argument("--llm-provider", choices=["zhipu", "nvidia"], default="zhipu")
+    parser.add_argument("--llm-provider", default="")
     parser.add_argument("--llm-model", default="glm-4.5")
     parser.add_argument("--llm-api-key-env", default="ZHIPU_API_KEY")
     parser.add_argument("--llm-base-url", default="https://open.bigmodel.cn/api/paas/v4/chat/completions")
@@ -393,25 +393,17 @@ def parse_args() -> argparse.Namespace:
 
 
 def _build_default_llm_client(args: argparse.Namespace) -> LLMClient:
-    provider = str(args.llm_provider).strip().lower()
-    api_key = os.getenv(args.llm_api_key_env, "").strip()
-    if provider == "zhipu":
-        if not api_key:
-            raise RuntimeError(f"missing api key env: {args.llm_api_key_env}")
-        return ZhipuChatCompletionsClient(
-            api_key=api_key,
-            model=args.llm_model,
-            base_url=args.llm_base_url,
-        )
-    if provider == "nvidia":
-        if not api_key:
-            raise RuntimeError(f"missing api key env: {args.llm_api_key_env}")
-        return NvidiaChatCompletionsClient(
-            api_key=api_key,
-            model=args.llm_model,
-            base_url=args.llm_base_url,
-        )
-    raise RuntimeError(f"unsupported llm provider: {provider}")
+    registry = _PROVIDER_REGISTRY_MOD.ProviderRegistry()
+    provider_options = {
+        "api_key_env": str(args.llm_api_key_env or "").strip() or None,
+        "base_url": str(args.llm_base_url or "").strip() or None,
+    }
+    provider_options = {k: v for k, v in provider_options.items() if v not in (None, "")}
+    return registry.create_extraction_client(
+        provider=str(args.llm_provider or "").strip() or None,
+        model=str(args.llm_model or "").strip() or None,
+        options=provider_options,
+    )
 
 
 def main() -> None:

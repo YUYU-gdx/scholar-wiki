@@ -1,0 +1,602 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D知识图谱</title>
+  <style>
+    :root {
+      --bg: #05070d;
+      --bg-2: #08111f;
+      --panel: rgba(8, 13, 24, 0.78);
+      --panel-strong: rgba(11, 17, 30, 0.95);
+      --line: rgba(148, 172, 220, 0.22);
+      --ink: #edf4ff;
+      --muted: #a1b2d7;
+      --accent: #7bd8f6;
+      --accent-2: #53d39a;
+      --danger: #f07178;
+      --shadow: 0 28px 70px rgba(0, 0, 0, 0.44);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background:
+        radial-gradient(circle at 10% 10%, rgba(123, 216, 246, 0.16), transparent 24%),
+        radial-gradient(circle at 85% 12%, rgba(83, 211, 154, 0.12), transparent 22%),
+        radial-gradient(circle at 50% 100%, rgba(246, 201, 91, 0.08), transparent 28%),
+        linear-gradient(160deg, var(--bg-2), var(--bg) 42%, #03050a 100%);
+      color: var(--ink);
+      font-family: "IBM Plex Sans", "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      overflow: hidden;
+    }
+    #app { position: relative; width: 100%; height: 100%; }
+    .layout { width: 100%; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 390px); }
+    .stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid rgba(123,216,246,.12); }
+    .hud {
+      position: absolute; top: 12px; left: 12px; right: 12px; z-index: 20;
+      display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+      border: 1px solid var(--line); border-radius: 18px; background: var(--panel);
+      backdrop-filter: blur(16px); box-shadow: var(--shadow);
+    }
+    .brand { margin-right: auto; }
+    .brand h1 { margin: 0; font-size: 16px; letter-spacing: .04em; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px; min-height: 32px;
+      padding: 6px 11px; border-radius: 999px; border: 1px solid rgba(148,172,220,.18);
+      background: rgba(255,255,255,.03); color: var(--muted); font-size: 12px; white-space: nowrap;
+    }
+    .chip strong { color: var(--ink); }
+    .jump-btn {
+      display: inline-flex; align-items: center; justify-content: center; min-height: 34px;
+      padding: 7px 14px; border-radius: 999px; text-decoration: none;
+      color: #04131c; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 12px 30px rgba(83,211,154,.18); font-size: 13px; font-weight: 700;
+    }
+    .drag-overlay {
+      position: absolute; inset: 76px 12px 12px 12px; z-index: 8;
+      border-radius: 22px; overflow: hidden; outline: 1px solid rgba(148,172,220,.15);
+      background: linear-gradient(180deg, rgba(7,12,22,.03), rgba(7,12,22,.08));
+    }
+    .scene { position: absolute; inset: 0; }
+    .drag-badge {
+      position: absolute; left: 14px; bottom: 14px; z-index: 12;
+      padding: 8px 12px; border-radius: 999px; border: 1px solid rgba(123,216,246,.22);
+      background: rgba(7,11,20,.72); color: var(--muted); font-size: 12px;
+      backdrop-filter: blur(12px); pointer-events: none;
+    }
+    .tooltip {
+      position: absolute; z-index: 30; display: none; max-width: min(360px, 78vw);
+      padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line);
+      background: rgba(7,11,20,.94); color: var(--ink); font-size: 12px; line-height: 1.5;
+      pointer-events: none; box-shadow: var(--shadow);
+    }
+    .panel {
+      min-width: 0; min-height: 0; display: grid;
+      grid-template-rows: auto auto auto 1fr auto;
+      gap: 10px; padding: 14px;
+      background: linear-gradient(180deg, rgba(9,14,25,.98), rgba(6,9,16,.96));
+    }
+    .card {
+      border: 1px solid var(--line); border-radius: 18px;
+      background: var(--panel-strong); backdrop-filter: blur(14px); box-shadow: var(--shadow);
+      padding: 12px;
+    }
+    .card h3 { margin: 0 0 8px 0; font-size: 14px; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .kv { padding: 8px 10px; border: 1px solid rgba(148,172,220,.16); border-radius: 12px; background: rgba(255,255,255,.03); }
+    .kv span { color: var(--muted); font-size: 11px; display: block; }
+    .kv strong { font-size: 14px; }
+    .node-list { display: grid; gap: 8px; max-height: 34vh; overflow: auto; }
+    .node-list button {
+      appearance: none; width: 100%; border: 1px solid rgba(148,172,220,.16); border-radius: 14px;
+      background: rgba(255,255,255,.03); color: var(--ink); text-align: left; padding: 10px 11px; cursor: pointer;
+    }
+    .node-list button.active {
+      border-color: rgba(123,216,246,.54);
+      background: linear-gradient(135deg, rgba(123,216,246,.16), rgba(83,211,154,.1));
+      box-shadow: 0 0 0 1px rgba(123,216,246,.14) inset;
+    }
+    .node-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 700; }
+    .node-meta { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .detail-list, .iso-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+    .iso-list li { border: 1px solid rgba(148,172,220,.12); border-radius: 10px; padding: 6px 8px; }
+    .footer { color: var(--muted); font-size: 12px; }
+    .fallback {
+      position: absolute; inset: 90px 14px 14px 14px; display: grid; place-items: center;
+      border-radius: 22px; border: 1px dashed rgba(123,216,246,.2);
+      background: linear-gradient(180deg, rgba(6,10,18,.16), rgba(6,10,18,.34)); color: var(--muted);
+      text-align: center; padding: 20px; pointer-events: none;
+    }
+    .hidden { display: none !important; }
+    @media (max-width: 1024px) {
+      html, body { overflow: auto; }
+      .layout { grid-template-columns: 1fr; min-height: 100vh; }
+      .stage { min-height: 72vh; border-right: 0; border-bottom: 1px solid rgba(123,216,246,.12); }
+      .drag-overlay { inset: 76px 10px 10px 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app" class="layout">
+    <main class="stage">
+      <div id="hud" class="hud card">
+        <div class="brand">
+          <h1 data-testid="graph-3d-title">3D知识图谱</h1>
+        </div>
+        <span class="chip">Nodes <strong id="nodesCount">-</strong></span>
+        <span class="chip">Edges <strong id="edgesCount">-</strong></span>
+        <span class="chip">Papers <strong id="papersCount">-</strong></span>
+        <span class="chip" id="graph-status" data-testid="graph-status">文献库：供应链 | 加载中</span>
+        <a class="jump-btn" id="jump-chat-btn" data-testid="jump-chat-btn" href="/frontend/chat/">打开 chat</a>
+      </div>
+
+      <div id="dragArea" class="drag-overlay" data-testid="graph-drag-area" aria-label="graph drag area">
+        <div id="scene" class="scene" data-testid="graph-3d-canvas"></div>
+        <div class="drag-badge" id="dragBadge">Drag area</div>
+      </div>
+
+      <div id="tooltip" class="tooltip" aria-hidden="true"></div>
+      <div id="fallback" class="fallback hidden">3D 引擎尚未加载，节点索引仍可用。</div>
+    </main>
+
+    <aside class="panel">
+      <section class="card">
+        <h3>节点详情</h3>
+        <div class="grid3">
+          <div class="kv"><span>当前变量</span><strong id="selectedNodeName">未选择</strong></div>
+          <div class="kv"><span>关系数</span><strong id="selectedNodeDegree">-</strong></div>
+          <div class="kv"><span>相关论文</span><strong id="selectedNodePapers">-</strong></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>节点索引</h3>
+        <div id="nodeList" class="node-list" data-testid="graph-node-list"></div>
+      </section>
+
+      <section class="card">
+        <h3>节点详情</h3>
+        <ul id="nodeDetailList" class="detail-list"><li>等待图谱加载...</li></ul>
+      </section>
+
+      <section class="card">
+        <h3>关系详情</h3>
+        <ul id="relationDetailList" class="detail-list"><li>等待图谱加载...</li></ul>
+      </section>
+
+      <section class="card">
+        <h3 id="isolatedTitle">孤立节点</h3>
+        <ul id="isolatedList" class="iso-list"></ul>
+      </section>
+
+      <div class="footer" id="renderModeLabel">3D active</div>
+    </aside>
+  </div>
+
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/3d-force-graph@1.77.0/dist/3d-force-graph.min.js"></script>
+  <script>
+    (() => {
+      const state = {
+        nodes: [],
+        links: [],
+        paperMap: {},
+        isolatedNodes: [],
+        selectedNode: null,
+        graph: null,
+        pointerDown: false,
+      };
+
+      const els = {
+        status: document.getElementById("graph-status"),
+        nodesCount: document.getElementById("nodesCount"),
+        edgesCount: document.getElementById("edgesCount"),
+        papersCount: document.getElementById("papersCount"),
+        jumpChat: document.getElementById("jump-chat-btn"),
+        nodeList: document.getElementById("nodeList"),
+        nodeDetailList: document.getElementById("nodeDetailList"),
+        relationDetailList: document.getElementById("relationDetailList"),
+        selectedNodeName: document.getElementById("selectedNodeName"),
+        selectedNodeDegree: document.getElementById("selectedNodeDegree"),
+        selectedNodePapers: document.getElementById("selectedNodePapers"),
+        tooltip: document.getElementById("tooltip"),
+        fallback: document.getElementById("fallback"),
+        scene: document.getElementById("scene"),
+        dragArea: document.getElementById("dragArea"),
+        dragBadge: document.getElementById("dragBadge"),
+        renderModeLabel: document.getElementById("renderModeLabel"),
+        isolatedTitle: document.getElementById("isolatedTitle"),
+        isolatedList: document.getElementById("isolatedList")
+      };
+
+      const theme = {
+        nodeColor: "#7bd8f6",
+        positiveColor: "#53d39a",
+        negativeColor: "#f07178",
+        neutralColor: "#f6c95b"
+      };
+
+      function escapeText(text) {
+        return String(text || "").replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
+      }
+
+      function nodeDisplay(node) {
+        return node?.label || node?.name || node?.id || "node";
+      }
+
+      function setStatus(nodeName = "") {
+        const base = "文献库：供应链";
+        els.status.textContent = nodeName ? `${base} | 当前变量：${nodeName}` : `${base} | 就绪`;
+      }
+
+      function showTooltip(lines, x, y) {
+        if (!lines || !lines.length) {
+          els.tooltip.style.display = "none";
+          return;
+        }
+        els.tooltip.innerHTML = lines.join("<br>");
+        els.tooltip.style.left = `${x + 12}px`;
+        els.tooltip.style.top = `${y + 12}px`;
+        els.tooltip.style.display = "block";
+      }
+
+      function hideTooltip() {
+        els.tooltip.style.display = "none";
+      }
+
+      function setNodeDetail(lines) {
+        els.nodeDetailList.innerHTML = lines.map((line) => `<li>${line}</li>`).join("");
+      }
+
+      function setRelationDetail(lines) {
+        els.relationDetailList.innerHTML = lines.map((line) => `<li>${line}</li>`).join("");
+      }
+
+      function syncJumpChat(nodeId) {
+        const base = "/frontend/chat/";
+        els.jumpChat.href = nodeId ? `${base}?from_node=${encodeURIComponent(nodeId)}` : base;
+      }
+
+      function relationEdgesFor(nodeId) {
+        return state.links.filter((link) => {
+          const source = typeof link.source === "object" ? link.source?.id : link.source;
+          const target = typeof link.target === "object" ? link.target?.id : link.target;
+          return source === nodeId || target === nodeId;
+        });
+      }
+
+      function paperIdsFor(nodeId) {
+        const ids = new Set();
+        for (const link of relationEdgesFor(nodeId)) {
+          if (link.paper_id) {
+            ids.add(String(link.paper_id));
+          }
+        }
+        return ids;
+      }
+
+      function latestConceptText(node) {
+        const txt = String(node?.latest_concept || "").trim();
+        return txt || "暂无概念定义";
+      }
+
+      function latestTheoryText(node) {
+        const items = Array.isArray(node?.latest_theories) ? node.latest_theories.filter(Boolean) : [];
+        if (!items.length) {
+          return "暂无提取";
+        }
+        return items.slice(0, 3).join("；");
+      }
+
+      function selectNode(node, origin = "index") {
+        if (!node) return;
+        state.selectedNode = node;
+        const relLinks = relationEdgesFor(node.id);
+        const paperIds = paperIdsFor(node.id);
+        const name = nodeDisplay(node);
+
+        document.querySelectorAll('[data-testid="graph-node"]').forEach((el) => {
+          el.classList.toggle("active", el.getAttribute("data-node-id") === node.id);
+        });
+
+        els.selectedNodeName.textContent = name;
+        els.selectedNodeDegree.textContent = String(relLinks.length);
+        els.selectedNodePapers.textContent = String(paperIds.size);
+        setStatus(name);
+        syncJumpChat(node.id);
+
+        const sourceInfo = node.latest_concept_source || {};
+        setNodeDetail([
+          `<strong>${escapeText(name)}</strong>`,
+          `变量概念：${escapeText(latestConceptText(node))}`,
+          `相关理论：${escapeText(latestTheoryText(node))}`,
+          `最新概念来源论文：<code>${escapeText(String(sourceInfo.paper_id || "-") )}</code>`,
+          `最新概念来源年份：<code>${escapeText(String(sourceInfo.publication_year ?? "-"))}</code>`,
+          `来源：<code>${escapeText(origin)}</code>`
+        ]);
+
+        const relationLines = [];
+        if (!relLinks.length) {
+          relationLines.push("该变量当前没有抽取到可连接关系。");
+        } else {
+          for (const link of relLinks.slice(0, 8)) {
+            const source = typeof link.source === "object" ? link.source?.label || link.source?.name || link.source?.id : link.source;
+            const target = typeof link.target === "object" ? link.target?.label || link.target?.name || link.target?.id : link.target;
+            relationLines.push(`${escapeText(String(source || "-"))} -> ${escapeText(String(target || "-"))} (${escapeText(String(link.direction || "unknown"))})`);
+          }
+        }
+        relationLines.push(`提及论文：<code>${[...paperIds].slice(0, 8).map((pid) => escapeText(pid)).join("、") || "-"}</code>`);
+        setRelationDetail(relationLines);
+      }
+
+      function renderNodeList(nodes) {
+        const ranked = [...nodes]
+          .filter((node) => String(node.type || "") === "variable" && !!node.validated_variable && Number(node.relation_degree || 0) > 0)
+          .map((node) => {
+            const relCount = relationEdgesFor(node.id).length;
+            const paperCount = paperIdsFor(node.id).size;
+            return { node, relCount, paperCount };
+          })
+          .sort((a, b) => {
+            if (b.relCount !== a.relCount) return b.relCount - a.relCount;
+            return nodeDisplay(a.node).localeCompare(nodeDisplay(b.node), "zh-Hans-CN");
+          })
+          .slice(0, 40);
+
+        els.nodeList.innerHTML = "";
+        if (!ranked.length) {
+          els.nodeList.innerHTML = '<div class="node-meta">没有可显示的已校验理论变量。</div>';
+          return;
+        }
+
+        for (const item of ranked) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.setAttribute("data-testid", "graph-node");
+          btn.setAttribute("data-node-id", item.node.id);
+          btn.setAttribute("aria-label", nodeDisplay(item.node));
+          btn.innerHTML = `
+            <div class="node-title">
+              <span>${escapeText(nodeDisplay(item.node))}</span>
+              <span>关系数 ${item.relCount}</span>
+            </div>
+            <div class="node-meta">概念：${escapeText(latestConceptText(item.node).slice(0, 72))}</div>
+          `;
+          btn.addEventListener("mouseenter", () => {
+            showTooltip([
+              `<b>${escapeText(nodeDisplay(item.node))}</b>`,
+              `关系数：<code>${item.relCount}</code>`,
+              `相关论文：<code>${item.paperCount}</code>`
+            ], window.__graphPointerX || 0, window.__graphPointerY || 0);
+          });
+          btn.addEventListener("mouseleave", hideTooltip);
+          btn.addEventListener("click", () => selectNode(item.node, "index"));
+          els.nodeList.appendChild(btn);
+        }
+      }
+
+      function renderIsolatedNodes() {
+        const rows = Array.isArray(state.isolatedNodes) ? state.isolatedNodes : [];
+        els.isolatedTitle.textContent = `孤立节点（${rows.length}）`;
+        if (!rows.length) {
+          els.isolatedList.innerHTML = "<li>未发现孤立节点。</li>";
+          return;
+        }
+        const reasonMap = {
+          unvalidated: "未通过关系+定义校验",
+          definition_only: "仅有定义，未抽取到关系",
+          relation_only: "仅有关系命中，缺少定义",
+          no_relation_extracted: "未抽取到可连边关系"
+        };
+        els.isolatedList.innerHTML = rows
+          .slice(0, 24)
+          .map((row) => `<li><strong>${escapeText(row.label || row.node_id)}</strong><br/>原因：${escapeText(reasonMap[row.reason] || row.reason || "unknown")}</li>`)
+          .join("");
+      }
+
+      function focusGraphNode(node) {
+        if (!state.graph || !node) return;
+        if (typeof state.graph.centerAt === "function") {
+          state.graph.centerAt(node.x || 0, node.y || 0, node.z || 0, 800);
+        }
+        if (typeof state.graph.zoom === "function") {
+          state.graph.zoom(180, 900);
+        }
+      }
+
+      function edgeColor(edge) {
+        const direction = String(edge.direction || "").toLowerCase();
+        const effectClass = String(edge.display_effect_class || "").toLowerCase();
+        if (effectClass === "negative" || direction === "negative") return theme.negativeColor;
+        if (effectClass === "positive" || direction === "positive") return theme.positiveColor;
+        return theme.neutralColor;
+      }
+
+      function installDragListeners() {
+        els.dragArea.addEventListener("pointerdown", () => {
+          state.pointerDown = true;
+          els.dragBadge.textContent = "drag-start";
+        });
+        els.dragArea.addEventListener("pointermove", () => {
+          if (!state.pointerDown) return;
+          els.dragBadge.textContent = "dragging";
+        });
+        function dragEnd() {
+          if (!state.pointerDown) return;
+          state.pointerDown = false;
+          els.dragBadge.textContent = "drag-end";
+        }
+        els.dragArea.addEventListener("pointerup", dragEnd);
+        els.dragArea.addEventListener("pointercancel", dragEnd);
+        els.dragArea.addEventListener("pointerleave", dragEnd);
+      }
+
+      function buildGraph(payload) {
+        state.nodes = payload.nodes || [];
+        state.links = payload.edges || [];
+        state.paperMap = payload.paper_map || {};
+        state.isolatedNodes = payload.isolated_nodes || [];
+
+        let visibleNodes = state.nodes.filter(
+          (node) => String(node.type || "") === "variable" && !!node.validated_variable && Number(node.relation_degree || 0) > 0
+        );
+        // Fallback: when validation marks out all nodes, keep relation-bearing nodes visible
+        // so graph structure never appears empty to users.
+        if (!visibleNodes.length) {
+          visibleNodes = state.nodes.filter(
+            (node) => String(node.type || "") === "variable" && Number(node.relation_degree || 0) > 0
+          );
+        }
+        if (!visibleNodes.length) {
+          visibleNodes = state.nodes.filter((node) => String(node.type || "") === "variable");
+        }
+        const visibleNodeIds = new Set(visibleNodes.map((n) => n.id));
+        const visibleLinks = state.links.filter((link) => {
+          const source = typeof link.source === "object" ? link.source?.id : link.source;
+          const target = typeof link.target === "object" ? link.target?.id : link.target;
+          return visibleNodeIds.has(source) && visibleNodeIds.has(target);
+        });
+
+        els.nodesCount.textContent = String(visibleNodes.length);
+        els.edgesCount.textContent = String(visibleLinks.length);
+        els.papersCount.textContent = String(Number((payload.meta || {}).paper_count || 0));
+
+        renderNodeList(state.nodes);
+        renderIsolatedNodes();
+
+        const has3D = typeof window.ForceGraph3D === "function";
+        if (!has3D) {
+          els.fallback.classList.remove("hidden");
+          els.renderModeLabel.textContent = "Fallback index";
+          setStatus("");
+          const firstNode = visibleNodes[0];
+          if (firstNode) selectNode(firstNode, "index");
+          return;
+        }
+
+        els.fallback.classList.add("hidden");
+        els.renderModeLabel.textContent = "3D active";
+
+        const graph = window.ForceGraph3D()(els.scene)
+          .backgroundColor("rgba(0,0,0,0)")
+          .showNavInfo(false)
+          .nodeVal(() => 4.5)
+          .nodeColor(() => theme.nodeColor)
+          .nodeRelSize(5)
+          .linkColor(edgeColor)
+          .linkOpacity(0.82)
+          .linkWidth((link) => 0.8 + (Number(link.strength) || 0.2) * 1.9)
+          .linkDirectionalArrowLength((link) => 3.5 + (Number(link.strength) || 0.2) * 4.1)
+          .linkDirectionalArrowRelPos(1)
+          .linkDirectionalArrowResolution(12)
+          .linkDirectionalArrowColor(edgeColor)
+          .cooldownTicks(110)
+          .onNodeHover((node) => {
+            if (!node) {
+              hideTooltip();
+              return;
+            }
+            const relCount = relationEdgesFor(node.id).length;
+            const paperCount = paperIdsFor(node.id).size;
+            showTooltip([
+              `<b>${escapeText(nodeDisplay(node))}</b>`,
+              `关系数：<code>${relCount}</code>`,
+              `相关论文：<code>${paperCount}</code>`
+            ], window.__graphPointerX || 0, window.__graphPointerY || 0);
+          })
+          .onLinkHover((link) => {
+            if (!link) {
+              hideTooltip();
+              return;
+            }
+            const source = typeof link.source === "object" ? link.source?.label || link.source?.name || link.source?.id : link.source;
+            const target = typeof link.target === "object" ? link.target?.label || link.target?.name || link.target?.id : link.target;
+            showTooltip([
+              `<b>关系</b>`,
+              `${escapeText(source)} -> ${escapeText(target)}`,
+              `方向：<code>${escapeText(link.direction || "-")}</code>`,
+              `论文：<code>${escapeText(link.paper_id || "-")}</code>`
+            ], window.__graphPointerX || 0, window.__graphPointerY || 0);
+          })
+          .onNodeClick((node) => {
+            if (!node) return;
+            selectNode(node, "graph");
+            focusGraphNode(node);
+          })
+          .onLinkClick(async (link) => {
+            if (!link) return;
+            const pid = encodeURIComponent(link.paper_id || link.doi || "");
+            if (!pid) return;
+            try {
+              const resp = await fetch(`/paper/${pid}`);
+              const paper = await resp.json();
+              setRelationDetail([
+                `<strong>关系详情</strong>`,
+                `${escapeText(nodeDisplay(link.source))} -> ${escapeText(nodeDisplay(link.target))}`,
+                `方向：<code>${escapeText(link.direction || "-")}</code>`,
+                `验证：<code>${escapeText(link.verification || "-")}</code>`,
+                `DOI：<code>${escapeText(paper.doi || link.doi || "-")}</code>`,
+                `证据锚点：<code>${escapeText(link.evidence_anchor || "-")}</code>`
+              ]);
+            } catch (err) {
+              setRelationDetail([`读取关系详情失败：${escapeText(err?.message || "unknown")}`]);
+            }
+          });
+
+        state.graph = graph;
+        graph.graphData({ nodes: visibleNodes, links: visibleLinks });
+        graph.cameraPosition({ x: 0, y: 32, z: 240 });
+        const controls = graph.controls && graph.controls();
+        if (controls) {
+          controls.enableDamping = true;
+          controls.dampingFactor = 0.08;
+          controls.rotateSpeed = 0.92;
+          controls.zoomSpeed = 0.9;
+          controls.enabled = true;
+        }
+
+        setStatus("");
+        const firstNode = visibleNodes[0];
+        if (firstNode) {
+          selectNode(firstNode, "index");
+          focusGraphNode(firstNode);
+        }
+      }
+
+      async function loadAll() {
+        els.status.textContent = "文献库：供应链 | 加载中";
+        const resp = await fetch("/graph/full");
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        const payload = await resp.json();
+        buildGraph(payload);
+      }
+
+      window.addEventListener("pointermove", (evt) => {
+        window.__graphPointerX = evt.clientX;
+        window.__graphPointerY = evt.clientY;
+        if (els.tooltip.style.display === "block") {
+          els.tooltip.style.left = `${evt.clientX + 12}px`;
+          els.tooltip.style.top = `${evt.clientY + 12}px`;
+        }
+      });
+
+      installDragListeners();
+      loadAll().catch((err) => {
+        els.fallback.classList.remove("hidden");
+        els.fallback.textContent = `图谱加载失败: ${err && err.message ? err.message : "unknown"}`;
+        els.status.textContent = "文献库：供应链 | 加载失败";
+        setNodeDetail([
+          "图谱数据无法加载。",
+          "请确认通过 serve_graph_api.py 打开页面。",
+          `错误：<code>${escapeText(err && err.message ? err.message : "unknown")}</code>`
+        ]);
+      });
+    })();
+  </script>
+</body>
+</html>

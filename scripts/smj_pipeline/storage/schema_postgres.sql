@@ -130,3 +130,39 @@ CREATE INDEX IF NOT EXISTS idx_moderations_paper_id ON moderations(paper_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_paper_id ON interactions(paper_id);
 CREATE INDEX IF NOT EXISTS idx_interaction_inputs_interaction_id ON interaction_inputs(interaction_id);
 
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  session_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  default_mode TEXT NOT NULL DEFAULT 'fast',
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  message_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'fast',
+  provider TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  citations_json TEXT NOT NULL DEFAULT '[]',
+  retrieval_json TEXT NOT NULL DEFAULT '{}',
+  tool_trace_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'completed',
+  error_detail TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_events (
+  event_id BIGSERIAL PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_events_message_id ON chat_events(message_id, event_id);
+

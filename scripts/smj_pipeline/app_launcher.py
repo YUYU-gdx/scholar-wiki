@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "outputs" / "smj_batch_full"
 DEFAULT_ARTIFACT = OUT_DIR / "frontend_artifact_classA.json"
 DEFAULT_VIEWS = OUT_DIR / "graph_views.json"
-DEFAULT_FRONTEND_DIR = OUT_DIR / "frontend"
+DEFAULT_FRONTEND_DIR = ROOT / "frontend" / "graph_3d"
 
 
 def _find_free_port(start: int = 8013, end: int = 8100) -> int:
@@ -215,3 +215,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
