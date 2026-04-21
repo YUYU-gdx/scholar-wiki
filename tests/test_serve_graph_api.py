@@ -39,6 +39,9 @@ class ServeGraphApiTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         tmp_path = Path(self.tmp.name)
         (tmp_path / "index.html").write_text("<html><body>ok</body></html>", encoding="utf-8")
+        workbench_dir = tmp_path / "workbench"
+        workbench_dir.mkdir(parents=True, exist_ok=True)
+        (workbench_dir / "index.html").write_text("<html><body data-testid='workbench-marker'>workbench</body></html>", encoding="utf-8")
 
         self.views = {
             "meta": {"paper_count": 1},
@@ -117,7 +120,31 @@ class ServeGraphApiTest(unittest.TestCase):
                 _ = query, top_k, levels, keyword_weight, rag_weight, library_id
                 return {"answer": "mock-answer", "citations": [{"id": "m1"}], "retrieval": {"merged_hits": [{"id": "m1"}]}}
 
-        handler = make_handler(self.views, tmp_path, literature_service=_FakeLiteratureService())
+        class _FakeWorkspaceLayoutStore:
+            def __init__(self) -> None:
+                self.items: dict[str, dict[str, object]] = {}
+
+            def list_layouts(self) -> dict[str, object]:
+                return {"layouts": [{"name": k, "updated_at": "now"} for k in sorted(self.items.keys())]}
+
+            def get_layout(self, name: str = "default") -> dict[str, object] | None:
+                row = self.items.get(name)
+                if row is None:
+                    return None
+                return {"name": name, "layout": row.get("layout", {}), "updated_at": "now"}
+
+            def save_layout(self, name: str, layout: dict[str, object]) -> dict[str, object]:
+                self.items[name] = {"layout": layout}
+                return {"name": name, "layout": layout, "updated_at": "now"}
+
+        self.workspace_store = _FakeWorkspaceLayoutStore()
+        handler = make_handler(
+            self.views,
+            tmp_path,
+            workbench_frontend_dir=workbench_dir,
+            literature_service=_FakeLiteratureService(),
+            workspace_layout_store=self.workspace_store,
+        )
         self.port = _free_port()
         self.server = ThreadingHTTPServer(("127.0.0.1", self.port), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -214,6 +241,7 @@ class ServeGraphApiTest(unittest.TestCase):
         finally:
             sys.argv = orig_argv
         self.assertEqual(args.frontend_dir, Path("frontend/graph_3d"))
+        self.assertEqual(args.workbench_frontend_dir, Path("frontend/workbench_spa"))
 
     def test_literature_search_endpoint_returns_two_routes_and_merged(self) -> None:
         payload = self._get_json("/literature/search?query=test&top_k=3&levels=sentence,paragraph&include_expanded_context=true")
@@ -230,6 +258,22 @@ class ServeGraphApiTest(unittest.TestCase):
         payload = self._post_json("/literature/answer", {"query": "What?"})
         self.assertEqual(payload["answer"], "mock-answer")
         self.assertGreaterEqual(len(payload["citations"]), 1)
+
+    def test_workspace_layout_api_supports_save_get_and_list(self) -> None:
+        saved = self._post_json("/api/v2/workspace/layout", {"name": "demo", "layout": {"content": [{"type": "row"}]}})
+        self.assertEqual(saved["name"], "demo")
+        self.assertIn("layout", saved)
+        fetched = self._get_json("/api/v2/workspace/layout?name=demo")
+        self.assertEqual(fetched["name"], "demo")
+        self.assertIn("content", fetched["layout"])
+        listed = self._get_json("/api/v2/workspace/layouts")
+        names = [str(x.get("name", "")) for x in listed.get("layouts", [])]
+        self.assertIn("demo", names)
+
+    def test_workbench_frontend_entry_is_served(self) -> None:
+        with urlopen(f"http://127.0.0.1:{self.port}/frontend/workbench/") as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+        self.assertIn("workbench-marker", html)
 
     def test_relation_summary_uses_readable_chinese_label_for_moderation(self) -> None:
         payload = relation_summary_from_mention(

@@ -188,6 +188,78 @@ class GraphChatE2EHarness:
             self._tmp.cleanup()
 
 
+class WorkbenchE2EHarness:
+    def __init__(self) -> None:
+        self._tmp: tempfile.TemporaryDirectory[str] | None = None
+        self._server = None
+        self._thread: threading.Thread | None = None
+        self.base_url = ""
+
+    def __enter__(self) -> "WorkbenchE2EHarness":
+        mod = load_graph_api_module()
+        make_handler = mod.make_handler
+        thread_server = mod.ThreadingHTTPServer
+        frontend_dir = Path(__file__).resolve().parent.parent / "frontend" / "graph_3d"
+        workbench_frontend = Path(__file__).resolve().parent.parent / "frontend" / "workbench_spa"
+        chat_frontend = Path(__file__).resolve().parent.parent / "frontend" / "chat_embed"
+
+        views = {
+            "meta": {"paper_count": 1},
+            "nodes": {
+                "var::a": {"id": "var::a", "type": "variable", "label": "Resilience", "name": "Resilience"},
+                "var::b": {"id": "var::b", "type": "variable", "label": "Performance", "name": "Performance"},
+            },
+            "edges": [
+                {
+                    "id": "edge::1",
+                    "source": "var::a",
+                    "target": "var::b",
+                    "paper_id": "p1",
+                    "doi": "10.1002/test",
+                    "relation_type": "direct",
+                    "direction": "positive",
+                    "verification": "supported",
+                    "strength": 1.0,
+                    "evidence_anchor": "H1",
+                }
+            ],
+            "edge_index_by_node": {"var::a": [0], "var::b": [0]},
+            "overview": {"node_ids": ["var::a", "var::b"], "edge_indexes": [0]},
+            "paper_map": {
+                "p1": {
+                    "paper_id": "p1",
+                    "doi": "10.1002/test",
+                    "main_effects": [{"source": "Resilience", "target": "Performance", "direction": "positive"}],
+                }
+            },
+        }
+        handler = make_handler(
+            views,
+            frontend_dir,
+            workbench_frontend_dir=workbench_frontend,
+            chat_frontend_dir=chat_frontend,
+            literature_service=None,
+            chat_service=FakeChatService(),
+        )
+
+        port = _free_port()
+        self._server = thread_server(("127.0.0.1", port), handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        time.sleep(0.08)
+        self.base_url = f"http://127.0.0.1:{port}"
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+        if self._tmp is not None:
+            self._tmp.cleanup()
+
+
 def ensure_playwright_ready() -> tuple[bool, str]:
     try:
         from playwright.sync_api import sync_playwright

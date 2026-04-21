@@ -1,0 +1,139 @@
+﻿:root {
+  --bg: #f2f4f7;
+  --panel: #ffffff;
+  --text: #0f172a;
+  --muted: #475569;
+  --accent: #0f766e;
+  --line: #d0d7e2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  font-family: "Segoe UI", "PingFang SC", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.workbench-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+}
+
+.wb-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #0b1220;
+  color: #e2e8f0;
+  border-bottom: 1px solid #1f2937;
+}
+
+.wb-toolbar strong {
+  margin-right: 12px;
+  letter-spacing: 0.2px;
+}
+
+.wb-toolbar input,
+.wb-toolbar button {
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid #2b3548;
+  background: #111827;
+  color: #e2e8f0;
+  padding: 0 10px;
+}
+
+.wb-toolbar button {
+  cursor: pointer;
+}
+
+.wb-toolbar button.primary {
+  background: var(--accent);
+  border-color: #0d685f;
+}
+
+.wb-toolbar .status {
+  margin-left: auto;
+  color: #93c5fd;
+  font-size: 12px;
+}
+
+.wb-layout {
+  min-height: 0;
+}
+
+.gl-container {
+  background: #f8fafc;
+}
+
+.panel-wrap {
+  height: 100%;
+  overflow: auto;
+  background: var(--panel);
+}
+
+.panel-iframe {
+  border: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.panel-body {
+  padding: 10px;
+  font-size: 14px;
+}
+
+.panel-body h3 {
+  margin: 0 0 10px;
+}
+
+.panel-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.panel-form input,
+.panel-form textarea,
+.panel-form button,
+.panel-form select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
+.panel-form textarea {
+  width: 100%;
+  min-height: 64px;
+}
+
+.panel-form button {
+  background: #0f766e;
+  color: #fff;
+  cursor: pointer;
+}
+
+.result-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.result-list li {
+  margin: 4px 0;
+}
+
+.helper {
+  color: var(--muted);
+  font-size: 12px;
+}

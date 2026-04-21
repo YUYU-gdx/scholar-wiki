@@ -62,6 +62,16 @@ def _load_provider_registry_class():
     return mod.ProviderRegistry
 
 
+def _load_workspace_layout_store_class():
+    module_path = Path(__file__).resolve().parent / "workspace_layout_store.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_workspace_layout_store_for_serve_graph_api", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.WorkspaceLayoutStore
+
+
 def _resolve_views_json(cli_views_json: Path | None, runs_root: Path) -> Path:
     if cli_views_json is not None:
         return cli_views_json
@@ -82,6 +92,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--views-json", type=Path, default=None)
     p.add_argument("--frontend-dir", type=Path, default=Path("frontend/graph_3d"))
     p.add_argument("--chat-frontend-dir", type=Path, default=Path("frontend/chat_embed"))
+    p.add_argument("--workbench-frontend-dir", type=Path, default=Path("frontend/workbench_spa"))
+    p.add_argument("--workspace-layouts-file", type=Path, default=Path("outputs/workbench/workspace_layouts.json"))
     p.add_argument("--runs-root", type=Path, default=Path("outputs/runs"))
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8013)
@@ -266,8 +278,11 @@ def make_handler(
     views: dict[str, Any],
     frontend_dir: Path,
     chat_frontend_dir: Path | None = None,
+    workbench_frontend_dir: Path | None = None,
+    workspace_layouts_file: Path | None = None,
     literature_service: Any | None = None,
     chat_service: Any | None = None,
+    workspace_layout_store: Any | None = None,
 ):
     nodes: dict[str, dict[str, Any]] = views["nodes"]
     edges: list[dict[str, Any]] = views["edges"]
@@ -726,6 +741,14 @@ def make_handler(
         except Exception:
             chat = None
 
+    workspace_store = workspace_layout_store
+    if workspace_store is None:
+        try:
+            workspace_cls = _load_workspace_layout_store_class()
+            workspace_store = workspace_cls(storage_path=workspace_layouts_file)
+        except Exception:
+            workspace_store = None
+
     class Handler(BaseHTTPRequestHandler):
         def _read_json_body(self) -> dict[str, Any]:
             raw_len = int(self.headers.get("Content-Length", "0") or "0")
@@ -967,6 +990,22 @@ def make_handler(
                 except Exception as exc:
                     return _json(self, {"error": "literature_answer_failed", "detail": str(exc)}, status=500)
 
+            if path == "/api/v2/workspace/layout":
+                if workspace_store is None:
+                    return _json(self, {"error": "workspace_layout_store_unavailable"}, status=503)
+                try:
+                    body = self._read_json_body()
+                    name = str(body.get("name", "default") or "default").strip()
+                    if not name:
+                        return _json(self, {"error": "name_required"}, status=400)
+                    layout = body.get("layout")
+                    if not isinstance(layout, dict):
+                        return _json(self, {"error": "layout_object_required"}, status=400)
+                    saved = workspace_store.save_layout(name=name, layout=layout)
+                    return _json(self, saved, status=200)
+                except Exception as exc:
+                    return _json(self, {"error": "workspace_layout_save_failed", "detail": str(exc)}, status=500)
+
             self.send_error(404, "Not Found")
 
         def _serve_static(self, rel_path: str) -> None:
@@ -1003,6 +1042,22 @@ def make_handler(
 
         def _serve_chat_static(self, rel_path: str) -> None:
             root = (chat_frontend_dir or Path("frontend/chat_embed")).resolve()
+            safe = rel_path.lstrip("/")
+            if not safe:
+                safe = "index.html"
+            path = (root / safe).resolve()
+            if not str(path).startswith(str(root)) or not path.exists() or not path.is_file():
+                self.send_error(404, "Not Found")
+                return
+            raw = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", _guess_content_type(path))
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def _serve_workbench_static(self, rel_path: str) -> None:
+            root = (workbench_frontend_dir or Path("frontend/workbench_spa")).resolve()
             safe = rel_path.lstrip("/")
             if not safe:
                 safe = "index.html"
@@ -1136,8 +1191,32 @@ def make_handler(
                     return _json(self, {"error": "literature_search_failed", "detail": str(exc)}, status=500)
                 return _json(self, payload)
 
+            if path == "/api/v2/workspace/layouts":
+                if workspace_store is None:
+                    return _json(self, {"error": "workspace_layout_store_unavailable"}, status=503)
+                try:
+                    return _json(self, workspace_store.list_layouts())
+                except Exception as exc:
+                    return _json(self, {"error": "workspace_layout_list_failed", "detail": str(exc)}, status=500)
+
+            if path == "/api/v2/workspace/layout":
+                if workspace_store is None:
+                    return _json(self, {"error": "workspace_layout_store_unavailable"}, status=503)
+                name = str((qs.get("name", ["default"])[0] or "default")).strip() or "default"
+                try:
+                    payload = workspace_store.get_layout(name=name)
+                    if payload is None:
+                        return _json(self, {"error": "workspace_layout_not_found", "name": name}, status=404)
+                    return _json(self, payload)
+                except Exception as exc:
+                    return _json(self, {"error": "workspace_layout_get_failed", "detail": str(exc)}, status=500)
+
             if path in ("/", "/frontend", "/frontend/"):
                 return self._serve_static("index.html")
+            if path in ("/frontend/workbench", "/frontend/workbench/"):
+                return self._serve_workbench_static("index.html")
+            if path.startswith("/frontend/workbench/"):
+                return self._serve_workbench_static(path[len("/frontend/workbench/") :])
             if path in ("/frontend/chat", "/frontend/chat/"):
                 return self._serve_chat_static("index.html")
             if path.startswith("/frontend/chat/"):
@@ -1371,7 +1450,13 @@ def main() -> None:
     views_json = _resolve_views_json(args.views_json, args.runs_root)
     _enforce_supply_chain_path(views_json, args.allow_non_supply_chain)
     views = json.loads(views_json.read_text(encoding="utf-8"))
-    handler = make_handler(views, args.frontend_dir, chat_frontend_dir=args.chat_frontend_dir)
+    handler = make_handler(
+        views,
+        args.frontend_dir,
+        chat_frontend_dir=args.chat_frontend_dir,
+        workbench_frontend_dir=args.workbench_frontend_dir,
+        workspace_layouts_file=args.workspace_layouts_file,
+    )
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Graph API serving: http://{args.host}:{args.port}/frontend/")
     print(f"Using graph views: {views_json}")
