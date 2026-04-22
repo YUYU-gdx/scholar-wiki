@@ -230,21 +230,31 @@
         e("button", { onClick: runSearch }, "搜索")
       ),
       error ? e("div", { className: "helper" }, error) : null,
-      e("div", { className: "helper" }, "Graph 命中"),
+      e("div", { className: "search-subtitle" }, "Graph 命中"),
       e(
-        "ol",
-        { className: "result-list" },
+        "div",
+        { className: "search-cards" },
         graphHits.slice(0, 10).map(function (item, idx) {
-          return e("li", { key: "g-" + idx }, (item.kind || "-") + " / " + (item.title || item.id || "-"));
+          return e(
+            "article",
+            { className: "search-card", key: "g-" + idx },
+            e("div", { className: "search-card-kind" }, item.kind || "graph"),
+            e("div", { className: "search-card-title" }, item.title || item.id || "-")
+          );
         })
       ),
-      e("div", { className: "helper" }, "Literature 命中"),
+      e("div", { className: "search-subtitle" }, "Literature 命中"),
       e(
-        "ol",
-        { className: "result-list" },
+        "div",
+        { className: "search-cards" },
         litHits.slice(0, 10).map(function (item, idx) {
           const title = item.title || item.paper_id || item.id || "-";
-          return e("li", { key: "l-" + idx }, title);
+          return e(
+            "article",
+            { className: "search-card", key: "l-" + idx },
+            e("div", { className: "search-card-kind" }, "paper"),
+            e("div", { className: "search-card-title" }, title)
+          );
         })
       )
     );
@@ -389,26 +399,47 @@
       e(
         "div",
         { className: "wb-toolbar" },
-        e("strong", null, "KN Workbench"),
-        e("input", {
-          value: layoutName,
-          onChange: function (evt) {
-            setLayoutName(evt.target.value);
-          },
-          placeholder: "layout name",
-        }),
-        e("button", { className: "primary", onClick: rebuildLayout }, "加载布局"),
-        e("button", { "data-testid": "save-layout-btn", onClick: saveCurrentLayout }, "保存布局"),
-        e("button", { "data-testid": "open-panel-chat", onClick: function () { addPanel("chat"); } }, "+Chat"),
-        e("button", { "data-testid": "open-panel-graph", onClick: function () { addPanel("graph"); } }, "+Graph"),
-        e("button", { "data-testid": "open-panel-import", onClick: function () { addPanel("import"); } }, "+Import"),
-        e("button", { "data-testid": "open-panel-search", onClick: function () { addPanel("search"); } }, "+Search"),
-        e("button", { "data-testid": "graph-to-chat-btn", onClick: linkGraphToChat }, "打开 chat"),
         e(
-          "span",
-          { className: "status" },
-          status,
-          knownLayouts.length ? " | layouts: " + knownLayouts.join(", ") : ""
+          "div",
+          { className: "wb-toolbar-group" },
+          e("span", { className: "wb-brand" }, "KN Graph Studio"),
+          e("span", { className: "wb-chip" }, "Desktop Workbench")
+        ),
+        e(
+          "div",
+          { className: "wb-toolbar-group" },
+          e("input", {
+            value: layoutName,
+            list: "layout-name-list",
+            onChange: function (evt) {
+              setLayoutName(evt.target.value);
+            },
+            placeholder: "layout name",
+          }),
+          e(
+            "datalist",
+            { id: "layout-name-list" },
+            knownLayouts.map(function (name) {
+              return e("option", { key: "layout-opt-" + name, value: name });
+            })
+          ),
+          e("button", { className: "primary", onClick: rebuildLayout }, "加载布局"),
+          e("button", { "data-testid": "save-layout-btn", onClick: saveCurrentLayout }, "保存布局"),
+          e("button", { "data-testid": "open-panel-chat", onClick: function () { addPanel("chat"); } }, "+Chat"),
+          e("button", { "data-testid": "open-panel-graph", onClick: function () { addPanel("graph"); } }, "+Graph"),
+          e("button", { "data-testid": "open-panel-import", onClick: function () { addPanel("import"); } }, "+Import"),
+          e("button", { "data-testid": "open-panel-search", onClick: function () { addPanel("search"); } }, "+Search"),
+          e("button", { "data-testid": "graph-to-chat-btn", onClick: linkGraphToChat }, "打开 Chat")
+        ),
+        e(
+          "div",
+          { className: "wb-toolbar-group" },
+          e(
+            "span",
+            { className: "status" },
+            status,
+            knownLayouts.length ? " | layouts: " + knownLayouts.join(", ") : ""
+          )
         )
       ),
       e("div", { ref: containerRef, className: "wb-layout", id: "workbench-layout" })

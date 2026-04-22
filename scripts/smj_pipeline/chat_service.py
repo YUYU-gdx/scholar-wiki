@@ -3,7 +3,7 @@
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -27,12 +27,28 @@ def _safe_json(raw: object, fallback: Any) -> Any:
         return fallback
 
 
+def _load_agent_runner_factory_class():
+    module_path = Path(__file__).resolve().parent / "agent_runner.py"
+    spec = __import__("importlib.util").util.spec_from_file_location(
+        "smj_pipeline_agent_runner_for_chat_service",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("agent_runner_unavailable")
+    mod = __import__("importlib.util").util.module_from_spec(spec)
+    __import__("sys").modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod.AgentRunnerFactory
+
+
 class ChatStore(Protocol):
     def create_session(self, title: str, default_mode: str) -> dict[str, Any]: ...
 
     def list_sessions(self) -> list[dict[str, Any]]: ...
 
     def get_session(self, session_id: str) -> dict[str, Any] | None: ...
+    def soft_delete_session(self, session_id: str, deleted_at: str) -> dict[str, Any] | None: ...
+    def restore_session(self, session_id: str) -> dict[str, Any] | None: ...
 
     def create_message(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -60,6 +76,7 @@ class InMemoryChatStore:
                 "default_mode": default_mode,
                 "created_at": now,
                 "updated_at": now,
+                "deleted_at": None,
             }
             self._sessions[session_id] = dict(row)
             return dict(row)
@@ -67,13 +84,38 @@ class InMemoryChatStore:
     def list_sessions(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = list(self._sessions.values())
+            rows = [r for r in rows if not str(r.get("deleted_at", "") or "").strip()]
             rows.sort(key=lambda x: str(x.get("updated_at", "")), reverse=True)
             return [dict(r) for r in rows]
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self._sessions.get(session_id)
+            if isinstance(row, dict) and str(row.get("deleted_at", "") or "").strip():
+                return None
             return dict(row) if isinstance(row, dict) else None
+
+    def soft_delete_session(self, session_id: str, deleted_at: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._sessions.get(str(session_id))
+            if not isinstance(row, dict):
+                return None
+            if str(row.get("deleted_at", "") or "").strip():
+                return None
+            row["deleted_at"] = str(deleted_at or _now_iso())
+            row["updated_at"] = _now_iso()
+            return dict(row)
+
+    def restore_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._sessions.get(str(session_id))
+            if not isinstance(row, dict):
+                return None
+            if not str(row.get("deleted_at", "") or "").strip():
+                return None
+            row["deleted_at"] = None
+            row["updated_at"] = _now_iso()
+            return dict(row)
 
     def create_message(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -128,7 +170,8 @@ class PostgresChatStore:
             title text not null default '',
             default_mode text not null default 'fast',
             created_at timestamptz not null,
-            updated_at timestamptz not null
+            updated_at timestamptz not null,
+            deleted_at timestamptz null
         );
 
         create table if not exists chat_messages (
@@ -161,6 +204,7 @@ class PostgresChatStore:
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(ddl)
+                cur.execute("alter table chat_sessions add column if not exists deleted_at timestamptz null")
             conn.commit()
 
     def create_session(self, title: str, default_mode: str) -> dict[str, Any]:
@@ -172,6 +216,7 @@ class PostgresChatStore:
             "default_mode": default_mode,
             "created_at": now,
             "updated_at": now,
+            "deleted_at": None,
         }
         with self._conn() as conn:
             with conn.cursor() as cur:
@@ -190,8 +235,9 @@ class PostgresChatStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    select session_id, title, default_mode, created_at, updated_at
+                    select session_id, title, default_mode, created_at, updated_at, deleted_at
                     from chat_sessions
+                    where deleted_at is null
                     order by updated_at desc
                     """
                 )
@@ -205,6 +251,7 @@ class PostgresChatStore:
                     "default_mode": row[2],
                     "created_at": str(row[3]),
                     "updated_at": str(row[4]),
+                    "deleted_at": str(row[5]) if row[5] is not None else None,
                 }
             )
         return out
@@ -213,7 +260,7 @@ class PostgresChatStore:
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "select session_id, title, default_mode, created_at, updated_at from chat_sessions where session_id=%s",
+                    "select session_id, title, default_mode, created_at, updated_at, deleted_at from chat_sessions where session_id=%s and deleted_at is null",
                     (session_id,),
                 )
                 row = cur.fetchone()
@@ -225,6 +272,57 @@ class PostgresChatStore:
             "default_mode": row[2],
             "created_at": str(row[3]),
             "updated_at": str(row[4]),
+            "deleted_at": str(row[5]) if row[5] is not None else None,
+        }
+
+    def soft_delete_session(self, session_id: str, deleted_at: str) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    update chat_sessions
+                    set deleted_at=%s, updated_at=%s
+                    where session_id=%s and deleted_at is null
+                    returning session_id, title, default_mode, created_at, updated_at, deleted_at
+                    """,
+                    (str(deleted_at or _now_iso()), _now_iso(), str(session_id)),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            return None
+        return {
+            "session_id": row[0],
+            "title": row[1],
+            "default_mode": row[2],
+            "created_at": str(row[3]),
+            "updated_at": str(row[4]),
+            "deleted_at": str(row[5]) if row[5] is not None else None,
+        }
+
+    def restore_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    update chat_sessions
+                    set deleted_at=null, updated_at=%s
+                    where session_id=%s and deleted_at is not null
+                    returning session_id, title, default_mode, created_at, updated_at, deleted_at
+                    """,
+                    (_now_iso(), str(session_id)),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            return None
+        return {
+            "session_id": row[0],
+            "title": row[1],
+            "default_mode": row[2],
+            "created_at": str(row[3]),
+            "updated_at": str(row[4]),
+            "deleted_at": str(row[5]) if row[5] is not None else None,
         }
 
     def create_message(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -452,6 +550,8 @@ class ChatService:
         graph_search_fn: Callable[[str, int], list[dict[str, Any]]],
         paper_get_fn: Callable[[str], dict[str, Any] | None],
         variable_get_fn: Callable[[str], dict[str, Any] | None],
+        library_workspace_resolver_fn: Callable[[str], str] | None = None,
+        agent_backend: str | None = None,
     ) -> None:
         self._store = self._build_store()
         self._db_store = self._store if isinstance(self._store, PostgresChatStore) else None
@@ -461,6 +561,12 @@ class ChatService:
         self._graph_search = graph_search_fn
         self._paper_get = paper_get_fn
         self._variable_get = variable_get_fn
+        self._library_workspace_resolver = library_workspace_resolver_fn
+        self._agent_backend = str(agent_backend or os.getenv("CHAT_AGENT_BACKEND", "codex")).strip().lower() or "codex"
+        factory_cls = _load_agent_runner_factory_class()
+        config_path = Path(os.getenv("CHAT_CODEX_CONFIG_PATH", "outputs/chat/codex_runner_config.json") or "outputs/chat/codex_runner_config.json")
+        self._runner_factory = factory_cls(codex_config_path=config_path)
+        self._restore_deadline_by_session: dict[str, float] = {}
 
     def _build_store(self) -> ChatStore:
         dsn = str(os.getenv("CHAT_STORE_DSN", "")).strip() or str(os.getenv("PIPELINE_JOB_STORE_DSN", "")).strip()
@@ -471,12 +577,51 @@ class ChatService:
                 return InMemoryChatStore()
         return InMemoryChatStore()
 
-    def create_session(self, title: str = "", default_mode: str = "fast") -> dict[str, Any]:
-        mode = "agent" if str(default_mode).strip().lower() == "agent" else "fast"
-        return self._store.create_session(title=title, default_mode=mode)
+    def create_session(self, title: str = "", default_mode: str = "agent") -> dict[str, Any]:
+        _ = default_mode
+        return self._store.create_session(title=title, default_mode="agent")
 
     def list_sessions(self) -> list[dict[str, Any]]:
+        self._cleanup_restore_deadlines()
         return self._store.list_sessions()
+
+    def delete_session(self, session_id: str, undo_window_seconds: int = 5) -> dict[str, Any]:
+        sess = self._store.get_session(session_id)
+        if sess is None:
+            raise KeyError("session_not_found")
+        now = datetime.now(timezone.utc)
+        deleted = self._store.soft_delete_session(session_id=session_id, deleted_at=now.isoformat())
+        if deleted is None:
+            raise KeyError("session_not_found")
+        window = max(1, int(undo_window_seconds))
+        deadline = now + timedelta(seconds=window)
+        self._restore_deadline_by_session[str(session_id)] = deadline.timestamp()
+        return {
+            "session_id": str(session_id),
+            "deleted_at": now.isoformat(),
+            "undo_window_seconds": window,
+            "undo_deadline": deadline.isoformat(),
+        }
+
+    def restore_session(self, session_id: str) -> dict[str, Any]:
+        self._cleanup_restore_deadlines()
+        deadline_ts = self._restore_deadline_by_session.get(str(session_id))
+        if deadline_ts is None:
+            return {"session_id": str(session_id), "restored": False, "error": "restore_window_expired"}
+        if time.time() > float(deadline_ts):
+            self._restore_deadline_by_session.pop(str(session_id), None)
+            return {"session_id": str(session_id), "restored": False, "error": "restore_window_expired"}
+        restored = self._store.restore_session(session_id=session_id)
+        if restored is None:
+            return {"session_id": str(session_id), "restored": False, "error": "session_not_found"}
+        self._restore_deadline_by_session.pop(str(session_id), None)
+        return {"session_id": str(session_id), "restored": True}
+
+    def _cleanup_restore_deadlines(self) -> None:
+        now_ts = time.time()
+        expired = [sid for sid, ts in self._restore_deadline_by_session.items() if now_ts > float(ts)]
+        for sid in expired:
+            self._restore_deadline_by_session.pop(sid, None)
 
     def get_session_with_messages(self, session_id: str) -> dict[str, Any] | None:
         sess = self._store.get_session(session_id)
@@ -493,6 +638,7 @@ class ChatService:
         provider: str,
         model: str,
         stream: bool,
+        library_id: str = "",
     ) -> dict[str, Any]:
         session = self._store.get_session(session_id)
         if session is None:
@@ -537,7 +683,7 @@ class ChatService:
 
         t = threading.Thread(
             target=self._run_assistant_message,
-            args=(assistant_id, content, mode, provider, model, stream),
+            args=(assistant_id, content, mode, provider, model, stream, str(library_id or "").strip()),
             daemon=True,
         )
         t.start()
@@ -556,13 +702,23 @@ class ChatService:
     def _emit(self, message_id: str, event_type: str, payload: dict[str, Any]) -> None:
         self._events.publish(message_id, event_type, payload)
 
-    def _run_assistant_message(self, message_id: str, query: str, mode: str, provider: str, model: str, stream: bool) -> None:
+    def _run_assistant_message(
+        self,
+        message_id: str,
+        query: str,
+        mode: str,
+        provider: str,
+        model: str,
+        stream: bool,
+        library_id: str = "",
+    ) -> None:
         self._emit(message_id, "started", {"message_id": message_id, "mode": mode})
+        self._emit(message_id, "status", {"stage": "rewrite", "label": "正在改写问题"})
         try:
             if mode == "agent":
-                result = self._run_agent(message_id, query, provider, model, stream)
+                result = self._run_agent(message_id, query, provider, model, stream, library_id=library_id)
             else:
-                result = self._run_fast(message_id, query, provider, model, stream)
+                result = self._run_fast(message_id, query, provider, model, stream, library_id=library_id)
             self._store.update_message(
                 message_id,
                 {
@@ -584,10 +740,85 @@ class ChatService:
                     "tool_trace": result.get("tool_trace", []),
                 },
             )
+            self._emit(message_id, "status", {"stage": "done", "label": "完成", "state": "completed"})
         except Exception as exc:
             detail = str(exc)
+            backend = ""
+            if detail.startswith("agent_backend_unavailable:"):
+                backend = detail.split(":", 1)[1].strip()
+            error_code = detail.split(":", 1)[0] if ":" in detail else detail
             self._store.update_message(message_id, {"status": "failed", "error_detail": detail})
-            self._emit(message_id, "failed", {"message_id": message_id, "error": detail})
+            self._emit(
+                message_id,
+                "failed",
+                {"message_id": message_id, "error": detail, "error_code": error_code, "backend": backend},
+            )
+            self._emit(message_id, "status", {"stage": "done", "label": "失败", "state": "failed"})
+
+    def _call_literature_search(self, query: str, top_k: int, library_id: str = "") -> dict[str, Any]:
+        try:
+            return self._literature_search(query, top_k, library_id)  # type: ignore[misc]
+        except TypeError:
+            return self._literature_search(query, top_k)
+
+    @staticmethod
+    def _extract_paragraph_text(hit: dict[str, Any]) -> str:
+        context = hit.get("context", {}) if isinstance(hit.get("context"), dict) else {}
+        paragraph = context.get("paragraph", {}) if isinstance(context.get("paragraph"), dict) else {}
+        paragraph_text = str(paragraph.get("text", "") or "").strip()
+        if paragraph_text:
+            return paragraph_text
+        level = str(hit.get("level", "") or "").strip().lower()
+        if level == "paragraph":
+            return str(hit.get("text", "") or "").strip()
+        return ""
+
+    def _collect_paragraph_evidence(self, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+        out: list[dict[str, Any]] = []
+        seen_texts: set[str] = set()
+        dropped = 0
+        for item in rows:
+            paragraph_text = self._extract_paragraph_text(item if isinstance(item, dict) else {})
+            if not paragraph_text:
+                dropped += 1
+                continue
+            norm = " ".join(paragraph_text.split())
+            if not norm or norm in seen_texts:
+                continue
+            seen_texts.add(norm)
+            row = dict(item)
+            row["text"] = paragraph_text
+            out.append(row)
+        return out, dropped
+
+    def _emit_tool_call(
+        self,
+        message_id: str,
+        backend: str,
+        step_id: str,
+        state: str,
+        summary: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {"backend": backend, "step_id": step_id, "state": state, "summary": summary}
+        if isinstance(extra, dict):
+            payload.update(extra)
+        self._emit(message_id, "tool_call", payload)
+
+    def _emit_agent_item(self, message_id: str, event_name: str, payload: dict[str, Any]) -> None:
+        self._emit(message_id, event_name, dict(payload))
+
+    def _resolve_workspace_path(self, library_id: str) -> str:
+        lib = str(library_id or "").strip()
+        if not callable(self._library_workspace_resolver):
+            raise RuntimeError("codex_workspace_resolver_unavailable")
+        resolved = str(self._library_workspace_resolver(lib) or "").strip()
+        if not resolved:
+            raise RuntimeError("codex_workspace_path_missing")
+        path = Path(resolved).resolve()
+        if not path.exists() or not path.is_dir():
+            raise RuntimeError("codex_workspace_path_invalid")
+        return str(path)
 
     def _rewrite_query(self, query: str, provider: str, model: str) -> str:
         prompt = [
@@ -639,16 +870,26 @@ class ChatService:
             f"降级原因：{reason}"
         ).strip()
 
-    def _run_fast(self, message_id: str, query: str, provider: str, model: str, stream: bool) -> dict[str, Any]:
+    def _run_fast(
+        self,
+        message_id: str,
+        query: str,
+        provider: str,
+        model: str,
+        stream: bool,
+        library_id: str = "",
+    ) -> dict[str, Any]:
         rewritten = self._rewrite_query(query=query, provider=provider, model=model)
         self._emit(message_id, "citation", {"phase": "query_rewrite", "query": rewritten})
+        self._emit(message_id, "status", {"stage": "retrieve", "label": "正在召回相关片段"})
+        library = str(library_id or "").strip()
 
         def _lit_kw() -> list[dict[str, Any]]:
-            result = self._literature_search(rewritten, 8)
+            result = self._call_literature_search(rewritten, 8, library)
             return list(result.get("keyword_hits", []))
 
         def _lit_vec() -> list[dict[str, Any]]:
-            result = self._literature_search(rewritten, 8)
+            result = self._call_literature_search(rewritten, 8, library)
             return list(result.get("rag_hits", []))
 
         def _graph() -> list[dict[str, Any]]:
@@ -690,12 +931,13 @@ class ChatService:
         retrieval_trace["vector_hits"] = vec_hits
         retrieval_trace["graph_hits"] = graph_hits
         retrieval_trace["degraded_routes"] = errors
-        citations = merged[:6]
-        if not citations:
-            fallback = self._build_fallback_citation(query)
-            citations = [fallback]
-            retrieval_trace["fallback_citation"] = fallback
-            self._emit(message_id, "citation", {"phase": "fallback", "citation": fallback})
+        paragraph_hits, dropped_non_paragraph_count = self._collect_paragraph_evidence(merged[:10])
+        retrieval_trace["paragraph_context_applied"] = True
+        retrieval_trace["dropped_non_paragraph_count"] = dropped_non_paragraph_count
+        retrieval_trace["library_id"] = library
+        if not paragraph_hits:
+            raise RuntimeError("paragraph_context_unavailable")
+        citations = paragraph_hits[:6]
 
         evidence_lines: list[str] = []
         for idx, item in enumerate(citations, start=1):
@@ -706,6 +948,7 @@ class ChatService:
             {"role": "user", "content": f"问题：{query}\n\n检索证据：\n" + "\n".join(evidence_lines)},
         ]
         answer = ""
+        self._emit(message_id, "status", {"stage": "generate", "label": "正在生成回答"})
         try:
             if stream:
                 for chunk in self._models.stream(provider=provider, model=model, messages=answer_prompt, timeout_seconds=90):
@@ -730,28 +973,224 @@ class ChatService:
             "tool_trace": [],
         }
 
-    def _run_agent(self, message_id: str, query: str, provider: str, model: str, stream: bool) -> dict[str, Any]:
+    def _run_agent(
+        self,
+        message_id: str,
+        query: str,
+        provider: str,
+        model: str,
+        stream: bool,
+        library_id: str = "",
+    ) -> dict[str, Any]:
+        backend = self._agent_backend
+        if backend == "codex":
+            runner = self._runner_factory.build("codex")
+            workspace = self._resolve_workspace_path(library_id)
+            self._emit(message_id, "status", {"stage": "retrieve", "label": "正在检索文献段落"})
+
+            step_search = "codex-1"
+            self._emit_tool_call(
+                message_id,
+                "codex",
+                step_search,
+                "started",
+                "weaviate.search",
+                {"tool": "weaviate.search", "phase": "observe"},
+            )
+            self._emit_agent_item(message_id, "agent_item_started", {"backend": "codex", "step_id": step_search, "item": "tool"})
+            search_payload = self._call_literature_search(query, 8, library_id)
+            merged = list(search_payload.get("merged_hits", []))[:8]
+            paragraph_hits, dropped_non_paragraph_count = self._collect_paragraph_evidence(merged)
+            self._emit_tool_call(
+                message_id,
+                "codex",
+                step_search,
+                "completed",
+                f"weaviate.search paragraphs={len(paragraph_hits)} dropped={dropped_non_paragraph_count}",
+                {
+                    "tool": "weaviate.search",
+                    "result_size": len(paragraph_hits),
+                    "dropped_non_paragraph_count": dropped_non_paragraph_count,
+                },
+            )
+            self._emit_agent_item(
+                message_id,
+                "agent_item_completed",
+                {
+                    "backend": "codex",
+                    "step_id": step_search,
+                    "item": "tool",
+                    "summary": f"paragraph_hits={len(paragraph_hits)}",
+                },
+            )
+            if not paragraph_hits:
+                raise RuntimeError("paragraph_context_unavailable")
+
+            citations = paragraph_hits[:6]
+            evidence_lines: list[str] = []
+            for idx, item in enumerate(citations, start=1):
+                snippet = str(item.get("text", "") or item.get("title", "") or "").strip()
+                evidence_lines.append(f"[{idx}] {snippet[:500]}")
+            codex_prompt = (
+                "你是论文问答 Agent。必须仅依据给定段落证据回答，并给出 [编号] 引用。\n\n"
+                f"问题：{query}\n\n"
+                "段落证据：\n"
+                + "\n".join(evidence_lines)
+            )
+
+            step_generate = "codex-2"
+            self._emit(message_id, "status", {"stage": "generate", "label": "正在由 Codex 生成回答"})
+            self._emit_tool_call(
+                message_id,
+                "codex",
+                step_generate,
+                "started",
+                "codex.run",
+                {"tool": "codex.run", "workdir": workspace},
+            )
+            self._emit_agent_item(
+                message_id,
+                "agent_item_started",
+                {"backend": "codex", "step_id": step_generate, "item": "completion"},
+            )
+            answer = runner.run(prompt=codex_prompt, workdir=workspace)
+            if stream:
+                chunk_size = 180
+                for i in range(0, len(answer), chunk_size):
+                    chunk = answer[i : i + chunk_size]
+                    if not chunk:
+                        continue
+                    self._emit(message_id, "delta", {"text": chunk})
+                    self._emit_agent_item(
+                        message_id,
+                        "agent_item_delta",
+                        {"backend": "codex", "step_id": step_generate, "text": chunk},
+                    )
+            else:
+                self._emit(message_id, "delta", {"text": answer})
+
+            self._emit_tool_call(
+                message_id,
+                "codex",
+                step_generate,
+                "completed",
+                "codex.run completed",
+                {"tool": "codex.run", "output_chars": len(answer)},
+            )
+            self._emit_agent_item(
+                message_id,
+                "agent_item_completed",
+                {
+                    "backend": "codex",
+                    "step_id": step_generate,
+                    "item": "completion",
+                    "summary": f"output_chars={len(answer)}",
+                },
+            )
+            return {
+                "answer": answer.strip(),
+                "citations": citations,
+                "retrieval_trace": {
+                    "backend": "codex",
+                    "library_id": str(library_id or "").strip(),
+                    "workspace_path": workspace,
+                    "paragraph_context_applied": True,
+                    "dropped_non_paragraph_count": dropped_non_paragraph_count,
+                },
+                "tool_trace": [
+                    {
+                        "backend": "codex",
+                        "step": 1,
+                        "step_id": step_search,
+                        "state": "completed",
+                        "tool": "weaviate.search",
+                        "args": {"query": query, "top_k": 8, "library_id": str(library_id or "").strip()},
+                        "result_size": len(paragraph_hits),
+                        "dropped_non_paragraph_count": dropped_non_paragraph_count,
+                        "summary": f"paragraph_hits={len(paragraph_hits)}",
+                    },
+                    {
+                        "backend": "codex",
+                        "step": 2,
+                        "step_id": step_generate,
+                        "state": "completed",
+                        "tool": "codex.run",
+                        "args": {"workdir": workspace},
+                        "result_size": 1,
+                        "summary": f"output_chars={len(answer)}",
+                    },
+                ],
+            }
+        if backend == "hermes":
+            runner = self._runner_factory.build("hermes")
+            _ = runner
+            raise RuntimeError("agent_backend_unavailable:hermes")
+        if backend != "builtin":
+            raise RuntimeError(f"agent_backend_invalid:{backend}")
         max_steps = 6
         max_tool_calls = 12
         tool_calls = 0
         tool_trace: list[dict[str, Any]] = []
         observations: list[str] = []
+        dropped_non_paragraph_total = 0
+        backend = "builtin"
+        self._emit(message_id, "status", {"stage": "retrieve", "label": "正在召回相关片段"})
 
         for step in range(1, max_steps + 1):
-            self._emit(message_id, "tool_call", {"phase": "plan", "step": step})
+            step_id = f"{backend}-{step}"
+            self._emit_tool_call(message_id, backend, step_id, "started", "planning", {"phase": "plan", "step": step})
             if step == 1:
                 tool_calls += 1
-                res = self._literature_search(query, 6)
+                res = self._call_literature_search(query, 6, library_id)
                 merged = list(res.get("merged_hits", []))[:4]
-                tool_trace.append({"step": step, "tool": "literature.search", "args": {"query": query, "top_k": 6}, "result_size": len(merged)})
-                observations.extend([str(x.get("text", "") or x.get("title", ""))[:200] for x in merged])
-                self._emit(message_id, "tool_call", {"phase": "observe", "tool": "literature.search", "step": step, "hits": len(merged)})
+                paragraph_hits, dropped_non_paragraph_count = self._collect_paragraph_evidence(merged)
+                dropped_non_paragraph_total += dropped_non_paragraph_count
+                tool_trace.append(
+                    {
+                        "backend": backend,
+                        "step": step,
+                        "step_id": step_id,
+                        "state": "completed",
+                        "tool": "literature.search",
+                        "args": {"query": query, "top_k": 6, "library_id": str(library_id or "").strip()},
+                        "result_size": len(paragraph_hits),
+                        "dropped_non_paragraph_count": dropped_non_paragraph_count,
+                        "summary": f"paragraph_hits={len(paragraph_hits)} dropped={dropped_non_paragraph_count}",
+                    }
+                )
+                observations.extend([str(x.get("text", "") or x.get("title", ""))[:200] for x in paragraph_hits])
+                self._emit_tool_call(
+                    message_id,
+                    backend,
+                    step_id,
+                    "completed",
+                    f"literature.search hits={len(paragraph_hits)} dropped={dropped_non_paragraph_count}",
+                    {"phase": "observe", "tool": "literature.search", "step": step, "hits": len(paragraph_hits)},
+                )
             elif step == 2 and tool_calls < max_tool_calls:
                 tool_calls += 1
                 g = self._graph_search(query, 6)
-                tool_trace.append({"step": step, "tool": "graph.search", "args": {"query": query, "limit": 6}, "result_size": len(g)})
+                tool_trace.append(
+                    {
+                        "backend": backend,
+                        "step": step,
+                        "step_id": step_id,
+                        "state": "completed",
+                        "tool": "graph.search",
+                        "args": {"query": query, "limit": 6},
+                        "result_size": len(g),
+                        "summary": f"graph_hits={len(g)}",
+                    }
+                )
                 observations.extend([str(x.get("title", "") or x.get("text", "") or "")[:180] for x in g[:3]])
-                self._emit(message_id, "tool_call", {"phase": "observe", "tool": "graph.search", "step": step, "hits": len(g)})
+                self._emit_tool_call(
+                    message_id,
+                    backend,
+                    step_id,
+                    "completed",
+                    f"graph.search hits={len(g)}",
+                    {"phase": "observe", "tool": "graph.search", "step": step, "hits": len(g)},
+                )
             elif step == 3 and tool_calls < max_tool_calls:
                 # Try a deep read on the first graph/paper candidate.
                 target = None
@@ -764,14 +1203,34 @@ class ChatService:
                     doc = self._paper_get(str(query))  # fallback no-op for unmatched id
                     if doc is None:
                         doc = {}
-                    tool_trace.append({"step": step, "tool": "paper.get", "args": {"paper_id_or_doi": query}, "result_size": 1 if doc else 0})
+                    tool_trace.append(
+                        {
+                            "backend": backend,
+                            "step": step,
+                            "step_id": step_id,
+                            "state": "completed",
+                            "tool": "paper.get",
+                            "args": {"paper_id_or_doi": query},
+                            "result_size": 1 if doc else 0,
+                            "summary": "paper_loaded" if doc else "paper_not_found",
+                        }
+                    )
                     if doc:
                         observations.append(str(doc.get("doi", "") or doc.get("paper_id", "")))
-                    self._emit(message_id, "tool_call", {"phase": "observe", "tool": "paper.get", "step": step})
+                    self._emit_tool_call(
+                        message_id,
+                        backend,
+                        step_id,
+                        "completed",
+                        "paper.get completed",
+                        {"phase": "observe", "tool": "paper.get", "step": step},
+                    )
             else:
-                self._emit(message_id, "tool_call", {"phase": "reflect", "step": step})
+                self._emit_tool_call(message_id, backend, step_id, "completed", "reflect", {"phase": "reflect", "step": step})
                 break
 
+        if not any(str(item.get("tool", "")) == "literature.search" and int(item.get("result_size", 0)) > 0 for item in tool_trace):
+            raise RuntimeError("paragraph_context_unavailable")
         context = "\n".join(x for x in observations if x)[:4000]
         prompt = [
             {"role": "system", "content": "你是谨慎的 Agent 总结器。基于观察信息直接回答用户问题。"},
@@ -779,6 +1238,7 @@ class ChatService:
         ]
         answer = ""
         degraded_reason = ""
+        self._emit(message_id, "status", {"stage": "generate", "label": "正在生成回答"})
         try:
             if stream:
                 for chunk in self._models.stream(provider=provider, model=model, messages=prompt, timeout_seconds=90):
@@ -803,6 +1263,9 @@ class ChatService:
                 "max_steps": max_steps,
                 "max_tool_calls": max_tool_calls,
                 "model_degraded": degraded_reason,
+                "paragraph_context_applied": True,
+                "dropped_non_paragraph_count": dropped_non_paragraph_total,
+                "library_id": str(library_id or "").strip(),
             },
             "tool_trace": tool_trace,
         }

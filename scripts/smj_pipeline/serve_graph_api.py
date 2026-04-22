@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
+from datetime import datetime, timezone
 import json
 import importlib.util
 import math
 import os
 from pathlib import Path
+import shlex
+import subprocess
 import sys
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
@@ -70,6 +73,81 @@ def _load_workspace_layout_store_class():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.WorkspaceLayoutStore
+
+
+def _load_agent_runner_module():
+    module_path = Path(__file__).resolve().parent / "agent_runner.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_agent_runner_for_serve_graph_api", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _InMemoryWorkspaceLayoutStore:
+    def __init__(self) -> None:
+        self._layouts: dict[str, dict[str, Any]] = {}
+
+    def save_layout(self, name: str, layout: dict[str, Any]) -> dict[str, Any]:
+        key = str(name or "default").strip() or "default"
+        now = datetime.now(timezone.utc).isoformat()
+        row = {"name": key, "layout": dict(layout), "updated_at": now}
+        self._layouts[key] = row
+        return dict(row)
+
+    def get_layout(self, name: str) -> dict[str, Any] | None:
+        key = str(name or "default").strip() or "default"
+        row = self._layouts.get(key)
+        return dict(row) if isinstance(row, dict) else None
+
+    def list_layouts(self) -> dict[str, Any]:
+        rows = list(self._layouts.values())
+        rows.sort(key=lambda x: str(x.get("updated_at", "")), reverse=True)
+        return {"layouts": [{"name": str(r.get("name", "")), "updated_at": str(r.get("updated_at", ""))} for r in rows]}
+
+
+def _scan_literature_libraries(index_root: Path) -> dict[str, Any]:
+    libraries: list[dict[str, Any]] = []
+    root = index_root.resolve()
+    if root.exists() and root.is_dir():
+        for fp in sorted(root.glob("*.json")):
+            try:
+                payload = json.loads(fp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            library_id = str(payload.get("library_id", "") or fp.stem).strip()
+            if not library_id:
+                continue
+            updated_at = str(payload.get("updated_at", "") or "").strip()
+            paper_count_raw = payload.get("paper_count", 0)
+            try:
+                paper_count = int(paper_count_raw)
+            except Exception:
+                paper_ids = payload.get("paper_ids", [])
+                paper_count = len(paper_ids) if isinstance(paper_ids, list) else 0
+            libraries.append(
+                {
+                    "library_id": library_id,
+                    "paper_count": max(0, paper_count),
+                    "updated_at": updated_at,
+                    "path": str(fp.resolve()),
+                    "workspace_path": str(
+                        payload.get("workspace_path", "")
+                        or payload.get("library_root", "")
+                        or payload.get("root_path", "")
+                        or ""
+                    ).strip(),
+                }
+            )
+    libraries.sort(key=lambda x: (str(x.get("updated_at", "")), str(x.get("library_id", ""))), reverse=True)
+    default_library_id = (os.getenv("LITERATURE_DEFAULT_LIBRARY_ID", "") or "").strip()
+    if not default_library_id and libraries:
+        default_library_id = str(libraries[0].get("library_id", "") or "")
+    return {"libraries": libraries, "default_library_id": default_library_id}
 
 
 def _resolve_views_json(cli_views_json: Path | None, runs_root: Path) -> Path:
@@ -716,16 +794,72 @@ def make_handler(
             "mentions": mentions[:50],
         }
 
+    libraries_index_root = Path(os.getenv("LITERATURE_LIBRARY_INDEX_ROOT", "outputs/literature_libraries") or "outputs/literature_libraries")
+
+    def _resolve_library_workspace(library_id: str) -> str:
+        payload = _scan_literature_libraries(libraries_index_root)
+        rows = payload.get("libraries", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            rows = []
+        target = str(library_id or payload.get("default_library_id", "") or "").strip()
+        if not target:
+            return ""
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("library_id", "") or "").strip() != target:
+                continue
+            workspace = str(item.get("workspace_path", "") or "").strip()
+            if workspace:
+                return workspace
+            idx_file = str(item.get("path", "") or "").strip()
+            if idx_file:
+                return str(Path(idx_file).resolve().parent)
+            break
+        return ""
+
+    codex_config_path = Path(os.getenv("CHAT_CODEX_CONFIG_PATH", "outputs/chat/codex_runner_config.json") or "outputs/chat/codex_runner_config.json")
+    try:
+        _agent_runner_mod = _load_agent_runner_module()
+    except Exception:
+        _agent_runner_mod = None
+
+    def _load_codex_config_payload() -> dict[str, Any]:
+        if _agent_runner_mod is None:
+            return {}
+        cfg = _agent_runner_mod.load_codex_config(codex_config_path)
+        return {
+            "cli_command": str(cfg.cli_command or ""),
+            "cli_args": list(cfg.cli_args),
+            "healthcheck_args": list(cfg.healthcheck_args),
+            "timeout_seconds": int(cfg.timeout_seconds),
+            "install_command": str(cfg.install_command or ""),
+            "extra_env": dict(cfg.extra_env),
+            "config_path": str(codex_config_path.resolve()),
+        }
+
+    def _save_codex_config_payload(body: dict[str, Any]) -> dict[str, Any]:
+        codex_config_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = _load_codex_config_payload()
+        next_payload = dict(existing)
+        for key in ("cli_command", "cli_args", "healthcheck_args", "timeout_seconds", "install_command", "extra_env"):
+            if key in body:
+                next_payload[key] = body.get(key)
+        to_write = {k: v for k, v in next_payload.items() if k != "config_path"}
+        codex_config_path.write_text(json.dumps(to_write, ensure_ascii=False, indent=2), encoding="utf-8")
+        return _load_codex_config_payload()
+
     chat = chat_service
     if chat is None:
         try:
             chat_cls = _load_chat_service_class()
             chat = chat_cls(
-                literature_search_fn=lambda q, k: (
+                literature_search_fn=lambda q, k, library_id="": (
                     literature.search(
                         query=q,
                         top_k=k,
                         levels=["sentence", "paragraph"],
+                        library_id=library_id,
                         keyword_weight=0.4,
                         rag_weight=0.6,
                         include_expanded_context=True,
@@ -737,17 +871,27 @@ def make_handler(
                 + list(_graph_search_cards(query=q, mode="paper", limit=max(1, k // 2)).get("results", [])),
                 paper_get_fn=_paper_get,
                 variable_get_fn=_variable_get,
+                library_workspace_resolver_fn=_resolve_library_workspace,
             )
         except Exception:
             chat = None
 
     workspace_store = workspace_layout_store
+    workspace_store_degraded_reason = ""
     if workspace_store is None:
         try:
             workspace_cls = _load_workspace_layout_store_class()
             workspace_store = workspace_cls(storage_path=workspace_layouts_file)
-        except Exception:
-            workspace_store = None
+        except Exception as exc:
+            workspace_store = _InMemoryWorkspaceLayoutStore()
+            workspace_store_degraded_reason = f"workspace_layout_store_loader_failed:{exc}"
+
+    def _workspace_with_degraded(payload: dict[str, Any]) -> dict[str, Any]:
+        out = dict(payload)
+        if workspace_store_degraded_reason:
+            out["degraded"] = True
+            out["degraded_reason"] = workspace_store_degraded_reason
+        return out
 
     class Handler(BaseHTTPRequestHandler):
         def _read_json_body(self) -> dict[str, Any]:
@@ -765,6 +909,40 @@ def make_handler(
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = parsed.path
+            if path == "/chat/codex/config":
+                try:
+                    body = self._read_json_body()
+                    if not isinstance(body, dict):
+                        return _json(self, {"error": "invalid_payload"}, status=400)
+                    saved = _save_codex_config_payload(body)
+                    return _json(self, {"ok": True, "config": saved}, status=200)
+                except Exception as exc:
+                    return _json(self, {"error": "codex_config_save_failed", "detail": str(exc)}, status=400)
+
+            if path == "/chat/codex/install":
+                try:
+                    cfg = _load_codex_config_payload()
+                    install_cmd = str(cfg.get("install_command", "") or "").strip()
+                    if not install_cmd:
+                        return _json(self, {"error": "codex_install_command_missing"}, status=400)
+                    proc = subprocess.run(
+                        shlex.split(install_cmd),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=900,
+                    )
+                    payload = {
+                        "ok": int(proc.returncode) == 0,
+                        "returncode": int(proc.returncode),
+                        "stdout": str(proc.stdout or "")[-4000:],
+                        "stderr": str(proc.stderr or "")[-4000:],
+                    }
+                    status = 200 if payload["ok"] else 500
+                    return _json(self, payload, status=status)
+                except Exception as exc:
+                    return _json(self, {"error": "codex_install_failed", "detail": str(exc)}, status=500)
+
             if path == "/chat/provider-test":
                 if provider_registry is None:
                     return _json(self, {"error": "provider_config_unavailable"}, status=503)
@@ -869,10 +1047,7 @@ def make_handler(
                 try:
                     body = self._read_json_body()
                     title = str(body.get("title", "") or "")
-                    default_mode = str(body.get("default_mode", "fast") or "fast").strip().lower()
-                    if default_mode not in {"fast", "agent"}:
-                        return _json(self, {"error": "invalid_default_mode"}, status=400)
-                    payload = chat.create_session(title=title, default_mode=default_mode)
+                    payload = chat.create_session(title=title, default_mode="agent")
                     return _json(self, payload, status=201)
                 except Exception as exc:
                     return _json(self, {"error": "chat_create_session_failed", "detail": str(exc)}, status=500)
@@ -890,20 +1065,11 @@ def make_handler(
                     content = str(body.get("content", "") or "").strip()
                     if not content:
                         return _json(self, {"error": "content_required"}, status=400)
-                    mode = str(body.get("mode", "fast") or "fast").strip().lower()
-                    if mode not in {"fast", "agent"}:
-                        return _json(self, {"error": "invalid_mode"}, status=400)
-                    provider = str(body.get("provider", "glm") or "glm").strip().lower()
-                    if provider_registry is not None:
-                        try:
-                            provider_registry.reload()
-                            provider_registry.resolve_provider_id(provider)
-                        except Exception:
-                            return _json(self, {"error": "invalid_provider"}, status=400)
-                    elif provider not in {"glm", "zhipu", "deepseek"}:
-                        return _json(self, {"error": "invalid_provider"}, status=400)
-                    model = str(body.get("model", "") or "").strip()
+                    mode = "agent"
+                    provider = "codex"
+                    model = "codex-local"
                     stream = bool(body.get("stream", True))
+                    library_id = str(body.get("library_id", "") or "").strip()
                     payload = chat.submit_message(
                         session_id=session_id,
                         content=content,
@@ -911,6 +1077,7 @@ def make_handler(
                         provider=provider,
                         model=model,
                         stream=stream,
+                        library_id=library_id,
                     )
                     return _json(
                         self,
@@ -926,6 +1093,25 @@ def make_handler(
                     return _json(self, {"error": "session_not_found"}, status=404)
                 except Exception as exc:
                     return _json(self, {"error": "chat_submit_failed", "detail": str(exc)}, status=500)
+
+            if path.startswith("/chat/sessions/") and path.endswith("/restore"):
+                if chat is None:
+                    return _json(self, {"error": "chat_service_unavailable"}, status=503)
+                try:
+                    prefix = "/chat/sessions/"
+                    session_id = str(path[len(prefix) : -len("/restore")]).strip().rstrip("/")
+                    if not session_id:
+                        return _json(self, {"error": "session_id_required"}, status=400)
+                    payload = chat.restore_session(session_id)
+                    if not isinstance(payload, dict):
+                        return _json(self, {"error": "chat_restore_failed"}, status=500)
+                    if not bool(payload.get("restored")):
+                        error = str(payload.get("error", "restore_failed") or "restore_failed")
+                        status_code = 409 if error == "restore_window_expired" else 404
+                        return _json(self, {"error": error, "session_id": session_id}, status=status_code)
+                    return _json(self, payload, status=200)
+                except Exception as exc:
+                    return _json(self, {"error": "chat_restore_failed", "detail": str(exc)}, status=500)
 
             if path == "/literature/import":
                 if literature is None:
@@ -991,8 +1177,6 @@ def make_handler(
                     return _json(self, {"error": "literature_answer_failed", "detail": str(exc)}, status=500)
 
             if path == "/api/v2/workspace/layout":
-                if workspace_store is None:
-                    return _json(self, {"error": "workspace_layout_store_unavailable"}, status=503)
                 try:
                     body = self._read_json_body()
                     name = str(body.get("name", "default") or "default").strip()
@@ -1002,9 +1186,29 @@ def make_handler(
                     if not isinstance(layout, dict):
                         return _json(self, {"error": "layout_object_required"}, status=400)
                     saved = workspace_store.save_layout(name=name, layout=layout)
-                    return _json(self, saved, status=200)
+                    return _json(self, _workspace_with_degraded(saved), status=200)
                 except Exception as exc:
                     return _json(self, {"error": "workspace_layout_save_failed", "detail": str(exc)}, status=500)
+
+            self.send_error(404, "Not Found")
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            path = parsed.path
+
+            if path.startswith("/chat/sessions/"):
+                if chat is None:
+                    return _json(self, {"error": "chat_service_unavailable"}, status=503)
+                try:
+                    session_id = str(path[len("/chat/sessions/") :]).strip().rstrip("/")
+                    if not session_id:
+                        return _json(self, {"error": "session_id_required"}, status=400)
+                    payload = chat.delete_session(session_id=session_id, undo_window_seconds=5)
+                    return _json(self, payload, status=200)
+                except KeyError:
+                    return _json(self, {"error": "session_not_found"}, status=404)
+                except Exception as exc:
+                    return _json(self, {"error": "chat_delete_session_failed", "detail": str(exc)}, status=500)
 
             self.send_error(404, "Not Found")
 
@@ -1085,6 +1289,25 @@ def make_handler(
                     return _json(self, payload)
                 except Exception as exc:
                     return _json(self, {"error": "chat_list_sessions_failed", "detail": str(exc)}, status=500)
+
+            if path == "/chat/codex/config":
+                try:
+                    return _json(self, {"config": _load_codex_config_payload()}, status=200)
+                except Exception as exc:
+                    return _json(self, {"error": "codex_config_load_failed", "detail": str(exc)}, status=500)
+
+            if path == "/chat/codex/health":
+                if _agent_runner_mod is None:
+                    return _json(self, {"backend": "codex", "available": False, "reason": "agent_runner_module_unavailable"}, status=503)
+                try:
+                    cfg = _agent_runner_mod.load_codex_config(codex_config_path)
+                    runner = _agent_runner_mod.CodexRunner(cfg)
+                    payload = runner.health()
+                    payload["config_path"] = str(codex_config_path.resolve())
+                    status = 200 if bool(payload.get("available")) else 503
+                    return _json(self, payload, status=status)
+                except Exception as exc:
+                    return _json(self, {"backend": "codex", "available": False, "reason": str(exc)}, status=503)
 
             if path == "/chat/provider-config":
                 if provider_registry is None:
@@ -1191,23 +1414,26 @@ def make_handler(
                     return _json(self, {"error": "literature_search_failed", "detail": str(exc)}, status=500)
                 return _json(self, payload)
 
+            if path == "/literature/libraries":
+                root = Path(os.getenv("LITERATURE_LIBRARY_INDEX_ROOT", "outputs/literature_libraries") or "outputs/literature_libraries")
+                return _json(self, _scan_literature_libraries(root))
+
             if path == "/api/v2/workspace/layouts":
-                if workspace_store is None:
-                    return _json(self, {"error": "workspace_layout_store_unavailable"}, status=503)
                 try:
-                    return _json(self, workspace_store.list_layouts())
+                    payload = workspace_store.list_layouts()
+                    if not isinstance(payload, dict):
+                        payload = {"layouts": payload if isinstance(payload, list) else []}
+                    return _json(self, _workspace_with_degraded(payload))
                 except Exception as exc:
                     return _json(self, {"error": "workspace_layout_list_failed", "detail": str(exc)}, status=500)
 
             if path == "/api/v2/workspace/layout":
-                if workspace_store is None:
-                    return _json(self, {"error": "workspace_layout_store_unavailable"}, status=503)
                 name = str((qs.get("name", ["default"])[0] or "default")).strip() or "default"
                 try:
                     payload = workspace_store.get_layout(name=name)
                     if payload is None:
                         return _json(self, {"error": "workspace_layout_not_found", "name": name}, status=404)
-                    return _json(self, payload)
+                    return _json(self, _workspace_with_degraded(payload))
                 except Exception as exc:
                     return _json(self, {"error": "workspace_layout_get_failed", "detail": str(exc)}, status=500)
 

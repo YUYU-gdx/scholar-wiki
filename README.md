@@ -131,6 +131,21 @@ npm run dev
 uv run python scripts/smj_pipeline/serve_graph_api.py --port 8013
 ```
 
+## 桌面应用（Electron）
+
+独立桌面应用工程目录：`frontend/desktop_shell`
+
+```bash
+cd frontend/desktop_shell
+npm install
+npm run start
+```
+
+说明：
+- Electron 主进程会自动启动后端：`uv run python scripts/smj_pipeline/serve_graph_api.py --port 8013`
+- 桌面窗口默认加载：`/frontend/workbench/`
+- 若需改端口：设置环境变量 `KN_GRAPH_PORT` 后再启动桌面应用
+
 ## LLM Provider 配置化（新增）
 
 - 统一配置文件：`config/llm_providers.json`

@@ -56,8 +56,9 @@ class FakeChatService:
         provider: str,
         model: str,
         stream: bool,
+        library_id: str = "",
     ) -> dict[str, str]:
-        _ = mode, provider, model, stream
+        _ = mode, provider, model, stream, library_id
         if session_id not in self.sessions:
             raise KeyError("session_not_found")
         if not str(content or "").strip():

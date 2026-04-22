@@ -4,40 +4,38 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>KN Graph AI 问答</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/frontend/chat/style.css" />
   </head>
   <body>
     <div class="layout">
       <aside class="sidebar">
-        <a class="back-link" href="/frontend/" data-testid="back-to-search-btn">返回变量搜索</a>
+        <div class="sidebar-head">
+          <div class="brand">KN Chat</div>
+          <a class="back-link" href="/frontend/" data-testid="back-to-search-btn">返回图谱</a>
+        </div>
         <button id="new-session-btn" class="primary-btn" data-testid="new-session-btn">新建会话</button>
-        <button id="provider-settings-btn" class="ghost-btn" data-testid="provider-settings-btn">模型服务设置</button>
+        <button id="provider-settings-btn" class="ghost-btn" data-testid="provider-settings-btn">Codex 设置</button>
         <div class="section-title">会话列表</div>
         <div id="session-list" class="session-list" data-testid="session-list"></div>
       </aside>
+
       <main class="main">
         <header class="toolbar">
-          <div class="mode-group">
-            <label>模式</label>
-            <select id="mode-select" data-testid="mode-select">
-              <option value="fast">快速模式</option>
-              <option value="agent">Agent 模式</option>
-            </select>
+          <div class="toolbar-group">
+            <div class="field">
+              <label>文献库</label>
+              <select id="library-select" data-testid="library-select"></select>
+            </div>
           </div>
-          <div class="mode-group">
-            <label>Provider</label>
-            <select id="provider-select" data-testid="provider-select">
-              <option value="glm">GLM</option>
-              <option value="deepseek">DeepSeek</option>
-            </select>
-          </div>
-          <div class="mode-group mode-model">
-            <label>Model</label>
-            <select id="model-select" data-testid="model-select"></select>
-            <input id="model-input" value="" data-testid="model-input" placeholder="自定义模型 ID" class="hidden" />
-          </div>
+          <div id="stream-hint" class="stream-hint">流式输出已开启</div>
         </header>
+        <div id="chat-status-strip" class="status-strip" data-testid="chat-status-strip">就绪</div>
+
         <section id="chat-feed" class="chat-feed" data-testid="message-container"></section>
+
         <footer class="composer">
           <textarea
             id="prompt-input"
@@ -49,26 +47,72 @@
         </footer>
       </main>
     </div>
+
     <div id="provider-modal" class="modal hidden" data-testid="provider-modal">
       <div class="modal-card">
         <header class="modal-header">
-          <h3>模型服务配置</h3>
+          <h3>Codex 本地配置</h3>
           <button id="provider-modal-close" class="ghost-btn">关闭</button>
         </header>
         <div class="modal-body">
-          <div class="mode-group">
-            <label>默认 Provider</label>
-            <select id="default-provider-select" data-testid="default-provider-select"></select>
+          <div class="field">
+            <label>CLI 命令</label>
+            <input id="codex-cli-command" data-testid="codex-cli-command" placeholder="codex" />
           </div>
-          <div id="provider-rows" class="provider-rows" data-testid="provider-rows"></div>
+          <div class="field">
+            <label>执行参数（JSON 数组）</label>
+            <textarea id="codex-cli-args" rows="3" data-testid="codex-cli-args" placeholder="[&quot;exec&quot;,&quot;--cwd&quot;,&quot;{workdir}&quot;,&quot;{prompt}&quot;]"></textarea>
+          </div>
+          <div class="field">
+            <label>健康检查参数（JSON 数组）</label>
+            <textarea id="codex-healthcheck-args" rows="2" data-testid="codex-healthcheck-args" placeholder="[&quot;--version&quot;]"></textarea>
+          </div>
+          <div class="field">
+            <label>安装命令</label>
+            <input id="codex-install-command" data-testid="codex-install-command" placeholder="npm install -g @openai/codex" />
+          </div>
+          <div class="field">
+            <label>超时（秒）</label>
+            <input id="codex-timeout-seconds" type="number" min="10" step="1" data-testid="codex-timeout-seconds" />
+          </div>
+          <div class="field">
+            <label>额外环境变量（JSON 对象）</label>
+            <textarea id="codex-extra-env" rows="3" data-testid="codex-extra-env" placeholder="{&quot;OPENAI_API_KEY&quot;:&quot;...&quot;}"></textarea>
+          </div>
           <div class="modal-actions">
-            <button id="add-provider-btn" class="ghost-btn" data-testid="add-provider-btn">新增 Provider</button>
+            <button id="codex-health-btn" class="ghost-btn" data-testid="codex-health-btn">检测可用性</button>
+            <button id="codex-install-btn" class="ghost-btn" data-testid="codex-install-btn">安装 Codex</button>
             <button id="save-provider-config-btn" class="primary-btn" data-testid="save-provider-config-btn">保存配置</button>
           </div>
           <div id="provider-save-status" class="meta"></div>
         </div>
       </div>
     </div>
+
+    <div id="citation-modal" class="modal hidden" data-testid="citation-modal">
+      <div class="modal-card citation-modal-card">
+        <header class="modal-header">
+          <h3>引用详情</h3>
+          <button id="citation-modal-close" class="ghost-btn" type="button">关闭</button>
+        </header>
+        <div class="modal-body citation-modal-body">
+          <section>
+            <div class="citation-label">命中句子</div>
+            <pre id="citation-sentence" class="citation-text"></pre>
+          </section>
+          <section>
+            <div class="citation-label">所属段落</div>
+            <pre id="citation-paragraph" class="citation-text"></pre>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="undo-toast" class="undo-toast hidden" data-testid="undo-toast">
+      <span id="undo-toast-text">会话已删除</span>
+      <button id="undo-delete-btn" class="ghost-btn" type="button" data-testid="undo-delete-btn">撤销</button>
+    </div>
+
     <script src="/frontend/chat/app.js"></script>
   </body>
 </html>
