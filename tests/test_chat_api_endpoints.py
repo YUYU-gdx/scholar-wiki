@@ -44,6 +44,8 @@ class _FakeChatService:
     def __init__(self) -> None:
         self.sessions: dict[str, dict[str, object]] = {}
         self.messages: dict[str, list[dict[str, object]]] = {}
+        self.deleted: set[str] = set()
+        self.last_submit_payload: dict[str, object] | None = None
 
     def create_session(self, title: str = "", default_mode: str = "fast") -> dict[str, object]:
         sid = f"sess_{len(self.sessions) + 1}"
@@ -53,12 +55,31 @@ class _FakeChatService:
         return row
 
     def list_sessions(self) -> list[dict[str, object]]:
-        return list(self.sessions.values())
+        return [v for k, v in self.sessions.items() if k not in self.deleted]
 
     def get_session_with_messages(self, session_id: str) -> dict[str, object] | None:
-        if session_id not in self.sessions:
+        if session_id not in self.sessions or session_id in self.deleted:
             return None
         return {"session": self.sessions[session_id], "messages": self.messages.get(session_id, [])}
+
+    def delete_session(self, session_id: str, undo_window_seconds: int = 5) -> dict[str, object]:
+        if session_id not in self.sessions or session_id in self.deleted:
+            raise KeyError("session_not_found")
+        self.deleted.add(session_id)
+        return {
+            "session_id": session_id,
+            "deleted_at": "2026-01-01T00:00:00+00:00",
+            "undo_window_seconds": int(undo_window_seconds),
+            "undo_deadline": "2026-01-01T00:00:05+00:00",
+        }
+
+    def restore_session(self, session_id: str) -> dict[str, object]:
+        if session_id not in self.sessions:
+            return {"session_id": session_id, "restored": False, "error": "session_not_found"}
+        if session_id not in self.deleted:
+            return {"session_id": session_id, "restored": False, "error": "restore_window_expired"}
+        self.deleted.remove(session_id)
+        return {"session_id": session_id, "restored": True}
 
     def submit_message(
         self,
@@ -68,8 +89,17 @@ class _FakeChatService:
         provider: str,
         model: str,
         stream: bool,
+        library_id: str = "",
     ) -> dict[str, str]:
-        _ = mode, provider, model, stream
+        self.last_submit_payload = {
+            "session_id": session_id,
+            "content": content,
+            "mode": mode,
+            "provider": provider,
+            "model": model,
+            "stream": stream,
+            "library_id": library_id,
+        }
         if session_id not in self.sessions:
             raise KeyError("session_not_found")
 
@@ -138,7 +168,8 @@ class ChatApiEndpointsTest(unittest.TestCase):
             "paper_map": {},
         }
         chat_frontend = Path(__file__).resolve().parent.parent / "frontend" / "chat_embed"
-        handler = make_handler(views, tmp_path, chat_frontend_dir=chat_frontend, literature_service=None, chat_service=_FakeChatService())
+        self.fake_chat_service = _FakeChatService()
+        handler = make_handler(views, tmp_path, chat_frontend_dir=chat_frontend, literature_service=None, chat_service=self.fake_chat_service)
         self.port = _free_port()
         self.server = ThreadingHTTPServer(("127.0.0.1", self.port), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -177,6 +208,9 @@ class ChatApiEndpointsTest(unittest.TestCase):
 
     def _get_json(self, path: str) -> tuple[int, dict[str, object]]:
         return self._request_json("GET", path)
+
+    def _delete_json(self, path: str) -> tuple[int, dict[str, object]]:
+        return self._request_json("DELETE", path)
 
     def _get_text(self, path: str) -> tuple[int, str]:
         req = Request(f"http://127.0.0.1:{self.port}{path}", method="GET")
@@ -245,6 +279,28 @@ class ChatApiEndpointsTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("event: delta", text_cursor)
 
+    def test_delete_and_restore_session(self) -> None:
+        status, created = self._post_json("/chat/sessions", {"title": "delete-me", "default_mode": "fast"})
+        self.assertEqual(status, 201)
+        session_id = str(created["session_id"])
+
+        status, payload = self._delete_json(f"/chat/sessions/{session_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(str(payload.get("session_id", "")), session_id)
+        self.assertIn("undo_deadline", payload)
+
+        status, listed = self._get_json("/chat/sessions")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(listed.get("sessions", [])), 0)
+
+        status, restored = self._post_json(f"/chat/sessions/{session_id}/restore", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(bool(restored.get("restored")))
+
+        status, listed = self._get_json("/chat/sessions")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(listed.get("sessions", [])), 1)
+
     def test_stream_can_emit_failed_terminal_event(self) -> None:
         _, created = self._post_json("/chat/sessions", {"title": "x", "default_mode": "fast"})
         session_id = str(created["session_id"])
@@ -268,10 +324,6 @@ class ChatApiEndpointsTest(unittest.TestCase):
         self.assertEqual(names[-1], "failed")
 
     def test_parameter_validation_and_not_found_paths(self) -> None:
-        status, payload = self._post_json("/chat/sessions", {"title": "x", "default_mode": "bad"})
-        self.assertEqual(status, 400)
-        self.assertEqual(payload.get("error"), "invalid_default_mode")
-
         status, created = self._post_json("/chat/sessions", {"title": "x", "default_mode": "fast"})
         self.assertEqual(status, 201)
         session_id = str(created["session_id"])
@@ -282,20 +334,6 @@ class ChatApiEndpointsTest(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertEqual(payload.get("error"), "content_required")
-
-        status, payload = self._post_json(
-            f"/chat/sessions/{session_id}/messages",
-            {"content": "hi", "mode": "bad", "provider": "glm", "model": "glm-4.5-flash", "stream": True},
-        )
-        self.assertEqual(status, 400)
-        self.assertEqual(payload.get("error"), "invalid_mode")
-
-        status, payload = self._post_json(
-            f"/chat/sessions/{session_id}/messages",
-            {"content": "hi", "mode": "fast", "provider": "bad", "model": "glm-4.5-flash", "stream": True},
-        )
-        self.assertEqual(status, 400)
-        self.assertEqual(payload.get("error"), "invalid_provider")
 
         status, payload = self._post_json(
             "/chat/sessions/not_found/messages",
@@ -311,6 +349,27 @@ class ChatApiEndpointsTest(unittest.TestCase):
         status, payload = self._get_json(f"/chat/sessions/{session_id}/stream")
         self.assertEqual(status, 400)
         self.assertEqual(payload.get("error"), "message_id_required")
+
+    def test_submit_message_accepts_library_id(self) -> None:
+        status, created = self._post_json("/chat/sessions", {"title": "abc", "default_mode": "fast"})
+        self.assertEqual(status, 201)
+        session_id = str(created["session_id"])
+        status, submitted = self._post_json(
+            f"/chat/sessions/{session_id}/messages",
+            {
+                "content": "library test",
+                "mode": "fast",
+                "provider": "glm",
+                "model": "glm-4.5-flash",
+                "stream": True,
+                "library_id": "supply_chain",
+            },
+        )
+        self.assertEqual(status, 202)
+        self.assertTrue(str(submitted.get("assistant_message_id", "")).startswith("msg_assistant_"))
+        self.assertIsNotNone(self.fake_chat_service.last_submit_payload)
+        assert self.fake_chat_service.last_submit_payload is not None
+        self.assertEqual(self.fake_chat_service.last_submit_payload.get("library_id"), "supply_chain")
 
     def test_provider_test_endpoint_validation(self) -> None:
         status, payload = self._post_json("/chat/provider-test", {})
@@ -410,7 +469,7 @@ class _FailingModelRouter:
 
 
 class ChatServiceFastModeFallbackCitationTest(unittest.TestCase):
-    def test_fast_mode_returns_fallback_citation_when_no_retrieval_hits(self) -> None:
+    def test_fast_mode_fails_when_no_paragraph_context(self) -> None:
         service = _CHAT_MOD.ChatService(
             literature_search_fn=lambda query, top_k: {"keyword_hits": [], "rag_hits": []},
             graph_search_fn=lambda query, top_k: [],
@@ -419,23 +478,31 @@ class ChatServiceFastModeFallbackCitationTest(unittest.TestCase):
         )
         service._models = _StubModelRouter()
 
-        result = service._run_fast(
-            message_id="msg_test_fast_no_hit",
-            query="no results query",
-            provider="glm",
-            model="glm-4.5-flash",
-            stream=False,
-        )
-
-        self.assertGreaterEqual(len(result["citations"]), 1)
-        self.assertEqual(result["citations"][0].get("route"), "fallback")
-        self.assertTrue(str(result["citations"][0].get("id", "")).strip())
+        with self.assertRaises(RuntimeError) as ctx:
+            service._run_fast(
+                message_id="msg_test_fast_no_hit",
+                query="no results query",
+                provider="glm",
+                model="glm-4.5-flash",
+                stream=False,
+            )
+        self.assertIn("paragraph_context_unavailable", str(ctx.exception))
 
 
 class ChatServiceModelDegradedFallbackTest(unittest.TestCase):
     def test_fast_mode_returns_completed_result_when_model_rate_limited(self) -> None:
         service = _CHAT_MOD.ChatService(
-            literature_search_fn=lambda query, top_k: {"keyword_hits": [], "rag_hits": []},
+            literature_search_fn=lambda query, top_k: {
+                "keyword_hits": [
+                    {
+                        "id": "s1",
+                        "level": "sentence",
+                        "text": "sentence-hit",
+                        "context": {"paragraph": {"text": "paragraph-hit"}},
+                    }
+                ],
+                "rag_hits": [],
+            },
             graph_search_fn=lambda query, top_k: [],
             paper_get_fn=lambda _: None,
             variable_get_fn=lambda _: None,

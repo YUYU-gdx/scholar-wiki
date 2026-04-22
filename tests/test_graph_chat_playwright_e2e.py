@@ -91,7 +91,10 @@ class GraphChatPlaywrightE2ETest(unittest.TestCase):
 
         citations = self.page.locator("[data-testid='message-citations']").last
         citations.wait_for()
-        self.assertIn("c1", citations.inner_text())
+        self.assertIn("参考文献", citations.inner_text())
+        citations.click()
+        self.page.locator(".citation-item-btn").first.click()
+        self.page.wait_for_selector("[data-testid='citation-modal']")
 
     def test_return_to_graph_from_chat(self) -> None:
         self._goto_chat()

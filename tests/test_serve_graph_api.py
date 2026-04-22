@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import socket
 import sys
@@ -38,7 +39,12 @@ class ServeGraphApiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         tmp_path = Path(self.tmp.name)
+        self._old_codex_cfg = os.environ.get("CHAT_CODEX_CONFIG_PATH")
+        os.environ["CHAT_CODEX_CONFIG_PATH"] = str(tmp_path / "codex_runner_config.json")
         (tmp_path / "index.html").write_text("<html><body>ok</body></html>", encoding="utf-8")
+        workbench_dir = tmp_path / "workbench"
+        workbench_dir.mkdir(parents=True, exist_ok=True)
+        (workbench_dir / "index.html").write_text("<html><body data-testid='workbench-marker'>workbench</body></html>", encoding="utf-8")
 
         self.views = {
             "meta": {"paper_count": 1},
@@ -117,7 +123,31 @@ class ServeGraphApiTest(unittest.TestCase):
                 _ = query, top_k, levels, keyword_weight, rag_weight, library_id
                 return {"answer": "mock-answer", "citations": [{"id": "m1"}], "retrieval": {"merged_hits": [{"id": "m1"}]}}
 
-        handler = make_handler(self.views, tmp_path, literature_service=_FakeLiteratureService())
+        class _FakeWorkspaceLayoutStore:
+            def __init__(self) -> None:
+                self.items: dict[str, dict[str, object]] = {}
+
+            def list_layouts(self) -> dict[str, object]:
+                return {"layouts": [{"name": k, "updated_at": "now"} for k in sorted(self.items.keys())]}
+
+            def get_layout(self, name: str = "default") -> dict[str, object] | None:
+                row = self.items.get(name)
+                if row is None:
+                    return None
+                return {"name": name, "layout": row.get("layout", {}), "updated_at": "now"}
+
+            def save_layout(self, name: str, layout: dict[str, object]) -> dict[str, object]:
+                self.items[name] = {"layout": layout}
+                return {"name": name, "layout": layout, "updated_at": "now"}
+
+        self.workspace_store = _FakeWorkspaceLayoutStore()
+        handler = make_handler(
+            self.views,
+            tmp_path,
+            workbench_frontend_dir=workbench_dir,
+            literature_service=_FakeLiteratureService(),
+            workspace_layout_store=self.workspace_store,
+        )
         self.port = _free_port()
         self.server = ThreadingHTTPServer(("127.0.0.1", self.port), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -125,6 +155,10 @@ class ServeGraphApiTest(unittest.TestCase):
         time.sleep(0.05)
 
     def tearDown(self) -> None:
+        if self._old_codex_cfg is None:
+            os.environ.pop("CHAT_CODEX_CONFIG_PATH", None)
+        else:
+            os.environ["CHAT_CODEX_CONFIG_PATH"] = self._old_codex_cfg
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=1)
@@ -214,6 +248,7 @@ class ServeGraphApiTest(unittest.TestCase):
         finally:
             sys.argv = orig_argv
         self.assertEqual(args.frontend_dir, Path("frontend/graph_3d"))
+        self.assertEqual(args.workbench_frontend_dir, Path("frontend/workbench_spa"))
 
     def test_literature_search_endpoint_returns_two_routes_and_merged(self) -> None:
         payload = self._get_json("/literature/search?query=test&top_k=3&levels=sentence,paragraph&include_expanded_context=true")
@@ -230,6 +265,71 @@ class ServeGraphApiTest(unittest.TestCase):
         payload = self._post_json("/literature/answer", {"query": "What?"})
         self.assertEqual(payload["answer"], "mock-answer")
         self.assertGreaterEqual(len(payload["citations"]), 1)
+
+    def test_literature_libraries_endpoint_scans_index_root(self) -> None:
+        libraries_root = Path(self.tmp.name) / "libraries"
+        libraries_root.mkdir(parents=True, exist_ok=True)
+        (libraries_root / "lib_a.json").write_text(
+            json.dumps(
+                {
+                    "library_id": "lib_a",
+                    "paper_count": 12,
+                    "updated_at": "2026-04-22 10:00:00",
+                    "paper_ids": ["p1", "p2"],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (libraries_root / "invalid.json").write_text("{not-json", encoding="utf-8")
+        old_val = os.environ.get("LITERATURE_LIBRARY_INDEX_ROOT")
+        os.environ["LITERATURE_LIBRARY_INDEX_ROOT"] = str(libraries_root)
+        try:
+            payload = self._get_json("/literature/libraries")
+        finally:
+            if old_val is None:
+                os.environ.pop("LITERATURE_LIBRARY_INDEX_ROOT", None)
+            else:
+                os.environ["LITERATURE_LIBRARY_INDEX_ROOT"] = old_val
+        self.assertIn("libraries", payload)
+        self.assertEqual(len(payload["libraries"]), 1)
+        self.assertEqual(payload["libraries"][0]["library_id"], "lib_a")
+        self.assertIn("workspace_path", payload["libraries"][0])
+        self.assertEqual(payload["default_library_id"], "lib_a")
+
+    def test_workspace_layout_api_supports_save_get_and_list(self) -> None:
+        saved = self._post_json("/api/v2/workspace/layout", {"name": "demo", "layout": {"content": [{"type": "row"}]}})
+        self.assertEqual(saved["name"], "demo")
+        self.assertIn("layout", saved)
+        fetched = self._get_json("/api/v2/workspace/layout?name=demo")
+        self.assertEqual(fetched["name"], "demo")
+        self.assertIn("content", fetched["layout"])
+        listed = self._get_json("/api/v2/workspace/layouts")
+        names = [str(x.get("name", "")) for x in listed.get("layouts", [])]
+        self.assertIn("demo", names)
+
+    def test_codex_config_endpoint_supports_get_and_save(self) -> None:
+        got = self._get_json("/chat/codex/config")
+        self.assertIn("config", got)
+        payload = {
+            "cli_command": "codex",
+            "cli_args": ["exec", "--cwd", "{workdir}", "{prompt}"],
+            "healthcheck_args": ["--version"],
+            "timeout_seconds": 120,
+            "install_command": "npm install -g @openai/codex",
+            "extra_env": {"A": "B"},
+        }
+        saved = self._post_json("/chat/codex/config", payload)
+        self.assertTrue(bool(saved.get("ok")))
+        got2 = self._get_json("/chat/codex/config")
+        cfg = got2.get("config", {})
+        self.assertEqual(cfg.get("cli_command"), "codex")
+        self.assertEqual(cfg.get("timeout_seconds"), 120)
+
+    def test_workbench_frontend_entry_is_served(self) -> None:
+        with urlopen(f"http://127.0.0.1:{self.port}/frontend/workbench/") as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+        self.assertIn("workbench-marker", html)
 
     def test_relation_summary_uses_readable_chinese_label_for_moderation(self) -> None:
         payload = relation_summary_from_mention(
@@ -323,6 +423,81 @@ class ServeGraphApiLiteratureDegradedTest(unittest.TestCase):
         self.assertIn("answer", payload)
         self.assertEqual(payload.get("citations"), [])
         self.assertEqual(payload.get("retrieval", {}).get("merged_hits"), [])
+
+
+class ServeGraphApiWorkspaceFallbackTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        tmp_path = Path(self.tmp.name)
+        (tmp_path / "index.html").write_text("<html><body>ok</body></html>", encoding="utf-8")
+        views = {
+            "meta": {"paper_count": 0},
+            "nodes": {},
+            "edges": [],
+            "edge_index_by_node": {},
+            "overview": {"node_ids": [], "edge_indexes": []},
+            "paper_map": {},
+        }
+        self._orig_workspace_loader = _MOD._load_workspace_layout_store_class
+
+        def _raise_loader():
+            raise RuntimeError("synthetic_workspace_loader_error")
+
+        _MOD._load_workspace_layout_store_class = _raise_loader
+        handler = make_handler(views, tmp_path, literature_service=object(), chat_service=object(), workspace_layout_store=None)
+        self.port = _free_port()
+        self.server = ThreadingHTTPServer(("127.0.0.1", self.port), handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        time.sleep(0.05)
+
+    def tearDown(self) -> None:
+        _MOD._load_workspace_layout_store_class = self._orig_workspace_loader
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=1)
+        self.tmp.cleanup()
+
+    def _get_json(self, path: str) -> tuple[int, dict]:
+        try:
+            with urlopen(f"http://127.0.0.1:{self.port}{path}") as resp:
+                raw = resp.read().decode("utf-8")
+                return int(resp.status), json.loads(raw)
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            return int(exc.code), json.loads(body or "{}")
+
+    def _post_json(self, path: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = __import__("urllib.request", fromlist=["Request"]).Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(req) as resp:
+                raw = resp.read().decode("utf-8")
+                return int(resp.status), json.loads(raw)
+        except HTTPError as exc:
+            raw = exc.read().decode("utf-8")
+            return int(exc.code), json.loads(raw or "{}")
+
+    def test_workspace_layout_routes_work_with_in_memory_fallback(self) -> None:
+        status, listed = self._get_json("/api/v2/workspace/layouts")
+        self.assertEqual(status, 200)
+        self.assertTrue(bool(listed.get("degraded")))
+        self.assertIn("degraded_reason", listed)
+
+        status, saved = self._post_json("/api/v2/workspace/layout", {"name": "default", "layout": {"nodes": []}})
+        self.assertEqual(status, 200)
+        self.assertTrue(bool(saved.get("degraded")))
+        self.assertEqual(saved.get("name"), "default")
+
+        status, loaded = self._get_json("/api/v2/workspace/layout?name=default")
+        self.assertEqual(status, 200)
+        self.assertTrue(bool(loaded.get("degraded")))
+        self.assertEqual(loaded.get("name"), "default")
 
 
 if __name__ == "__main__":

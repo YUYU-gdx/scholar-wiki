@@ -1,59 +1,56 @@
 ﻿(function () {
   "use strict";
 
-  const FALLBACK_PROVIDER_CONFIG = {
-    default_provider: "zhipu",
-    providers: [
-      {
-        id: "zhipu",
-        type: "zhipu",
-        aliases: ["glm"],
-        api_key_env: "ZHIPU_API_KEY",
-        default_model: "glm-4.5-flash",
-        models: ["glm-4.5-flash", "glm-4.5", "glm-4.5-air"],
-        base_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-        timeout_seconds: 120
-      },
-      {
-        id: "deepseek",
-        type: "openai_compatible",
-        aliases: [],
-        api_key_env: "DEEPSEEK_API_KEY",
-        default_model: "deepseek-chat",
-        models: ["deepseek-chat", "deepseek-reasoner"],
-        base_url: "https://api.deepseek.com/v1/chat/completions",
-        timeout_seconds: 90
-      }
-    ]
+  const LABELS = {
+    newSession: "新会话",
+    thinking: "思考中...",
+    failed: "失败",
+    unknownError: "unknown",
+    defaultLibrary: "默认文献库"
   };
 
-  const labels = {
-    newSession: "鏂颁細璇?,
-    thinking: "鎬濊€冧腑...",
-    failed: "澶辫触",
-    unknownError: "unknown",
-    statusPrefix: "鐘舵€?,
-    citationPrefix: "寮曠敤"
+  const STAGE_LABELS = {
+    ready: "就绪",
+    rewrite: "正在整理问题",
+    retrieve: "正在检索段落证据",
+    generate: "正在生成回答",
+    failed: "失败",
+    done: "完成"
   };
+
+  const LIBRARY_STORAGE_KEY = "kn_chat_selected_library_id";
 
   const els = {
     newSession: document.getElementById("new-session-btn"),
-    providerSettingsBtn: document.getElementById("provider-settings-btn"),
+    settingsBtn: document.getElementById("provider-settings-btn"),
     sessionList: document.getElementById("session-list"),
     feed: document.getElementById("chat-feed"),
-    mode: document.getElementById("mode-select"),
-    provider: document.getElementById("provider-select"),
-    modelSelect: document.getElementById("model-select"),
-    modelInput: document.getElementById("model-input"),
+    librarySelect: document.getElementById("library-select"),
     prompt: document.getElementById("prompt-input"),
     send: document.getElementById("send-btn"),
-    providerModal: document.getElementById("provider-modal"),
-    providerModalClose: document.getElementById("provider-modal-close"),
-    defaultProviderSelect: document.getElementById("default-provider-select"),
-    providerRows: document.getElementById("provider-rows"),
-    addProviderBtn: document.getElementById("add-provider-btn"),
-    saveProviderConfigBtn: document.getElementById("save-provider-config-btn"),
-    providerSaveStatus: document.getElementById("provider-save-status")
+    chatStatusStrip: document.getElementById("chat-status-strip"),
+
+    settingsModal: document.getElementById("provider-modal"),
+    settingsClose: document.getElementById("provider-modal-close"),
+    saveConfigBtn: document.getElementById("save-provider-config-btn"),
+    saveStatus: document.getElementById("provider-save-status"),
+    codexHealthBtn: document.getElementById("codex-health-btn"),
+    codexInstallBtn: document.getElementById("codex-install-btn"),
+    codexCliCommand: document.getElementById("codex-cli-command"),
+    codexCliArgs: document.getElementById("codex-cli-args"),
+    codexHealthcheckArgs: document.getElementById("codex-healthcheck-args"),
+    codexInstallCommand: document.getElementById("codex-install-command"),
+    codexTimeoutSeconds: document.getElementById("codex-timeout-seconds"),
+    codexExtraEnv: document.getElementById("codex-extra-env"),
+
+    citationModal: document.getElementById("citation-modal"),
+    citationModalClose: document.getElementById("citation-modal-close"),
+    citationSentence: document.getElementById("citation-sentence"),
+    citationParagraph: document.getElementById("citation-paragraph"),
+
+    undoToast: document.getElementById("undo-toast"),
+    undoToastText: document.getElementById("undo-toast-text"),
+    undoDeleteBtn: document.getElementById("undo-delete-btn")
   };
 
   let currentSessionId = "";
@@ -61,198 +58,135 @@
   let currentWatchTimer = null;
   let currentReconnectTimer = null;
   let isSending = false;
-  let providerConfig = JSON.parse(JSON.stringify(FALLBACK_PROVIDER_CONFIG));
+  let pendingDelete = null;
+
+  function jfetch(url, options) {
+    return fetch(
+      url,
+      Object.assign({ headers: { "Content-Type": "application/json" } }, options || {})
+    ).then(async function (resp) {
+      const payload = await resp.json().catch(function () {
+        return {};
+      });
+      if (!resp.ok) {
+        const msg = payload && payload.error ? payload.error : (payload && payload.reason ? payload.reason : "http_" + resp.status);
+        throw new Error(msg);
+      }
+      return payload;
+    });
+  }
+
+  function fmtNow() {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    return hh + ":" + mm + ":" + ss;
+  }
 
   function setSendingState(next) {
     isSending = !!next;
     els.send.disabled = isSending;
+    els.prompt.disabled = isSending;
   }
 
-  async function jfetch(url, options) {
-    const resp = await fetch(
-      url,
-      Object.assign({ headers: { "Content-Type": "application/json" } }, options || {})
-    );
-    const payload = await resp.json().catch(function () {
-      return {};
-    });
-    if (!resp.ok) {
-      throw new Error(payload.error || ("http_" + resp.status));
-    }
-    return payload;
-  }
-
-  function splitCsv(raw) {
-    return String(raw || "")
-      .split(",")
-      .map(function (x) {
-        return x.trim();
-      })
-      .filter(Boolean);
-  }
-
-  function sanitizeProviderItem(item) {
-    const out = Object.assign({}, item || {});
-    out.id = String(out.id || "").trim().toLowerCase();
-    out.type = String(out.type || "openai_compatible").trim().toLowerCase();
-    out.aliases = splitCsv(Array.isArray(out.aliases) ? out.aliases.join(",") : out.aliases).map(function (v) {
-      return v.toLowerCase();
-    });
-    out.api_key_env = String(out.api_key_env || "").trim();
-    out.default_model = String(out.default_model || "").trim();
-    out.models = splitCsv(Array.isArray(out.models) ? out.models.join(",") : out.models);
-    if (out.default_model && out.models.indexOf(out.default_model) < 0) {
-      out.models.unshift(out.default_model);
-    }
-    if (!out.default_model && out.models.length > 0) {
-      out.default_model = out.models[0];
-    }
-    out.base_url = String(out.base_url || "").trim();
-    out.timeout_seconds = Number(out.timeout_seconds || 90);
-    if (!Number.isFinite(out.timeout_seconds) || out.timeout_seconds <= 0) {
-      out.timeout_seconds = 90;
-    }
-    return out;
-  }
-
-  function sanitizeProviderConfig(payload) {
-    const rawProviders = Array.isArray(payload && payload.providers) ? payload.providers : [];
-    const providers = rawProviders.map(sanitizeProviderItem).filter(function (x) {
-      return !!x.id;
-    });
-    const fallback = JSON.parse(JSON.stringify(FALLBACK_PROVIDER_CONFIG));
-    const next = {
-      default_provider: String((payload && payload.default_provider) || "").trim().toLowerCase(),
-      providers: providers.length ? providers : fallback.providers
-    };
-    if (!next.default_provider) {
-      next.default_provider = next.providers[0] ? next.providers[0].id : "zhipu";
-    }
-    const knownIds = new Set(
-      next.providers.map(function (p) {
-        return p.id;
-      })
-    );
-    if (!knownIds.has(next.default_provider)) {
-      next.default_provider = next.providers[0] ? next.providers[0].id : "zhipu";
-    }
-    return next;
-  }
-
-  function findProviderItem(providerId) {
-    const id = String(providerId || "").trim().toLowerCase();
-    return (providerConfig.providers || []).find(function (p) {
-      if (p.id === id) {
-        return true;
-      }
-      return Array.isArray(p.aliases) && p.aliases.indexOf(id) >= 0;
-    });
-  }
-
-  function getDefaultModelByProvider(providerId) {
-    const hit = findProviderItem(providerId);
-    return hit && hit.default_model ? hit.default_model : "glm-4.5-flash";
-  }
-
-  function refreshModelSelector() {
-    const providerId = String(els.provider.value || "").trim().toLowerCase();
-    const item = findProviderItem(providerId);
-    const selected = String(els.modelSelect.value || "").trim();
-    const customValue = String(els.modelInput.value || "").trim();
-    const models = item && Array.isArray(item.models) ? item.models : [];
-    const nextDefault = item && item.default_model ? item.default_model : "";
-
-    els.modelSelect.innerHTML = "";
-    models.forEach(function (model) {
-      const option = document.createElement("option");
-      option.value = model;
-      option.textContent = model;
-      els.modelSelect.appendChild(option);
-    });
-    const customOption = document.createElement("option");
-    customOption.value = "__custom__";
-    customOption.textContent = "鑷畾涔夋ā鍨?;
-    els.modelSelect.appendChild(customOption);
-
-    if (selected && models.indexOf(selected) >= 0) {
-      els.modelSelect.value = selected;
-      els.modelInput.classList.add("hidden");
+  function setChatStage(stage, detail) {
+    const key = String(stage || "done");
+    const base = STAGE_LABELS[key] || STAGE_LABELS.ready;
+    const extra = String(detail || "").trim();
+    if (key === "done") {
+      els.chatStatusStrip.textContent = STAGE_LABELS.done;
       return;
     }
-
-    if (customValue && models.indexOf(customValue) < 0) {
-      els.modelSelect.value = "__custom__";
-      els.modelInput.classList.remove("hidden");
+    if (key === "failed") {
+      els.chatStatusStrip.textContent = extra ? (STAGE_LABELS.failed + ": " + extra) : STAGE_LABELS.failed;
       return;
     }
-
-    if (nextDefault && models.indexOf(nextDefault) >= 0) {
-      els.modelSelect.value = nextDefault;
-      els.modelInput.value = "";
-      els.modelInput.classList.add("hidden");
-      return;
-    }
-
-    if (models.length > 0) {
-      els.modelSelect.value = models[0];
-      els.modelInput.value = "";
-      els.modelInput.classList.add("hidden");
-      return;
-    }
-
-    els.modelSelect.value = "__custom__";
-    els.modelInput.classList.remove("hidden");
-    if (!els.modelInput.value) {
-      els.modelInput.value = "custom-model";
-    }
+    els.chatStatusStrip.textContent = extra ? (base + " · " + extra) : base;
   }
 
-  function getSelectedModel() {
-    if (els.modelSelect.value === "__custom__") {
-      return String(els.modelInput.value || "").trim();
-    }
-    return String(els.modelSelect.value || "").trim();
+  function getSelectedLibraryId() {
+    return String((els.librarySelect && els.librarySelect.value) || "").trim();
   }
 
-  function refreshProviderSelectOptions() {
-    const selected = String(els.provider.value || "").trim().toLowerCase();
-    els.provider.innerHTML = "";
-    (providerConfig.providers || []).forEach(function (item) {
-      const option = document.createElement("option");
-      option.value = item.id;
-      option.textContent = item.id + " (" + item.type + ")";
-      els.provider.appendChild(option);
-    });
-    const currentIds = new Set(
-      (providerConfig.providers || []).map(function (p) {
-        return p.id;
-      })
-    );
-    if (selected && currentIds.has(selected)) {
-      els.provider.value = selected;
-    } else {
-      els.provider.value = providerConfig.default_provider || "";
-    }
-    refreshModelSelector();
-  }
-
-  async function loadProviderConfig() {
+  function saveSelectedLibraryId(libraryId) {
     try {
-      const payload = await jfetch("/chat/provider-config");
-      providerConfig = sanitizeProviderConfig(payload);
-    } catch (err) {
-      console.warn("load provider config failed, fallback to local defaults", err);
-      providerConfig = JSON.parse(JSON.stringify(FALLBACK_PROVIDER_CONFIG));
-    }
-    refreshProviderSelectOptions();
+      localStorage.setItem(LIBRARY_STORAGE_KEY, String(libraryId || "").trim());
+    } catch (_err) {}
   }
 
-  function setProviderSaveStatus(text, isError) {
-    els.providerSaveStatus.textContent = text || "";
-    els.providerSaveStatus.style.color = isError ? "#f07178" : "";
+  function renderLibraryOptions(libraries, defaultLibraryId) {
+    const rows = Array.isArray(libraries) ? libraries : [];
+    els.librarySelect.innerHTML = "";
+
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = LABELS.defaultLibrary;
+    els.librarySelect.appendChild(defaultOption);
+
+    rows.forEach(function (item) {
+      const option = document.createElement("option");
+      option.value = String(item.library_id || "").trim();
+      const count = Number(item.paper_count || 0);
+      option.textContent = option.value + " (" + count + ")";
+      els.librarySelect.appendChild(option);
+    });
+
+    let remembered = "";
+    try {
+      remembered = String(localStorage.getItem(LIBRARY_STORAGE_KEY) || "").trim();
+    } catch (_err) {
+      remembered = "";
+    }
+    const preferred = remembered || String(defaultLibraryId || "").trim();
+    if (preferred) {
+      const hit = rows.some(function (x) {
+        return String(x.library_id || "").trim() === preferred;
+      });
+      els.librarySelect.value = hit ? preferred : "";
+    }
+    saveSelectedLibraryId(getSelectedLibraryId());
+  }
+
+  function loadLibraries() {
+    return jfetch("/literature/libraries")
+      .then(function (payload) {
+        renderLibraryOptions(payload.libraries || [], payload.default_library_id || "");
+      })
+      .catch(function () {
+        renderLibraryOptions([], "");
+      });
+  }
+
+  function closeStream() {
+    if (currentStream) {
+      currentStream.close();
+      currentStream = null;
+    }
+  }
+
+  function stopReconnectTimer() {
+    if (currentReconnectTimer) {
+      window.clearTimeout(currentReconnectTimer);
+      currentReconnectTimer = null;
+    }
+  }
+
+  function stopCompletionWatch() {
+    if (currentWatchTimer) {
+      window.clearInterval(currentWatchTimer);
+      currentWatchTimer = null;
+    }
   }
 
   function addMessage(role, text, meta) {
+    const row = document.createElement("div");
+    row.className = "msg-row " + (role === "user" ? "user" : "assistant");
+
+    const avatar = document.createElement("div");
+    avatar.className = "msg-avatar";
+    avatar.textContent = role === "user" ? "U" : "AI";
+
     const node = document.createElement("div");
     node.className = "msg " + (role === "user" ? "msg-user" : "msg-assistant");
     node.setAttribute("data-testid", role === "user" ? "message-user" : "message-assistant");
@@ -265,134 +199,309 @@
     content.textContent = text || "";
     node.appendChild(content);
 
-    if (meta) {
-      const m = document.createElement("div");
-      m.className = "meta";
-      m.textContent = meta;
-      node.appendChild(m);
+    const metaRow = document.createElement("div");
+    metaRow.className = "msg-meta-row";
+    const metaEl = document.createElement("div");
+    metaEl.className = "meta";
+    metaEl.textContent = meta || "";
+    const timeEl = document.createElement("div");
+    timeEl.className = "msg-time";
+    timeEl.textContent = fmtNow();
+    metaRow.appendChild(metaEl);
+    metaRow.appendChild(timeEl);
+    node.appendChild(metaRow);
+
+    if (role === "user") {
+      row.appendChild(node);
+      row.appendChild(avatar);
+    } else {
+      row.appendChild(avatar);
+      row.appendChild(node);
     }
 
-    els.feed.appendChild(node);
+    els.feed.appendChild(row);
     els.feed.scrollTop = els.feed.scrollHeight;
     return node;
   }
 
-  function renderSessions(items) {
-    els.sessionList.innerHTML = "";
-    (items || []).forEach(function (s) {
-      const div = document.createElement("button");
-      div.type = "button";
-      div.className = "session-item" + (s.session_id === currentSessionId ? " active" : "");
-      div.setAttribute("data-testid", "session-item");
-      div.setAttribute("data-session-id", s.session_id || "");
-      div.textContent = (s.title || labels.newSession) + " (" + (s.default_mode || "fast") + ")";
-      div.onclick = function () {
-        openSession(s.session_id).catch(function (err) {
-          console.error(err);
-        });
-      };
-      els.sessionList.appendChild(div);
-    });
-  }
-
-  async function refreshSessions() {
-    const payload = await jfetch("/chat/sessions");
-    renderSessions(payload.sessions || []);
-  }
-
-  async function createSession(title) {
-    const payload = await jfetch("/chat/sessions", {
-      method: "POST",
-      body: JSON.stringify({ title: title || labels.newSession, default_mode: "fast" })
-    });
-    currentSessionId = payload.session_id || "";
-    await refreshSessions();
-    await openSession(currentSessionId);
-  }
-
-  async function openSession(sessionId) {
-    currentSessionId = sessionId;
-    await refreshSessions();
-    els.feed.innerHTML = "";
-    const payload = await jfetch("/chat/sessions/" + encodeURIComponent(sessionId));
-    const msgs = payload.messages || [];
-    msgs.forEach(function (m) {
-      const meta = m.role === "assistant" && m.status ? (labels.statusPrefix + ": " + m.status) : "";
-      addMessage(m.role || "assistant", m.content || "", meta);
-    });
-    if (payload.session && payload.session.default_mode) {
-      els.mode.value = payload.session.default_mode;
-    }
-  }
-
-  function closeStream() {
-    if (!currentStream) {
-      return;
-    }
-    currentStream.close();
-    currentStream = null;
-  }
-
-  function stopReconnectTimer() {
-    if (currentReconnectTimer) {
-      clearTimeout(currentReconnectTimer);
-      currentReconnectTimer = null;
-    }
-  }
-
-  function stopCompletionWatch() {
-    if (currentWatchTimer) {
-      clearInterval(currentWatchTimer);
-      currentWatchTimer = null;
-    }
+  function openCitationModal(citation) {
+    const c = citation && typeof citation === "object" ? citation : {};
+    const context = c.context && typeof c.context === "object" ? c.context : {};
+    const sentence = context.sentence && typeof context.sentence === "object" ? context.sentence : {};
+    const paragraph = context.paragraph && typeof context.paragraph === "object" ? context.paragraph : {};
+    const sentenceText = String(sentence.text || c.text || "未找到句子证据").trim();
+    const paragraphText = String(paragraph.text || c.text || "未找到段落证据").trim();
+    els.citationSentence.textContent = sentenceText;
+    els.citationParagraph.textContent = paragraphText;
+    els.citationModal.classList.remove("hidden");
   }
 
   function renderCitations(targetBubble, citations) {
-    if (!citations || !citations.length) {
-      return;
+    if (!Array.isArray(citations) || citations.length === 0) return;
+    if (targetBubble.querySelector(".citation-drawer")) return;
+    const drawer = document.createElement("details");
+    drawer.className = "citation-drawer";
+    const summary = document.createElement("summary");
+    summary.setAttribute("data-testid", "message-citations");
+    summary.textContent = "引用证据 (" + citations.length + ")";
+    drawer.appendChild(summary);
+
+    const list = document.createElement("div");
+    list.className = "citation-list";
+    citations.forEach(function (item, idx) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "citation-item-btn";
+      const title = String(item.title || item.id || item.paper_id || ("ref_" + (idx + 1))).trim();
+      const snippet = String(item.text || "").trim().slice(0, 120);
+      btn.innerHTML =
+        '<div class="citation-item-title">[' + (idx + 1) + "] " + title + "</div>" +
+        '<div class="citation-item-snippet">' + (snippet || "点击查看片段详情") + "</div>";
+      btn.onclick = function () {
+        openCitationModal(item);
+      };
+      list.appendChild(btn);
+    });
+    drawer.appendChild(list);
+    targetBubble.appendChild(drawer);
+  }
+
+  function renderToolTrace(targetBubble, toolTrace) {
+    if (!Array.isArray(toolTrace) || toolTrace.length === 0) return;
+    if (targetBubble.querySelector(".tool-trace-drawer")) return;
+
+    const drawer = document.createElement("details");
+    drawer.className = "tool-trace-drawer";
+
+    const summary = document.createElement("summary");
+    summary.className = "tool-trace-summary";
+    summary.textContent = "执行轨迹 (" + toolTrace.length + ")";
+    drawer.appendChild(summary);
+
+    const list = document.createElement("div");
+    list.className = "tool-trace-list";
+
+    toolTrace.forEach(function (entry, idx) {
+      const item = entry && typeof entry === "object" ? entry : {};
+      const row = document.createElement("div");
+      row.className = "tool-trace-item";
+      const header = document.createElement("div");
+      header.className = "tool-trace-item-header";
+      const stepName = String(item.step_id || item.tool || ("step_" + (idx + 1))).trim();
+      const status = [String(item.backend || "").trim(), String(item.state || "").trim()].filter(Boolean).join(" · ");
+      header.textContent = status ? (stepName + " (" + status + ")") : stepName;
+      row.appendChild(header);
+
+      const summaryText = String(item.summary || "").trim();
+      if (summaryText) {
+        const s = document.createElement("div");
+        s.className = "tool-trace-item-summary";
+        s.textContent = summaryText;
+        row.appendChild(s);
+      }
+
+      const outputText = String(item.output_summary || item.output_excerpt || "").trim();
+      if (outputText) {
+        const o = document.createElement("div");
+        o.className = "tool-trace-item-output";
+        o.textContent = outputText;
+        row.appendChild(o);
+      }
+      list.appendChild(row);
+    });
+
+    drawer.appendChild(list);
+    targetBubble.appendChild(drawer);
+  }
+
+  function renderSessions(payload) {
+    const sessions = Array.isArray(payload && payload.sessions) ? payload.sessions : [];
+    els.sessionList.innerHTML = "";
+    sessions.forEach(function (item) {
+      const sid = String(item.session_id || "").trim();
+      const row = document.createElement("div");
+      row.className = "session-row";
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "session-item" + (sid === currentSessionId ? " active" : "");
+      btn.textContent = String(item.title || LABELS.newSession);
+      btn.onclick = function () {
+        openSession(sid).catch(function () {});
+      };
+
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "session-delete-btn";
+      del.textContent = "✕";
+      del.onclick = function (evt) {
+        evt.stopPropagation();
+        deleteSession(sid).catch(function () {});
+      };
+
+      row.appendChild(btn);
+      row.appendChild(del);
+      els.sessionList.appendChild(row);
+    });
+  }
+
+  function refreshSessions() {
+    return jfetch("/chat/sessions").then(function (payload) {
+      renderSessions(payload || {});
+      return payload || {};
+    });
+  }
+
+  function openSession(sessionId) {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return Promise.resolve();
+    currentSessionId = sid;
+    closeStream();
+    stopReconnectTimer();
+    stopCompletionWatch();
+    return jfetch("/chat/sessions/" + encodeURIComponent(sid)).then(function (payload) {
+      els.feed.innerHTML = "";
+      const messages = Array.isArray(payload.messages) ? payload.messages : [];
+      messages.forEach(function (m) {
+        const role = String(m.role || "assistant").toLowerCase() === "user" ? "user" : "assistant";
+        const bubble = addMessage(role, String(m.content || ""));
+        if (role === "assistant") {
+          if (Array.isArray(m.citations) && m.citations.length) {
+            renderCitations(bubble, m.citations);
+          }
+          if (Array.isArray(m.tool_trace) && m.tool_trace.length) {
+            renderToolTrace(bubble, m.tool_trace);
+          }
+          const status = String(m.status || "").toLowerCase();
+          if (status === "completed") {
+            bubble.setAttribute("data-stream-status", "completed");
+          } else if (status === "failed") {
+            bubble.setAttribute("data-stream-status", "failed");
+          }
+        }
+      });
+      renderSessions({ sessions: [payload.session].concat([]) });
+      return refreshSessions();
+    });
+  }
+
+  function createSession(title) {
+    return jfetch("/chat/sessions", {
+      method: "POST",
+      body: JSON.stringify({ title: title || LABELS.newSession, default_mode: "agent" })
+    }).then(function (payload) {
+      const sid = String(payload.session_id || "").trim();
+      return refreshSessions().then(function () {
+        return openSession(sid);
+      });
+    });
+  }
+
+  function startUndoToast(sessionId, undoDeadlineIso) {
+    if (pendingDelete && pendingDelete.timer) {
+      window.clearTimeout(pendingDelete.timer);
     }
-    if (targetBubble.querySelector("[data-testid='message-citations']")) {
-      return;
-    }
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.setAttribute("data-testid", "message-citations");
-    meta.textContent =
-      labels.citationPrefix +
-      ": " +
-      citations
-        .map(function (c, i) {
-          return "[" + (i + 1) + "]" + (c.id || c.paper_id || "璇佹嵁");
-        })
-        .join("  ");
-    targetBubble.appendChild(meta);
+    const deadlineMs = Date.parse(String(undoDeadlineIso || ""));
+    const now = Date.now();
+    const ttl = Number.isFinite(deadlineMs) ? Math.max(1000, deadlineMs - now) : 5000;
+    pendingDelete = {
+      sessionId: String(sessionId || ""),
+      timer: window.setTimeout(function () {
+        els.undoToast.classList.add("hidden");
+        pendingDelete = null;
+      }, ttl)
+    };
+    els.undoToastText.textContent = "会话已删除";
+    els.undoToast.classList.remove("hidden");
+  }
+
+  function deleteSession(sessionId) {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return Promise.resolve();
+    return fetch("/chat/sessions/" + encodeURIComponent(sid), { method: "DELETE" })
+      .then(function (resp) {
+        return resp.json().then(function (payload) {
+          if (!resp.ok) throw new Error(payload.error || "delete_failed");
+          return payload;
+        });
+      })
+      .then(function (payload) {
+        if (sid === currentSessionId) {
+          currentSessionId = "";
+          els.feed.innerHTML = "";
+        }
+        startUndoToast(sid, String(payload.undo_deadline || ""));
+        return refreshSessions();
+      });
+  }
+
+  function undoDeleteSession() {
+    if (!pendingDelete || !pendingDelete.sessionId) return Promise.resolve();
+    const sid = pendingDelete.sessionId;
+    return jfetch("/chat/sessions/" + encodeURIComponent(sid) + "/restore", { method: "POST", body: "{}" })
+      .then(function () {
+        if (pendingDelete && pendingDelete.timer) {
+          window.clearTimeout(pendingDelete.timer);
+        }
+        pendingDelete = null;
+        els.undoToast.classList.add("hidden");
+        return refreshSessions();
+      });
   }
 
   function attachStream(streamUrl, assistantMessageId) {
     closeStream();
     stopReconnectTimer();
     stopCompletionWatch();
-    const bubble = addMessage("assistant", labels.thinking);
+
+    const bubble = addMessage("assistant", LABELS.thinking);
     bubble.setAttribute("data-stream-status", "running");
     const content = bubble.querySelector(".msg-content");
     let acc = "";
+    let buffer = "";
+    let flushTimer = null;
     let reconnectAttempts = 0;
-    const maxReconnects = 4;
     let lastCursor = 0;
     let ended = false;
+    const liveTrace = [];
+
+    function flushBuffer() {
+      if (!buffer) return;
+      acc += buffer;
+      buffer = "";
+      content.textContent = acc || LABELS.thinking;
+      els.feed.scrollTop = els.feed.scrollHeight;
+    }
+
+    function scheduleFlush() {
+      if (flushTimer) return;
+      flushTimer = window.setTimeout(function () {
+        flushTimer = null;
+        flushBuffer();
+      }, 60);
+    }
 
     function finishCompleted(payload) {
-      if (ended) {
-        return;
-      }
+      if (ended) return;
       ended = true;
+      if (flushTimer) {
+        window.clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      flushBuffer();
       if (payload.answer) {
         content.textContent = payload.answer;
       }
-      if (payload.citations && payload.citations.length) {
+      if (Array.isArray(payload.citations) && payload.citations.length) {
         renderCitations(bubble, payload.citations);
       }
+      const persistedTrace = Array.isArray(payload.tool_trace) ? payload.tool_trace : [];
+      const mergedTrace = persistedTrace.length ? persistedTrace : liveTrace;
+      if (mergedTrace.length) {
+        renderToolTrace(bubble, mergedTrace);
+      }
       bubble.setAttribute("data-stream-status", "completed");
+      setChatStage("done", "");
       closeStream();
       stopReconnectTimer();
       stopCompletionWatch();
@@ -400,377 +509,246 @@
       refreshSessions().catch(function () {});
     }
 
-    function finishFailed(errorText) {
-      if (ended) {
-        return;
-      }
+    function finishFailed(errorPayload) {
+      if (ended) return;
       ended = true;
-      content.textContent = labels.failed + ": " + (errorText || labels.unknownError);
+      if (flushTimer) {
+        window.clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      const payload = errorPayload && typeof errorPayload === "object" ? errorPayload : {};
+      const errorCode = String(payload.error_code || "").trim();
+      const backend = String(payload.backend || "").trim();
+      const text = typeof errorPayload === "string" ? errorPayload : String(payload.error || LABELS.unknownError);
+      const detail = [backend, errorCode].filter(Boolean).join("/");
+      content.textContent = LABELS.failed + ": " + (detail ? text + " [" + detail + "]" : text);
       bubble.setAttribute("data-stream-status", "failed");
+      setChatStage("failed", text);
       closeStream();
       stopReconnectTimer();
       stopCompletionWatch();
       setSendingState(false);
     }
 
-    function connectEventSource() {
-      if (ended || !isSending) {
-        return;
+    function onCursor(payload) {
+      const parsed = Number(payload.cursor);
+      if (!Number.isNaN(parsed) && parsed > lastCursor) {
+        lastCursor = parsed;
       }
+    }
+
+    function connectEventSource() {
+      if (ended || !isSending) return;
       const sep = streamUrl.indexOf("?") >= 0 ? "&" : "?";
-      const url = streamUrl + sep + "cursor=" + encodeURIComponent(String(lastCursor || 0));
-      const es = new EventSource(url);
+      const es = new EventSource(streamUrl + sep + "cursor=" + encodeURIComponent(String(lastCursor || 0)));
       currentStream = es;
 
       es.addEventListener("started", function () {
-        content.textContent = labels.thinking;
+        setChatStage("rewrite", "");
+      });
+
+      es.addEventListener("status", function (evt) {
+        const payload = JSON.parse(evt.data || "{}");
+        onCursor(payload);
+        const stage = String(payload.stage || "").trim() || "retrieve";
+        const label = String(payload.label || "").trim();
+        setChatStage(stage, label && label !== (STAGE_LABELS[stage] || "") ? label : "");
       });
 
       es.addEventListener("delta", function (evt) {
         const payload = JSON.parse(evt.data || "{}");
-        if (payload.cursor !== undefined && payload.cursor !== null) {
-          const parsed = Number(payload.cursor);
-          if (!Number.isNaN(parsed) && parsed > lastCursor) {
-            lastCursor = parsed;
-          }
+        onCursor(payload);
+        const chunk = String(payload.text || "");
+        if (chunk) {
+          buffer += chunk;
+          scheduleFlush();
         }
-        acc += payload.text || "";
-        content.textContent = acc || labels.thinking;
-        els.feed.scrollTop = els.feed.scrollHeight;
       });
 
-      es.addEventListener("citation", function (evt) {
+      es.addEventListener("tool_call", function (evt) {
         const payload = JSON.parse(evt.data || "{}");
-        if (payload.cursor !== undefined && payload.cursor !== null) {
-          const parsed = Number(payload.cursor);
-          if (!Number.isNaN(parsed) && parsed > lastCursor) {
-            lastCursor = parsed;
-          }
-        }
-        if (payload.citation) {
-          renderCitations(bubble, [payload.citation]);
-        }
+        onCursor(payload);
+        liveTrace.push(payload);
       });
 
       es.addEventListener("completed", function (evt) {
         const payload = JSON.parse(evt.data || "{}");
-        if (payload.cursor !== undefined && payload.cursor !== null) {
-          const parsed = Number(payload.cursor);
-          if (!Number.isNaN(parsed) && parsed > lastCursor) {
-            lastCursor = parsed;
-          }
-        }
+        onCursor(payload);
         finishCompleted(payload);
       });
 
       es.addEventListener("failed", function (evt) {
-        const payload = JSON.parse(evt.data || "{}");
-        finishFailed(payload.error || labels.unknownError);
+        finishFailed(JSON.parse(evt.data || "{}"));
       });
 
       es.onerror = function () {
-        if (!isSending || ended) {
-          return;
-        }
+        if (!isSending || ended) return;
         closeStream();
-        if (reconnectAttempts < maxReconnects) {
+        if (reconnectAttempts < 4) {
           reconnectAttempts += 1;
           const delay = Math.min(1000 * reconnectAttempts, 4000);
           stopReconnectTimer();
-          currentReconnectTimer = setTimeout(function () {
+          currentReconnectTimer = window.setTimeout(function () {
             connectEventSource();
           }, delay);
           return;
         }
-        content.textContent = content.textContent || labels.thinking;
+        finishFailed("stream_disconnected");
       };
     }
 
     connectEventSource();
 
     if (assistantMessageId) {
-      currentWatchTimer = setInterval(async function () {
-        if (!isSending || currentSessionId === "") {
+      currentWatchTimer = window.setInterval(function () {
+        if (!isSending || !currentSessionId) {
           stopCompletionWatch();
           return;
         }
-        try {
-          const payload = await jfetch("/chat/sessions/" + encodeURIComponent(currentSessionId));
-          const msgs = payload.messages || [];
-          const found = msgs.find(function (m) {
-            return String(m.message_id || "") === String(assistantMessageId);
-          });
-          if (!found) {
-            return;
-          }
-          const status = String(found.status || "").toLowerCase();
-          if (status === "completed") {
-            content.textContent = found.content || content.textContent || "";
-            if (found.citations && found.citations.length) {
-              renderCitations(bubble, found.citations);
-            }
-            finishCompleted({
-              answer: found.content || "",
-              citations: found.citations || []
+        jfetch("/chat/sessions/" + encodeURIComponent(currentSessionId))
+          .then(function (payload) {
+            const messages = Array.isArray(payload.messages) ? payload.messages : [];
+            const found = messages.find(function (m) {
+              return String(m.message_id || "") === String(assistantMessageId);
             });
-            return;
-          }
-          if (status === "failed") {
-            const detail = found.error_detail || labels.unknownError;
-            finishFailed(detail);
-          }
-        } catch (_) {}
+            if (!found) return;
+            const status = String(found.status || "").toLowerCase();
+            if (status === "completed") {
+              finishCompleted({
+                answer: found.content || "",
+                citations: found.citations || [],
+                tool_trace: found.tool_trace || []
+              });
+            } else if (status === "failed") {
+              finishFailed({ error: found.error_detail || LABELS.unknownError });
+            }
+          })
+          .catch(function () {});
       }, 1500);
     }
   }
 
-  async function send() {
-    if (!currentSessionId || isSending) {
-      return;
-    }
-    const text = (els.prompt.value || "").trim();
-    if (!text) {
-      return;
-    }
-
-    const finalModel = getSelectedModel();
-    if (!finalModel) {
-      addMessage("assistant", labels.failed + ": model_required");
-      return;
-    }
+  function send() {
+    if (!currentSessionId || isSending) return Promise.resolve();
+    const text = String(els.prompt.value || "").trim();
+    if (!text) return Promise.resolve();
 
     setSendingState(true);
-    addMessage("user", text);
+    setChatStage("rewrite", "");
+    addMessage("user", text, "");
     els.prompt.value = "";
 
-    try {
-      const payload = await jfetch("/chat/sessions/" + encodeURIComponent(currentSessionId) + "/messages", {
-        method: "POST",
-        body: JSON.stringify({
-          content: text,
-          mode: els.mode.value || "fast",
-          provider: els.provider.value || providerConfig.default_provider || "zhipu",
-          model: finalModel,
-          stream: true
-        })
-      });
-      attachStream(payload.stream_url, payload.assistant_message_id || "");
-    } catch (err) {
-      console.error(err);
-      addMessage("assistant", labels.failed + ": " + (err && err.message ? err.message : labels.unknownError));
-      setSendingState(false);
-    }
-  }
-
-  function buildProviderRow(item, index) {
-    const row = document.createElement("div");
-    row.className = "provider-row";
-    row.setAttribute("data-index", String(index));
-    row.innerHTML = [
-      '<div class="mode-group"><label>ID</label><input class="provider-id" /></div>',
-      '<div class="mode-group"><label>Type</label><select class="provider-type"><option value="zhipu">zhipu</option><option value="nvidia">nvidia</option><option value="openai_compatible">openai_compatible</option></select></div>',
-      '<div class="mode-group"><label>API Key Env</label><input class="provider-api-key-env" /></div>',
-      '<div class="mode-group span-2"><label>Base URL</label><input class="provider-base-url" /></div>',
-      '<div class="mode-group"><label>Default Model</label><input class="provider-default-model" /></div>',
-      '<div class="mode-group span-2"><label>Models (逗号分隔)</label><input class="provider-models" /></div>',
-      '<div class="mode-group span-2"><label>Aliases (逗号分隔)</label><input class="provider-aliases" /></div>',
-      '<div class="mode-group"><label>Timeout(s)</label><input class="provider-timeout" type="number" min="1" step="1" /></div>',
-      '<div class="provider-row-actions span-3"><button type="button" class="ghost-btn provider-test-btn">测试连接</button><span class="provider-test-status"></span><button type="button" class="ghost-btn remove-provider-btn">删除</button></div>'
-    ].join("");
-    row.querySelector(".provider-id").value = item.id || "";
-    row.querySelector(".provider-type").value = item.type || "openai_compatible";
-    row.querySelector(".provider-api-key-env").value = item.api_key_env || "";
-    row.querySelector(".provider-base-url").value = item.base_url || "";
-    row.querySelector(".provider-default-model").value = item.default_model || "";
-    row.querySelector(".provider-models").value = (item.models || []).join(",");
-    row.querySelector(".provider-aliases").value = (item.aliases || []).join(",");
-    row.querySelector(".provider-timeout").value = String(item.timeout_seconds || 90);
-    row.querySelector(".provider-test-btn").onclick = function () {
-      testProviderConnectionForRow(row).catch(function (err) {
-        console.error(err);
-      });
-    };
-    row.querySelector(".remove-provider-btn").onclick = function () {
-      row.remove();
-      renderDefaultProviderSelectFromRows();
-    };
-    return row;
-  }
-
-  function extractProviderItemFromRow(row) {
-    const id = String(row.querySelector(".provider-id").value || "").trim().toLowerCase();
-    const type = String(row.querySelector(".provider-type").value || "").trim().toLowerCase();
-    const api_key_env = String(row.querySelector(".provider-api-key-env").value || "").trim();
-    const base_url = String(row.querySelector(".provider-base-url").value || "").trim();
-    const default_model = String(row.querySelector(".provider-default-model").value || "").trim();
-    const models = splitCsv(row.querySelector(".provider-models").value || "");
-    const aliases = splitCsv(row.querySelector(".provider-aliases").value || "").map(function (x) {
-      return x.toLowerCase();
-    });
-    const timeout_seconds = Number(row.querySelector(".provider-timeout").value || 90);
-    return {
-      id: id,
-      type: type,
-      aliases: aliases,
-      api_key_env: api_key_env,
-      default_model: default_model,
-      models: models,
-      base_url: base_url,
-      timeout_seconds: Number.isFinite(timeout_seconds) && timeout_seconds > 0 ? Math.floor(timeout_seconds) : 90
-    };
-  }
-
-  function setProviderTestStatus(row, text, isError) {
-    const el = row.querySelector(".provider-test-status");
-    if (!el) {
-      return;
-    }
-    el.textContent = text || "";
-    el.classList.toggle("error", !!isError);
-    el.classList.toggle("success", !isError && !!text);
-  }
-
-  async function testProviderConnectionForRow(row) {
-    const button = row.querySelector(".provider-test-btn");
-    const item = sanitizeProviderItem(extractProviderItemFromRow(row));
-    if (!item.id) {
-      setProviderTestStatus(row, "请先填写 Provider ID", true);
-      return;
-    }
-    if (!item.api_key_env) {
-      setProviderTestStatus(row, "请先填写 API Key Env", true);
-      return;
-    }
-    if (button) {
-      button.disabled = true;
-    }
-    setProviderTestStatus(row, "测试中...", false);
-    try {
-      const resp = await jfetch("/chat/provider-test", {
-        method: "POST",
-        body: JSON.stringify({
-          provider: item.id,
-          provider_item: item,
-          model: item.default_model || "",
-          options: {
-            api_key_env: item.api_key_env,
-            base_url: item.base_url,
-            timeout_seconds: item.timeout_seconds,
-            temperature: 0,
-            max_retries: 1
-          }
-        })
-      });
-      const preview = String(resp.response_preview || "").trim();
-      setProviderTestStatus(row, preview ? ("连接成功: " + preview) : "连接成功", false);
-    } catch (err) {
-      setProviderTestStatus(row, "连接失败: " + (err && err.message ? err.message : labels.unknownError), true);
-    } finally {
-      if (button) {
-        button.disabled = false;
-      }
-    }
-  }
-
-  function renderDefaultProviderSelectFromRows() {
-    const ids = Array.from(els.providerRows.querySelectorAll(".provider-id"))
-      .map(function (el) {
-        return String(el.value || "").trim().toLowerCase();
+    return jfetch("/chat/sessions/" + encodeURIComponent(currentSessionId) + "/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        content: text,
+        mode: "agent",
+        stream: true,
+        library_id: getSelectedLibraryId()
       })
-      .filter(Boolean);
-    const current = String(els.defaultProviderSelect.value || "").trim().toLowerCase();
-    els.defaultProviderSelect.innerHTML = "";
-    ids.forEach(function (id) {
-      const option = document.createElement("option");
-      option.value = id;
-      option.textContent = id;
-      els.defaultProviderSelect.appendChild(option);
-    });
-    if (current && ids.indexOf(current) >= 0) {
-      els.defaultProviderSelect.value = current;
-    } else if (ids.length > 0) {
-      els.defaultProviderSelect.value = ids[0];
-    }
-  }
-
-  function renderProviderConfigModal(config) {
-    const safe = sanitizeProviderConfig(config || providerConfig);
-    els.providerRows.innerHTML = "";
-    safe.providers.forEach(function (item, index) {
-      const row = buildProviderRow(item, index);
-      row.querySelector(".provider-id").addEventListener("input", renderDefaultProviderSelectFromRows);
-      els.providerRows.appendChild(row);
-    });
-    renderDefaultProviderSelectFromRows();
-    if (safe.default_provider) {
-      els.defaultProviderSelect.value = safe.default_provider;
-    }
-    setProviderSaveStatus("");
-  }
-
-  function collectProviderConfigFromModal() {
-    const rows = Array.from(els.providerRows.querySelectorAll(".provider-row"));
-    const providers = rows.map(function (row) {
-      return extractProviderItemFromRow(row);
-    });
-    const payload = {
-      default_provider: String(els.defaultProviderSelect.value || "").trim().toLowerCase(),
-      providers: providers
-    };
-    return sanitizeProviderConfig(payload);
-  }
-
-  async function saveProviderConfigFromModal() {
-    try {
-      const payload = collectProviderConfigFromModal();
-      if (!payload.providers.length) {
-        setProviderSaveStatus("鑷冲皯淇濈暀涓€涓?Provider銆?, true);
-        return;
-      }
-      const resp = await jfetch("/chat/provider-config", {
-        method: "POST",
-        body: JSON.stringify(payload)
+    })
+      .then(function (payload) {
+        attachStream(payload.stream_url, payload.assistant_message_id || "");
+      })
+      .catch(function (err) {
+        addMessage("assistant", LABELS.failed + ": " + (err && err.message ? err.message : LABELS.unknownError));
+        setChatStage("failed", err && err.message ? err.message : LABELS.unknownError);
+        setSendingState(false);
       });
-      providerConfig = sanitizeProviderConfig(resp.config || payload);
-      refreshProviderSelectOptions();
-      setProviderSaveStatus("淇濆瓨鎴愬姛锛屽凡鐢熸晥銆?, false);
-    } catch (err) {
-      setProviderSaveStatus("淇濆瓨澶辫触: " + (err && err.message ? err.message : labels.unknownError), true);
+  }
+
+  function safeJsonParse(raw, fallback) {
+    try {
+      return JSON.parse(String(raw || "").trim() || JSON.stringify(fallback));
+    } catch (_err) {
+      return fallback;
     }
   }
 
-  function openProviderModal() {
-    renderProviderConfigModal(providerConfig);
-    els.providerModal.classList.remove("hidden");
+  function setConfigStatus(text, isError) {
+    els.saveStatus.textContent = text || "";
+    els.saveStatus.style.color = isError ? "#f17b7b" : "";
   }
 
-  function closeProviderModal() {
-    els.providerModal.classList.add("hidden");
+  function loadCodexConfig() {
+    setConfigStatus("", false);
+    return jfetch("/chat/codex/config").then(function (payload) {
+      const cfg = payload.config || {};
+      els.codexCliCommand.value = String(cfg.cli_command || "");
+      els.codexCliArgs.value = JSON.stringify(Array.isArray(cfg.cli_args) ? cfg.cli_args : [], null, 2);
+      els.codexHealthcheckArgs.value = JSON.stringify(Array.isArray(cfg.healthcheck_args) ? cfg.healthcheck_args : [], null, 2);
+      els.codexInstallCommand.value = String(cfg.install_command || "");
+      els.codexTimeoutSeconds.value = String(Number(cfg.timeout_seconds || 180));
+      els.codexExtraEnv.value = JSON.stringify(cfg.extra_env && typeof cfg.extra_env === "object" ? cfg.extra_env : {}, null, 2);
+    });
   }
 
-  els.provider.onchange = function () {
-    refreshModelSelector();
-  };
+  function collectCodexConfig() {
+    return {
+      cli_command: String(els.codexCliCommand.value || "").trim(),
+      cli_args: safeJsonParse(els.codexCliArgs.value, []),
+      healthcheck_args: safeJsonParse(els.codexHealthcheckArgs.value, []),
+      install_command: String(els.codexInstallCommand.value || "").trim(),
+      timeout_seconds: Number(els.codexTimeoutSeconds.value || 180),
+      extra_env: safeJsonParse(els.codexExtraEnv.value, {})
+    };
+  }
 
-  els.modelSelect.onchange = function () {
-    if (els.modelSelect.value === "__custom__") {
-      els.modelInput.classList.remove("hidden");
-      if (!els.modelInput.value) {
-        els.modelInput.value = "custom-model";
-      }
-    } else {
-      els.modelInput.classList.add("hidden");
-      els.modelInput.value = "";
-    }
-  };
+  function saveCodexConfig() {
+    const payload = collectCodexConfig();
+    return jfetch("/chat/codex/config", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    })
+      .then(function () {
+        setConfigStatus("配置已保存", false);
+      })
+      .catch(function (err) {
+        setConfigStatus("保存失败: " + (err && err.message ? err.message : LABELS.unknownError), true);
+      });
+  }
+
+  function runCodexHealth() {
+    setConfigStatus("检测中...", false);
+    return jfetch("/chat/codex/health")
+      .then(function (payload) {
+        const version = String(payload.version || "").trim();
+        setConfigStatus(version ? ("Codex 可用: " + version) : "Codex 可用", false);
+      })
+      .catch(function (err) {
+        setConfigStatus("Codex 不可用: " + (err && err.message ? err.message : LABELS.unknownError), true);
+      });
+  }
+
+  function installCodex() {
+    setConfigStatus("正在安装 Codex...", false);
+    return jfetch("/chat/codex/install", { method: "POST", body: "{}" })
+      .then(function (payload) {
+        const out = String(payload.stdout || "").trim();
+        setConfigStatus("安装完成" + (out ? (": " + out.slice(-120)) : ""), false);
+      })
+      .catch(function (err) {
+        setConfigStatus("安装失败: " + (err && err.message ? err.message : LABELS.unknownError), true);
+      });
+  }
+
+  function openSettingsModal() {
+    window.location.href = "/frontend/chat/codex.html";
+  }
+
+  function closeSettingsModal() {
+    els.settingsModal.classList.add("hidden");
+  }
 
   els.newSession.onclick = function () {
-    createSession(labels.newSession).catch(console.error);
+    createSession(LABELS.newSession).catch(function (err) {
+      addMessage("assistant", LABELS.failed + ": " + (err && err.message ? err.message : LABELS.unknownError));
+      setChatStage("failed", err && err.message ? err.message : LABELS.unknownError);
+    });
   };
 
   els.send.onclick = function () {
-    send().catch(function (err) {
-      console.error(err);
+    send().catch(function () {
       setSendingState(false);
     });
   };
@@ -778,55 +756,61 @@
   els.prompt.onkeydown = function (evt) {
     if (evt.key === "Enter" && !evt.shiftKey) {
       evt.preventDefault();
-      send().catch(function (err) {
-        console.error(err);
+      send().catch(function () {
         setSendingState(false);
       });
     }
   };
 
-  els.providerSettingsBtn.onclick = function () {
-    openProviderModal();
-  };
-  els.providerModalClose.onclick = function () {
-    closeProviderModal();
-  };
-  els.providerModal.addEventListener("click", function (evt) {
-    if (evt.target === els.providerModal) {
-      closeProviderModal();
-    }
+  els.settingsBtn.onclick = openSettingsModal;
+  els.settingsClose.onclick = closeSettingsModal;
+  els.settingsModal.addEventListener("click", function (evt) {
+    if (evt.target === els.settingsModal) closeSettingsModal();
   });
-  els.addProviderBtn.onclick = function () {
-    const row = buildProviderRow(
-      {
-        id: "",
-        type: "openai_compatible",
-        aliases: [],
-        api_key_env: "",
-        default_model: "",
-        models: [],
-        base_url: "",
-        timeout_seconds: 90
-      },
-      0
-    );
-    row.querySelector(".provider-id").addEventListener("input", renderDefaultProviderSelectFromRows);
-    els.providerRows.appendChild(row);
-    renderDefaultProviderSelectFromRows();
+
+  els.saveConfigBtn.onclick = function () {
+    saveCodexConfig().catch(function () {});
   };
-  els.saveProviderConfigBtn.onclick = function () {
-    saveProviderConfigFromModal().catch(console.error);
+  if (els.codexHealthBtn) {
+    els.codexHealthBtn.onclick = function () {
+      runCodexHealth().catch(function () {});
+    };
+  }
+  if (els.codexInstallBtn) {
+    els.codexInstallBtn.onclick = function () {
+      installCodex().catch(function () {});
+    };
+  }
+
+  els.citationModalClose.onclick = function () {
+    els.citationModal.classList.add("hidden");
+  };
+  els.citationModal.addEventListener("click", function (evt) {
+    if (evt.target === els.citationModal) els.citationModal.classList.add("hidden");
+  });
+
+  els.undoDeleteBtn.onclick = function () {
+    undoDeleteSession().catch(function () {});
   };
 
-  loadProviderConfig()
+  els.librarySelect.onchange = function () {
+    saveSelectedLibraryId(getSelectedLibraryId());
+  };
+
+  setChatStage("ready", "");
+  loadLibraries()
     .then(function () {
       return refreshSessions();
     })
-    .then(function () {
-      return createSession(labels.newSession);
+    .then(function (payload) {
+      const sessions = Array.isArray(payload && payload.sessions) ? payload.sessions : [];
+      if (sessions.length > 0) {
+        return openSession(String(sessions[0].session_id || ""));
+      }
+      return createSession(LABELS.newSession);
     })
-    .catch(function (err) {
-      console.error(err);
-      addMessage("assistant", "鏃犳硶鍒濆鍖栦細璇濓紝璇锋鏌ュ悗绔?/chat 鎺ュ彛銆?);
+    .catch(function () {
+      addMessage("assistant", "无法初始化聊天会话，请检查后端服务。", "");
+      setChatStage("failed", "初始化失败");
     });
 })();
