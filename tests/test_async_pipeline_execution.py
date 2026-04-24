@@ -148,6 +148,84 @@ class AsyncPipelineExecutionTest(unittest.TestCase):
             self.assertIsNotNone(row)
             self.assertEqual(row["status"], "cancelled")
 
+    def test_terminal_status_is_monotonic_in_store_updates(self) -> None:
+        store = InMemoryJobStore()
+        now = _MOD._now_iso()
+        store.create_job(
+            {
+                "job_id": "job_terminal",
+                "status": "cancelled",
+                "stage": "extract_entities",
+                "progress": 66,
+                "error_code": "job_cancelled_by_user",
+                "error_detail": "cancel requested by user",
+                "input_path": "x.pdf",
+                "output_path": "",
+                "options_json": "{}",
+                "result_json": "{}",
+                "requested_cancel": True,
+                "idempotency_key": "",
+                "last_event": "cancelled",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        store.update_job("job_terminal", {"status": "running", "stage": "finalize", "progress": 99, "last_event": "stage_progress"})
+        row = store.get_job("job_terminal") or {}
+        self.assertEqual(str(row.get("status", "")), "cancelled")
+        self.assertEqual(str(row.get("last_event", "")), "cancelled")
+        self.assertEqual(int(row.get("progress", 0) or 0), 66)
+
+    def test_execute_pipeline_does_not_overwrite_cancelled_to_completed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            input_pdf = tmp / "race.pdf"
+            self._write_test_pdf(input_pdf)
+
+            store = InMemoryJobStore()
+            now = _MOD._now_iso()
+            store.create_job(
+                {
+                    "job_id": "job_race",
+                    "status": "queued",
+                    "stage": "accepted",
+                    "progress": 0,
+                    "error_code": "",
+                    "error_detail": "",
+                    "input_path": str(input_pdf),
+                    "output_path": "",
+                    "options_json": "{}",
+                    "result_json": "{}",
+                    "requested_cancel": False,
+                    "idempotency_key": "",
+                    "last_event": "accepted",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+
+            def _extract_side_effect(job_id, parse_meta, run_dir, store_ref, options):
+                _ = parse_meta, run_dir, options
+                store_ref.update_job(job_id, {"status": "cancelled", "last_event": "cancelled", "stage": "extract_entities", "progress": 80})
+                return {"ok": True}
+
+            def _finalize_side_effect(job_id, input_pdf_ref, parse_meta, extract_result, run_dir, store_ref, options):
+                _ = input_pdf_ref, parse_meta, extract_result, run_dir, options
+                store_ref.update_job(job_id, {"status": "completed", "last_event": "completed", "stage": "finalize", "progress": 100})
+                return {"ok": True}
+
+            with (
+                patch.object(_MOD, "_run_parse_pdf", return_value={"html_path": str(input_pdf)}),
+                patch.object(_MOD, "_run_extract_entities", side_effect=_extract_side_effect),
+                patch.object(_MOD, "_run_finalize", side_effect=_finalize_side_effect),
+            ):
+                execute_pipeline(store, "job_race", str(input_pdf), {}, tmp / "runs")
+
+            row = store.get_job("job_race")
+            self.assertIsNotNone(row)
+            self.assertEqual(str(row.get("status", "")), "cancelled")
+            self.assertEqual(str(row.get("last_event", "")), "cancelled")
+
 
 if __name__ == "__main__":
     unittest.main()

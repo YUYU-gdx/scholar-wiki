@@ -9,10 +9,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sqlite3
 import threading
 from typing import Any, Callable, Protocol
 import uuid
 
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -27,10 +29,15 @@ JOB_EVENTS = {
     "cancelled",
     "completed",
 }
+TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _norm_status(raw: Any) -> str:
+    return str(raw or "").strip().lower()
 
 
 def _to_bool(raw: str | None, default: bool = False) -> bool:
@@ -65,6 +72,17 @@ class JobStore(Protocol):
 
     def request_cancel(self, job_id: str) -> dict[str, Any]: ...
 
+    def list_jobs(
+        self,
+        *,
+        library_id: str = "",
+        status: str = "",
+        query: str = "",
+        sort: str = "created_at_desc",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[dict[str, Any]], int]: ...
+
 
 class InMemoryJobStore:
     def __init__(self) -> None:
@@ -86,17 +104,229 @@ class InMemoryJobStore:
         with self._lock:
             if job_id not in self._jobs:
                 raise KeyError(job_id)
-            self._jobs[job_id].update(dict(updates))
-            self._jobs[job_id]["updated_at"] = _now_iso()
-            return dict(self._jobs[job_id])
+            current = self._jobs[job_id]
+            current_status = _norm_status(current.get("status"))
+            payload = dict(updates)
+            next_status = _norm_status(payload.get("status")) if "status" in payload else ""
+            if current_status in TERMINAL_JOB_STATUSES:
+                if not next_status:
+                    return dict(current)
+                if next_status != current_status:
+                    return dict(current)
+            current.update(payload)
+            current["updated_at"] = _now_iso()
+            return dict(current)
 
     def request_cancel(self, job_id: str) -> dict[str, Any]:
+        return self.update_job(job_id, {"requested_cancel": True})
+
+    def list_jobs(
+        self,
+        *,
+        library_id: str = "",
+        status: str = "",
+        query: str = "",
+        sort: str = "created_at_desc",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[dict[str, Any]], int]:
+        lib = str(library_id or "").strip()
+        st = str(status or "").strip().lower()
+        q = str(query or "").strip().lower()
         with self._lock:
-            if job_id not in self._jobs:
+            rows = [dict(v) for v in self._jobs.values()]
+        filtered: list[dict[str, Any]] = []
+        for row in rows:
+            if lib and str(row.get("library_id", "") or "").strip() != lib:
+                continue
+            if st and str(row.get("status", "") or "").strip().lower() != st:
+                continue
+            if q:
+                hay = " ".join(
+                    [
+                        str(row.get("job_id", "") or ""),
+                        str(row.get("library_id", "") or ""),
+                        str(row.get("file_name", "") or ""),
+                        str(row.get("input_path", "") or ""),
+                        str(row.get("error_detail", "") or ""),
+                    ]
+                ).lower()
+                if q not in hay:
+                    continue
+            filtered.append(row)
+
+        reverse = sort != "created_at_asc"
+        filtered.sort(key=lambda x: str(x.get("created_at", "") or ""), reverse=reverse)
+        total = len(filtered)
+        start = max(0, (max(1, int(page)) - 1) * max(1, int(page_size)))
+        end = start + max(1, int(page_size))
+        return filtered[start:end], total
+
+
+class SQLiteJobStore:
+    def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path.resolve()
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_table()
+
+    def _conn(self):
+        conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _ensure_table(self) -> None:
+        ddl = """
+        create table if not exists pipeline_jobs (
+            job_id text primary key,
+            status text not null,
+            stage text not null,
+            progress integer not null,
+            error_code text not null default '',
+            error_detail text not null default '',
+            input_path text not null default '',
+            output_path text not null default '',
+            options_json text not null default '{}',
+            result_json text not null default '{}',
+            requested_cancel integer not null default 0,
+            idempotency_key text not null default '',
+            last_event text not null default 'accepted',
+            created_at text not null,
+            updated_at text not null,
+            file_size integer not null default 0,
+            file_hash text not null default '',
+            library_id text not null default '',
+            workspace_path text not null default '',
+            source_job_id text not null default '',
+            file_name text not null default ''
+        );
+        create index if not exists idx_pipeline_jobs_updated_at on pipeline_jobs(updated_at);
+        create index if not exists idx_pipeline_jobs_created_at on pipeline_jobs(created_at);
+        create index if not exists idx_pipeline_jobs_library_id on pipeline_jobs(library_id);
+        create unique index if not exists idx_pipeline_jobs_idempotency on pipeline_jobs(idempotency_key) where idempotency_key <> '';
+        """
+        with self._conn() as conn:
+            conn.executescript(ddl)
+            conn.commit()
+
+    def create_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        row = dict(payload)
+        columns = [
+            "job_id",
+            "status",
+            "stage",
+            "progress",
+            "error_code",
+            "error_detail",
+            "input_path",
+            "output_path",
+            "options_json",
+            "result_json",
+            "requested_cancel",
+            "idempotency_key",
+            "last_event",
+            "created_at",
+            "updated_at",
+            "file_size",
+            "file_hash",
+            "library_id",
+            "workspace_path",
+            "source_job_id",
+            "file_name",
+        ]
+        values = {k: row.get(k, "") for k in columns}
+        values["progress"] = int(values.get("progress", 0) or 0)
+        values["requested_cancel"] = 1 if bool(values.get("requested_cancel")) else 0
+        values["file_size"] = int(values.get("file_size", 0) or 0)
+        with self._conn() as conn:
+            conn.execute(
+                f"insert into pipeline_jobs ({','.join(columns)}) values ({','.join(['?'] * len(columns))})",
+                [values[k] for k in columns],
+            )
+            conn.commit()
+        out = dict(values)
+        out["requested_cancel"] = bool(out.get("requested_cancel"))
+        return out
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute("select * from pipeline_jobs where job_id = ?", (job_id,)).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["requested_cancel"] = bool(out.get("requested_cancel"))
+        return out
+
+    def update_job(self, job_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        if not updates:
+            row = self.get_job(job_id)
+            if row is None:
                 raise KeyError(job_id)
-            self._jobs[job_id]["requested_cancel"] = True
-            self._jobs[job_id]["updated_at"] = _now_iso()
-            return dict(self._jobs[job_id])
+            return row
+        payload = dict(updates)
+        payload["updated_at"] = _now_iso()
+        if "requested_cancel" in payload:
+            payload["requested_cancel"] = 1 if bool(payload.get("requested_cancel")) else 0
+        keys = list(payload.keys())
+        sets = ",".join(f"{k}=?" for k in keys)
+        guard_sql = "lower(status) not in (?,?,?)"
+        guard_args: list[Any] = ["completed", "failed", "cancelled"]
+        if "status" in payload:
+            guard_sql = f"({guard_sql} or lower(status)=?)"
+            guard_args.append(_norm_status(payload.get("status")))
+        args = [payload[k] for k in keys] + [job_id] + guard_args
+        with self._conn() as conn:
+            cur = conn.execute(f"update pipeline_jobs set {sets} where job_id=? and {guard_sql}", args)
+            if cur.rowcount <= 0:
+                existing = conn.execute("select 1 from pipeline_jobs where job_id = ?", (job_id,)).fetchone()
+                if existing is None:
+                    raise KeyError(job_id)
+            conn.commit()
+        row = self.get_job(job_id)
+        if row is None:
+            raise KeyError(job_id)
+        return row
+
+    def request_cancel(self, job_id: str) -> dict[str, Any]:
+        return self.update_job(job_id, {"requested_cancel": True})
+
+    def list_jobs(
+        self,
+        *,
+        library_id: str = "",
+        status: str = "",
+        query: str = "",
+        sort: str = "created_at_desc",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[dict[str, Any]], int]:
+        clauses: list[str] = []
+        args: list[Any] = []
+        if str(library_id or "").strip():
+            clauses.append("library_id = ?")
+            args.append(str(library_id or "").strip())
+        if str(status or "").strip():
+            clauses.append("lower(status) = ?")
+            args.append(str(status or "").strip().lower())
+        if str(query or "").strip():
+            q = f"%{str(query).strip().lower()}%"
+            clauses.append("(lower(job_id) like ? or lower(file_name) like ? or lower(input_path) like ? or lower(error_detail) like ?)")
+            args.extend([q, q, q, q])
+        where = (" where " + " and ".join(clauses)) if clauses else ""
+        order = "created_at asc" if sort == "created_at_asc" else "created_at desc"
+        limit = max(1, int(page_size))
+        offset = max(0, (max(1, int(page)) - 1) * limit)
+        with self._conn() as conn:
+            total = int(conn.execute(f"select count(*) from pipeline_jobs{where}", args).fetchone()[0])
+            rows = conn.execute(
+                f"select * from pipeline_jobs{where} order by {order} limit ? offset ?",
+                args + [limit, offset],
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["requested_cancel"] = bool(item.get("requested_cancel"))
+            out.append(item)
+        return out, total
 
 
 class PostgresJobStore:
@@ -126,10 +356,18 @@ class PostgresJobStore:
             requested_cancel boolean not null default false,
             idempotency_key text not null default '',
             last_event text not null default 'accepted',
+            file_size bigint not null default 0,
+            file_hash text not null default '',
+            library_id text not null default '',
+            workspace_path text not null default '',
+            source_job_id text not null default '',
+            file_name text not null default '',
             created_at timestamptz not null,
             updated_at timestamptz not null
         );
         create index if not exists idx_pipeline_jobs_updated_at on pipeline_jobs(updated_at);
+        create index if not exists idx_pipeline_jobs_created_at on pipeline_jobs(created_at);
+        create index if not exists idx_pipeline_jobs_library_id on pipeline_jobs(library_id);
         create unique index if not exists idx_pipeline_jobs_idempotency on pipeline_jobs(idempotency_key) where idempotency_key <> '';
         """
         with self._conn() as conn:
@@ -145,10 +383,14 @@ class PostgresJobStore:
                     """
                     insert into pipeline_jobs (
                         job_id, status, stage, progress, error_code, error_detail, input_path, output_path,
-                        options_json, result_json, requested_cancel, idempotency_key, last_event, created_at, updated_at
+                        options_json, result_json, requested_cancel, idempotency_key, last_event,
+                        file_size, file_hash, library_id, workspace_path, source_job_id, file_name,
+                        created_at, updated_at
                     )
                     values (%(job_id)s, %(status)s, %(stage)s, %(progress)s, %(error_code)s, %(error_detail)s, %(input_path)s, %(output_path)s,
-                            %(options_json)s, %(result_json)s, %(requested_cancel)s, %(idempotency_key)s, %(last_event)s, %(created_at)s, %(updated_at)s)
+                            %(options_json)s, %(result_json)s, %(requested_cancel)s, %(idempotency_key)s, %(last_event)s,
+                            %(file_size)s, %(file_hash)s, %(library_id)s, %(workspace_path)s, %(source_job_id)s, %(file_name)s,
+                            %(created_at)s, %(updated_at)s)
                     """,
                     row,
                 )
@@ -161,7 +403,9 @@ class PostgresJobStore:
                 cur.execute(
                     """
                     select job_id,status,stage,progress,error_code,error_detail,input_path,output_path,
-                           options_json,result_json,requested_cancel,idempotency_key,last_event,created_at,updated_at
+                           options_json,result_json,requested_cancel,idempotency_key,last_event,
+                           file_size,file_hash,library_id,workspace_path,source_job_id,file_name,
+                           created_at,updated_at
                     from pipeline_jobs where job_id=%s
                     """,
                     (job_id,),
@@ -183,6 +427,12 @@ class PostgresJobStore:
             "requested_cancel",
             "idempotency_key",
             "last_event",
+            "file_size",
+            "file_hash",
+            "library_id",
+            "workspace_path",
+            "source_job_id",
+            "file_name",
             "created_at",
             "updated_at",
         ]
@@ -200,11 +450,17 @@ class PostgresJobStore:
         sets = ", ".join(f"{k}=%({k})s" for k in payload.keys())
         params = dict(payload)
         params["job_id"] = job_id
+        guard_sql = "lower(status) not in ('completed','failed','cancelled')"
+        if "status" in payload:
+            params["next_status_norm"] = _norm_status(payload.get("status"))
+            guard_sql = f"({guard_sql} or lower(status)=%(next_status_norm)s)"
         with self._conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"update pipeline_jobs set {sets} where job_id=%(job_id)s", params)
+                cur.execute(f"update pipeline_jobs set {sets} where job_id=%(job_id)s and {guard_sql}", params)
                 if cur.rowcount <= 0:
-                    raise KeyError(job_id)
+                    cur.execute("select 1 from pipeline_jobs where job_id=%(job_id)s", {"job_id": job_id})
+                    if cur.fetchone() is None:
+                        raise KeyError(job_id)
             conn.commit()
         refreshed = self.get_job(job_id)
         if refreshed is None:
@@ -214,12 +470,79 @@ class PostgresJobStore:
     def request_cancel(self, job_id: str) -> dict[str, Any]:
         return self.update_job(job_id, {"requested_cancel": True})
 
+    def list_jobs(
+        self,
+        *,
+        library_id: str = "",
+        status: str = "",
+        query: str = "",
+        sort: str = "created_at_desc",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[dict[str, Any]], int]:
+        clauses: list[str] = []
+        args: list[Any] = []
+        if str(library_id or "").strip():
+            clauses.append("library_id = %s")
+            args.append(str(library_id or "").strip())
+        if str(status or "").strip():
+            clauses.append("lower(status) = %s")
+            args.append(str(status or "").strip().lower())
+        if str(query or "").strip():
+            q = f"%{str(query).strip().lower()}%"
+            clauses.append("(lower(job_id) like %s or lower(file_name) like %s or lower(input_path) like %s or lower(error_detail) like %s)")
+            args.extend([q, q, q, q])
+        where = (" where " + " and ".join(clauses)) if clauses else ""
+        order = "created_at asc" if sort == "created_at_asc" else "created_at desc"
+        limit = max(1, int(page_size))
+        offset = max(0, (max(1, int(page)) - 1) * limit)
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"select count(*) from pipeline_jobs{where}", tuple(args))
+                total = int((cur.fetchone() or [0])[0])
+                cur.execute(
+                    f"""select job_id,status,stage,progress,error_code,error_detail,input_path,output_path,
+                           options_json,result_json,requested_cancel,idempotency_key,last_event,
+                           file_size,file_hash,library_id,workspace_path,source_job_id,file_name,created_at,updated_at
+                        from pipeline_jobs{where} order by {order} limit %s offset %s""",
+                    tuple(args + [limit, offset]),
+                )
+                rows = cur.fetchall() or []
+        keys = [
+            "job_id",
+            "status",
+            "stage",
+            "progress",
+            "error_code",
+            "error_detail",
+            "input_path",
+            "output_path",
+            "options_json",
+            "result_json",
+            "requested_cancel",
+            "idempotency_key",
+            "last_event",
+            "file_size",
+            "file_hash",
+            "library_id",
+            "workspace_path",
+            "source_job_id",
+            "file_name",
+            "created_at",
+            "updated_at",
+        ]
+        return [dict(zip(keys, row, strict=False)) for row in rows], total
+
 
 def _build_job_store() -> JobStore:
+    kind = str(os.getenv("PIPELINE_JOB_STORE", "sqlite")).strip().lower()
     dsn = str(os.getenv("PIPELINE_JOB_STORE_DSN", "")).strip()
+    if kind == "memory":
+        return InMemoryJobStore()
     if dsn:
         return PostgresJobStore(dsn)
-    return InMemoryJobStore()
+    db_path_raw = str(os.getenv("PIPELINE_SQLITE_PATH", "outputs/workbench/pipeline_jobs.sqlite")).strip() or "outputs/workbench/pipeline_jobs.sqlite"
+    return SQLiteJobStore(Path(db_path_raw))
 
 
 def _maybe_load_run_extraction_mvp():
@@ -252,6 +575,40 @@ def _maybe_load_mineru_single_runner():
     return mod
 
 
+def _maybe_load_library_registry_module():
+    module_path = Path(__file__).resolve().parent / "library_registry.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_library_registry_for_async_api", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _maybe_load_literature_service_class():
+    module_path = Path(__file__).resolve().parent / "literature" / "service.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_literature_service_for_async_api", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.LiteratureService
+
+
+def _resolve_library_workspace(library_id: str) -> Path:
+    lib = str(library_id or "").strip()
+    if not lib:
+        raise RuntimeError("library_id_required")
+    lr_mod = _maybe_load_library_registry_module()
+    registry = lr_mod.ensure_registry()
+    root = str(lr_mod.resolve_workspace_root(registry, lib) or "").strip()
+    if not root:
+        raise RuntimeError(f"library_workspace_missing:{lib}")
+    path = Path(root).resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _save_upload(file: UploadFile, target: Path) -> tuple[str, int]:
     target.parent.mkdir(parents=True, exist_ok=True)
     hasher = hashlib.sha256()
@@ -268,6 +625,9 @@ def _save_upload(file: UploadFile, target: Path) -> tuple[str, int]:
 
 
 def _stage_update(store: JobStore, job_id: str, stage: str, progress: int, event: str, **extra: Any) -> None:
+    existing = store.get_job(job_id) or {}
+    if _norm_status(existing.get("status")) in TERMINAL_JOB_STATUSES and event != "cancelled":
+        return
     payload = {"stage": stage, "progress": int(progress), "last_event": event}
     payload.update(extra)
     store.update_job(job_id, payload)
@@ -386,16 +746,54 @@ def _run_extract_entities(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     return payload
 
 
-def _run_finalize(job_id: str, parse_meta: dict[str, Any], extract_result: dict[str, Any], run_dir: Path, store: JobStore) -> dict[str, Any]:
+def _run_finalize(
+    job_id: str,
+    input_pdf: Path,
+    parse_meta: dict[str, Any],
+    extract_result: dict[str, Any],
+    run_dir: Path,
+    store: JobStore,
+    options: dict[str, Any],
+) -> dict[str, Any]:
     _stage_update(store, job_id, "finalize", 95, "stage_started", status="running")
     if _is_cancel_requested(store, job_id):
         store.update_job(job_id, {"status": "cancelled", "last_event": "cancelled", "stage": "finalize"})
         raise RuntimeError("job_cancelled")
+
+    library_id = str(options.get("library_id", "") or "").strip()
+    workspace_path = str(options.get("_workspace_path", "") or "").strip()
+    import_result: dict[str, Any] = {}
+    import_warning = ""
+    if library_id:
+        try:
+            _stage_update(store, job_id, "finalize", 97, "stage_progress", status="running")
+            lit_cls = _maybe_load_literature_service_class()
+            literature = lit_cls()
+            manifest_path = run_dir / "import_manifest.jsonl"
+            paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
+            doi = str(options.get("doi", "") or f"job::{job_id}").strip()
+            title = str(options.get("title", "") or input_pdf.stem or job_id).strip()
+            row = {
+                "paper_id": paper_id,
+                "doi": doi,
+                "title": title,
+                "source_path": str(input_pdf.resolve()),
+            }
+            manifest_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+            import_result = literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id})
+            workspace_path = str(import_result.get("workspace_path", "") or workspace_path)
+        except Exception as exc:
+            import_warning = str(exc)
+
     result = {
         "job_id": job_id,
         "run_dir": str(run_dir),
+        "library_id": library_id,
+        "workspace_path": workspace_path,
         "parse": parse_meta,
         "extract": extract_result,
+        "import_result": import_result,
+        "import_warning": import_warning,
         "finished_at": _now_iso(),
     }
     out_path = run_dir / "result.json"
@@ -415,12 +813,17 @@ def _run_finalize(job_id: str, parse_meta: dict[str, Any], extract_result: dict[
 
 
 def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options: dict[str, Any], runs_root: Path) -> None:
-    run_dir = runs_root / job_id
+    job_root_raw = str(options.get("_job_root", "") or "").strip()
+    if job_root_raw:
+        run_dir = Path(job_root_raw).resolve() / "run"
+    else:
+        run_dir = runs_root / job_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    input_pdf = Path(input_path).resolve()
     try:
-        parse_meta = _run_parse_pdf(job_id, Path(input_path), run_dir, job_store)
+        parse_meta = _run_parse_pdf(job_id, input_pdf, run_dir, job_store)
         extract_result = _run_extract_entities(job_id, parse_meta, run_dir, job_store, options)
-        _run_finalize(job_id, parse_meta, extract_result, run_dir, job_store)
+        _run_finalize(job_id, input_pdf, parse_meta, extract_result, run_dir, job_store, options)
     except Exception as exc:
         if "job_cancelled" in str(exc):
             job_store.update_job(
@@ -479,7 +882,10 @@ def _build_celery_objects():
     def task_parse_pdf(payload: dict[str, Any]) -> dict[str, Any]:
         store = _build_job_store()
         runs_root = Path(str(payload["runs_root"]))
-        parse_meta = _run_parse_pdf(payload["job_id"], Path(str(payload["input_path"])), runs_root / payload["job_id"], store)
+        options = dict(payload.get("options", {}))
+        job_root_raw = str(options.get("_job_root", "") or "").strip()
+        run_dir = (Path(job_root_raw).resolve() / "run") if job_root_raw else (runs_root / payload["job_id"])
+        parse_meta = _run_parse_pdf(payload["job_id"], Path(str(payload["input_path"])), run_dir, store)
         payload["parse_meta"] = parse_meta
         return payload
 
@@ -487,12 +893,15 @@ def _build_celery_objects():
     def task_extract_entities(payload: dict[str, Any]) -> dict[str, Any]:
         store = _build_job_store()
         runs_root = Path(str(payload["runs_root"]))
+        options = dict(payload.get("options", {}))
+        job_root_raw = str(options.get("_job_root", "") or "").strip()
+        run_dir = (Path(job_root_raw).resolve() / "run") if job_root_raw else (runs_root / payload["job_id"])
         extract_res = _run_extract_entities(
             payload["job_id"],
             payload["parse_meta"],
-            runs_root / payload["job_id"],
+            run_dir,
             store,
-            dict(payload.get("options", {})),
+            options,
         )
         payload["extract_result"] = extract_res
         return payload
@@ -501,12 +910,17 @@ def _build_celery_objects():
     def task_finalize(payload: dict[str, Any]) -> dict[str, Any]:
         store = _build_job_store()
         runs_root = Path(str(payload["runs_root"]))
+        options = dict(payload.get("options", {}))
+        job_root_raw = str(options.get("_job_root", "") or "").strip()
+        run_dir = (Path(job_root_raw).resolve() / "run") if job_root_raw else (runs_root / payload["job_id"])
         result = _run_finalize(
             payload["job_id"],
+            Path(str(payload["input_path"])),
             payload["parse_meta"],
             payload["extract_result"],
-            runs_root / payload["job_id"],
+            run_dir,
             store,
+            options,
         )
         payload["result"] = result
         return payload
@@ -538,6 +952,21 @@ def _public_job_payload(job: dict[str, Any]) -> dict[str, Any]:
                 out[key[:-5]] = json.loads(raw)
             except Exception:
                 out[key[:-5]] = raw
+    status = str(out.get("status", "") or "").strip().lower()
+    stage = str(out.get("stage", "") or "").strip().lower()
+    stage_label_map = {
+        "accepted": "待处理",
+        "parse_pdf": "解析中",
+        "extract_entities": "抽取中",
+        "finalize": "整理中",
+    }
+    display_name = str(out.get("file_name", "") or "").strip() or str(out.get("job_id", "") or "").strip()
+    out["display_name"] = display_name
+    out["status_code"] = status
+    out["stage_code"] = stage
+    out["stage_label"] = stage_label_map.get(stage, stage or "")
+    out["can_cancel"] = status in {"queued", "running"}
+    out["can_retry"] = status in {"failed", "cancelled"}
     return out
 
 
@@ -562,34 +991,52 @@ def create_app(
     ctx = DispatchContext(job_store=store, runs_root=root)
 
     app = FastAPI(title="SMJ Async Pipeline API", version="1.0.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/v1/pipeline/parse-extract")
-    async def create_parse_extract_job(
-        file: UploadFile = File(...),
-        options: str | None = Form(default=None),
-    ) -> JSONResponse:
+    @app.get("/v1/pipeline/health")
+    def pipeline_health() -> dict[str, Any]:
+        executor = str(os.getenv("PIPELINE_EXECUTOR", "celery")).strip().lower()
+        return {
+            "status": "ok",
+            "executor": executor if executor in {"celery", "inline"} else "inline",
+        }
+
+    def _parse_options(options_text: str | None) -> dict[str, Any]:
+        parsed_options: dict[str, Any] = {}
+        if options_text and options_text.strip():
+            try:
+                parsed = json.loads(options_text)
+            except Exception:
+                raise HTTPException(status_code=400, detail={"error": "invalid_options_json"})
+            if not isinstance(parsed, dict):
+                raise HTTPException(status_code=400, detail={"error": "options_must_be_object"})
+            parsed_options = parsed
+        return parsed_options
+
+    def _create_one_job(file: UploadFile, lib: str, base_options: dict[str, Any], source_job_id: str = "") -> dict[str, Any]:
         if not file.filename:
             raise HTTPException(status_code=400, detail={"error": "file_required"})
         if not str(file.filename).lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail={"error": "pdf_only"})
-        parsed_options: dict[str, Any] = {}
-        if options and options.strip():
-            try:
-                parsed = json.loads(options)
-            except Exception:
-                return JSONResponse(status_code=400, content={"error": "invalid_options_json"})
-            if not isinstance(parsed, dict):
-                return JSONResponse(status_code=400, content={"error": "options_must_be_object"})
-            parsed_options = parsed
-
+        workspace_root = _resolve_library_workspace(lib)
+        parsed_options = dict(base_options)
+        parsed_options["library_id"] = lib
         job_id = f"job_{uuid.uuid4().hex}"
-        run_dir = root / job_id
+        run_dir = workspace_root / "imports" / "jobs" / job_id
         upload_name = file.filename or "upload.pdf"
         input_path = run_dir / "input" / upload_name
+        parsed_options["_job_root"] = str(run_dir.resolve())
+        parsed_options["_workspace_path"] = str(workspace_root.resolve())
         file_hash, file_size = _save_upload(file, input_path)
         idempotency_key = hashlib.sha256((file_hash + ":" + _safe_json_dumps(parsed_options)).encode("utf-8")).hexdigest()
         now = _now_iso()
@@ -611,16 +1058,94 @@ def create_app(
             "updated_at": now,
             "file_size": file_size,
             "file_hash": file_hash,
+            "library_id": lib,
+            "workspace_path": str(workspace_root.resolve()),
+            "source_job_id": str(source_job_id or "").strip(),
+            "file_name": upload_name,
         }
         store.create_job(payload)
         run_pipeline_fn(ctx, job_id, str(input_path), parsed_options)
+        return {
+            "job_id": job_id,
+            "status": "queued",
+            "library_id": lib,
+            "workspace_path": str(workspace_root.resolve()),
+            "file_name": upload_name,
+            "sse_url": f"/v1/jobs/{job_id}/events",
+            "result_url": f"/v1/jobs/{job_id}/result",
+        }
+
+    @app.post("/v1/pipeline/parse-extract")
+    async def create_parse_extract_job(
+        file: UploadFile = File(...),
+        library_id: str | None = Form(default=None),
+        options: str | None = Form(default=None),
+    ) -> JSONResponse:
+        lib = str(library_id or "").strip()
+        if not lib:
+            return JSONResponse(status_code=400, content={"error": "library_id_required"})
+        try:
+            parsed_options = _parse_options(options)
+            return JSONResponse(status_code=202, content=_create_one_job(file=file, lib=lib, base_options=parsed_options))
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+            return JSONResponse(status_code=exc.status_code, content=detail)
+
+    @app.post("/v1/pipeline/parse-extract/batch")
+    async def create_parse_extract_batch_jobs(
+        files: list[UploadFile] = File(default=[]),
+        library_id: str | None = Form(default=None),
+    ) -> JSONResponse:
+        lib = str(library_id or "").strip()
+        if not lib:
+            return JSONResponse(status_code=400, content={"error": "library_id_required"})
+        if not files:
+            return JSONResponse(status_code=400, content={"error": "files_required"})
+        accepted: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
+        for file in files:
+            try:
+                accepted.append(_create_one_job(file=file, lib=lib, base_options={}))
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+                rejected.append({"file_name": str(getattr(file, "filename", "") or ""), **detail})
+            except Exception as exc:
+                rejected.append({"file_name": str(getattr(file, "filename", "") or ""), "error": str(exc)})
         return JSONResponse(
-            status_code=202,
+            status_code=202 if accepted else 400,
             content={
-                "job_id": job_id,
-                "status": "queued",
-                "sse_url": f"/v1/jobs/{job_id}/events",
-                "result_url": f"/v1/jobs/{job_id}/result",
+                "library_id": lib,
+                "accepted_count": len(accepted),
+                "rejected_count": len(rejected),
+                "accepted": accepted,
+                "rejected": rejected,
+            },
+        )
+
+    @app.get("/v1/jobs")
+    async def list_jobs(
+        page: int = 1,
+        page_size: int = 50,
+        status: str = "",
+        library_id: str = "",
+        q: str = "",
+        sort: str = "created_at_desc",
+    ) -> JSONResponse:
+        rows, total = store.list_jobs(
+            library_id=library_id,
+            status=status,
+            query=q,
+            sort=sort,
+            page=page,
+            page_size=page_size,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "jobs": [_public_job_payload(x) for x in rows],
+                "total": int(total),
+                "page": max(1, int(page)),
+                "page_size": max(1, int(page_size)),
             },
         )
 
@@ -650,7 +1175,28 @@ def create_app(
         row = store.get_job(job_id)
         if row is None:
             return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
-        updated = store.request_cancel(job_id)
+        cur_status = str(row.get("status", "") or "").strip().lower()
+        if cur_status in {"completed", "failed", "cancelled"}:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "job_not_cancellable", "job_id": job_id, "status": str(row.get("status", "") or "")},
+            )
+        store.request_cancel(job_id)
+        updated = store.update_job(
+            job_id,
+            {
+                "status": "cancelled",
+                "last_event": "cancelled",
+                "error_code": "job_cancelled_by_user",
+                "error_detail": "cancel requested by user",
+            },
+        )
+        updated_status = _norm_status(updated.get("status"))
+        if updated_status != "cancelled":
+            return JSONResponse(
+                status_code=409,
+                content={"error": "job_cancel_race_conflict", "job_id": job_id, "status": str(updated.get("status", "") or "")},
+            )
         return JSONResponse(
             status_code=200,
             content={
@@ -659,6 +1205,38 @@ def create_app(
                 "cancel_requested": bool(updated.get("requested_cancel")),
             },
         )
+
+    @app.post("/v1/jobs/{job_id}/retry")
+    async def retry_job(job_id: str) -> JSONResponse:
+        row = store.get_job(job_id)
+        if row is None:
+            return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
+        status = str(row.get("status", "") or "").strip().lower()
+        if status not in {"failed", "cancelled"}:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "job_not_retryable", "job_id": job_id, "status": str(row.get("status", "") or "")},
+            )
+        source_path = Path(str(row.get("input_path", "") or "")).resolve()
+        if not source_path.exists() or not source_path.is_file():
+            return JSONResponse(status_code=404, content={"error": "input_file_missing", "job_id": job_id})
+        lib = str(row.get("library_id", "") or "").strip()
+        if not lib:
+            return JSONResponse(status_code=400, content={"error": "library_id_missing", "job_id": job_id})
+
+        raw_options = str(row.get("options_json", "") or "").strip()
+        parsed_options: dict[str, Any] = {}
+        if raw_options:
+            try:
+                parsed_options = json.loads(raw_options)
+            except Exception:
+                parsed_options = {}
+        parsed_options.pop("_job_root", None)
+        parsed_options.pop("_workspace_path", None)
+        with source_path.open("rb") as fp:
+            retry_upload = UploadFile(filename=str(row.get("file_name", "") or source_path.name), file=fp)
+            payload = _create_one_job(file=retry_upload, lib=lib, base_options=parsed_options, source_job_id=job_id)
+        return JSONResponse(status_code=202, content={"source_job_id": job_id, "new_job": payload})
 
     @app.get("/v1/jobs/{job_id}/events")
     async def stream_job_events(job_id: str):
@@ -698,7 +1276,7 @@ def main() -> None:
     args = parse_args()
     import uvicorn
 
-    uvicorn.run("scripts.smj_pipeline.serve_async_pipeline_api:app", host=args.host, port=int(args.port), reload=False)
+    uvicorn.run(app, host=args.host, port=int(args.port), reload=False)
 
 
 try:
@@ -712,3 +1290,4 @@ app = create_app()
 
 if __name__ == "__main__":
     main()
+
