@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow, Menu, dialog } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -182,13 +182,22 @@ async function waitForBackendReady() {
 }
 
 function createMainWindow() {
+  Menu.setApplicationMenu(null);
   mainWindow = new BrowserWindow({
     width: 1500,
     height: 920,
     minWidth: 1100,
     minHeight: 700,
-    autoHideMenuBar: false,
+    autoHideMenuBar: true,
     title: "KN Graph Desktop",
+    backgroundColor: "#eef5ff",
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#f7fbff",
+      symbolColor: "#2c4368",
+      height: 34,
+    },
+    backgroundMaterial: "mica",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -222,8 +231,8 @@ app.whenReady().then(async () => {
     createMainWindow();
   } catch (err) {
     dialog.showErrorBox(
-      "启动失败",
-      `桌面应用启动后端失败。\n\n${String(err)}\n\n请确认已安装 uv 与 Python 依赖。`
+      "Startup Failed",
+      `Failed to start backend service.\n\n${String(err)}\n\nPlease confirm uv and Python dependencies are installed.`
     );
     app.quit();
   }

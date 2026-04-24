@@ -61,7 +61,7 @@
           </div>
           <div class="field">
             <label>执行参数（JSON 数组）</label>
-            <textarea id="codex-cli-args" rows="3" data-testid="codex-cli-args" placeholder="[&quot;exec&quot;,&quot;--cwd&quot;,&quot;{workdir}&quot;,&quot;{prompt}&quot;]"></textarea>
+            <textarea id="codex-cli-args" rows="3" data-testid="codex-cli-args" placeholder="[&quot;exec&quot;,&quot;--cd&quot;,&quot;{workdir}&quot;,&quot;{prompt}&quot;]"></textarea>
           </div>
           <div class="field">
             <label>健康检查参数（JSON 数组）</label>
@@ -111,6 +111,22 @@
     <div id="undo-toast" class="undo-toast hidden" data-testid="undo-toast">
       <span id="undo-toast-text">会话已删除</span>
       <button id="undo-delete-btn" class="ghost-btn" type="button" data-testid="undo-delete-btn">撤销</button>
+    </div>
+
+    <div id="preflight-modal" class="modal hidden" data-testid="preflight-modal">
+      <div class="modal-card preflight-card">
+        <header class="modal-header">
+          <h3>发送前自检未通过</h3>
+          <button id="preflight-modal-close" class="ghost-btn" type="button">关闭</button>
+        </header>
+        <div class="modal-body">
+          <div id="preflight-summary" class="preflight-summary"></div>
+          <pre id="preflight-details" class="preflight-details"></pre>
+          <div class="modal-actions">
+            <button id="preflight-modal-ok" class="primary-btn" type="button">我知道了</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script src="/frontend/chat/app.js"></script>

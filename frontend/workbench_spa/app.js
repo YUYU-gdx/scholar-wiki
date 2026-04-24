@@ -179,9 +179,25 @@
   function SearchPanel() {
     const [query, setQuery] = useState("");
     const [mode, setMode] = useState("variable");
+    const [libraryId, setLibraryId] = useState("");
+    const [libraries, setLibraries] = useState([]);
     const [graphHits, setGraphHits] = useState([]);
     const [litHits, setLitHits] = useState([]);
     const [error, setError] = useState("");
+
+    useEffect(function () {
+      jsonFetch("/literature/libraries")
+        .then(function (payload) {
+          const rows = Array.isArray(payload.libraries) ? payload.libraries : [];
+          setLibraries(rows);
+          const fallback = String(payload.default_library_id || "").trim() || (rows[0] ? String(rows[0].library_id || "").trim() : "");
+          setLibraryId(fallback);
+        })
+        .catch(function () {
+          setLibraries([]);
+          setLibraryId("");
+        });
+    }, []);
 
     const runSearch = async function () {
       try {
@@ -189,10 +205,14 @@
           setError("请输入查询词");
           return;
         }
+        if (!libraryId) {
+          setError("请选择文献库");
+          return;
+        }
         setError("");
         const [graphPayload, litPayload] = await Promise.all([
           jsonFetch("/graph/search?mode=" + encodeURIComponent(mode) + "&query=" + encodeURIComponent(query) + "&limit=10"),
-          jsonFetch("/literature/search?query=" + encodeURIComponent(query) + "&top_k=10"),
+          jsonFetch("/literature/search?query=" + encodeURIComponent(query) + "&top_k=10&library_id=" + encodeURIComponent(libraryId)),
         ]);
         setGraphHits(Array.isArray(graphPayload.results) ? graphPayload.results : []);
         const merged = Array.isArray(litPayload.merged_hits) ? litPayload.merged_hits : [];
@@ -226,6 +246,21 @@
           },
           e("option", { value: "variable" }, "variable"),
           e("option", { value: "paper" }, "paper")
+        ),
+        e(
+          "select",
+          {
+            value: libraryId,
+            onChange: function (evt) {
+              setLibraryId(evt.target.value);
+            },
+          },
+          e("option", { value: "" }, "library"),
+          libraries.map(function (row, idx) {
+            const id = String(row && row.library_id ? row.library_id : "");
+            const label = id + " (" + String(row && row.paper_count ? row.paper_count : 0) + ")";
+            return e("option", { key: "lib-" + idx, value: id }, label);
+          })
         ),
         e("button", { onClick: runSearch }, "搜索")
       ),
@@ -329,6 +364,17 @@
     const rebuildLayout = async function () {
       if (!containerRef.current) return;
       let config = defaultLayoutConfig();
+      try {
+        const raw = window.localStorage.getItem("workbench:layout:" + (layoutName || "default"));
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object") {
+            config = parsed;
+          }
+        }
+      } catch (_err) {
+        // ignore localStorage failures
+      }
       try {
         const payload = await jsonFetch("/api/v2/workspace/layout?name=" + encodeURIComponent(layoutName || "default"), {
           method: "GET",

@@ -215,6 +215,17 @@ class ZhipuEmbeddingClient:
         raise RuntimeError("embedding failed")
 
 
+class _NoopEmbeddingClient:
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [[] for _ in texts]
+
+
+class _NoopGeneratorClient:
+    def complete(self, prompt: str, system_prompt: str = "") -> str:
+        _ = prompt, system_prompt
+        return "当前未配置文本生成模型，仅返回检索结果。"
+
+
 class WeaviateRestClient:
     def __init__(self, base_url: str, api_key: str = "", timeout_seconds: int = 30) -> None:
         self.base_url = base_url.rstrip("/")
@@ -447,8 +458,20 @@ class LiteratureService:
         generator_client: Any | None = None,
     ) -> None:
         self.weaviate = weaviate_client or self._build_default_weaviate()
-        self.embedding = embedding_client or self._build_default_embedding()
-        self.generator = generator_client or self._build_default_generator()
+        if embedding_client is not None:
+            self.embedding = embedding_client
+        else:
+            try:
+                self.embedding = self._build_default_embedding()
+            except Exception:
+                self.embedding = _NoopEmbeddingClient()
+        if generator_client is not None:
+            self.generator = generator_client
+        else:
+            try:
+                self.generator = self._build_default_generator()
+            except Exception:
+                self.generator = _NoopGeneratorClient()
         self._sentence_by_id: dict[str, dict[str, Any]] = {}
         self._paragraph_by_id: dict[str, dict[str, Any]] = {}
         self._document_by_id: dict[str, dict[str, Any]] = {}
@@ -510,7 +533,18 @@ class LiteratureService:
         return out
 
     def _build_default_weaviate(self) -> WeaviateRestClient:
-        base_url = os.getenv("WEAVIATE_URL", "http://127.0.0.1:8080").strip()
+        base_url = os.getenv("WEAVIATE_URL", "").strip()
+        if not base_url:
+            for candidate in ("http://127.0.0.1:8080", "http://127.0.0.1:8090"):
+                try:
+                    resp = requests.get(candidate.rstrip("/") + "/v1/.well-known/ready", timeout=1.2)
+                    if resp.status_code < 500:
+                        base_url = candidate
+                        break
+                except Exception:
+                    continue
+        if not base_url:
+            base_url = "http://127.0.0.1:8080"
         api_key = os.getenv("WEAVIATE_API_KEY", "").strip()
         return WeaviateRestClient(base_url=base_url, api_key=api_key)
 
@@ -683,7 +717,9 @@ class LiteratureService:
         for level in levels:
             class_name = _level_to_class(level)
             kw_rows = self.weaviate.bm25_search(class_name, query=query, limit=fetch_limit, library_id=lib if supports_native_filter else "")
-            vg_rows = self.weaviate.vector_search(class_name, vector=query_vec, limit=fetch_limit, library_id=lib if supports_native_filter else "")
+            vg_rows: list[dict[str, Any]] = []
+            if isinstance(query_vec, list) and len(query_vec) > 0:
+                vg_rows = self.weaviate.vector_search(class_name, vector=query_vec, limit=fetch_limit, library_id=lib if supports_native_filter else "")
             if lib and not supports_native_filter:
                 kw_rows = self._filter_rows_by_paper_ids(kw_rows, allowed_paper_ids)
                 vg_rows = self._filter_rows_by_paper_ids(vg_rows, allowed_paper_ids)

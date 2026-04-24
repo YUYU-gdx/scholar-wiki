@@ -40,6 +40,7 @@ def _load_literature_service_class():
     if spec is None or spec.loader is None:
         raise RuntimeError(f"unable to load module: {module_path}")
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod.LiteratureService
 
@@ -86,6 +87,28 @@ def _load_agent_runner_module():
     return mod
 
 
+def _load_library_registry_module():
+    module_path = Path(__file__).resolve().parent / "library_registry.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_library_registry_for_serve_graph_api", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_library_codex_config_module():
+    module_path = Path(__file__).resolve().parent / "codex_library_config.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_codex_library_config_for_serve_graph_api", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 class _InMemoryWorkspaceLayoutStore:
     def __init__(self) -> None:
         self._layouts: dict[str, dict[str, Any]] = {}
@@ -109,45 +132,12 @@ class _InMemoryWorkspaceLayoutStore:
 
 
 def _scan_literature_libraries(index_root: Path) -> dict[str, Any]:
-    libraries: list[dict[str, Any]] = []
-    root = index_root.resolve()
-    if root.exists() and root.is_dir():
-        for fp in sorted(root.glob("*.json")):
-            try:
-                payload = json.loads(fp.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            library_id = str(payload.get("library_id", "") or fp.stem).strip()
-            if not library_id:
-                continue
-            updated_at = str(payload.get("updated_at", "") or "").strip()
-            paper_count_raw = payload.get("paper_count", 0)
-            try:
-                paper_count = int(paper_count_raw)
-            except Exception:
-                paper_ids = payload.get("paper_ids", [])
-                paper_count = len(paper_ids) if isinstance(paper_ids, list) else 0
-            libraries.append(
-                {
-                    "library_id": library_id,
-                    "paper_count": max(0, paper_count),
-                    "updated_at": updated_at,
-                    "path": str(fp.resolve()),
-                    "workspace_path": str(
-                        payload.get("workspace_path", "")
-                        or payload.get("library_root", "")
-                        or payload.get("root_path", "")
-                        or ""
-                    ).strip(),
-                }
-            )
-    libraries.sort(key=lambda x: (str(x.get("updated_at", "")), str(x.get("library_id", ""))), reverse=True)
-    default_library_id = (os.getenv("LITERATURE_DEFAULT_LIBRARY_ID", "") or "").strip()
-    if not default_library_id and libraries:
-        default_library_id = str(libraries[0].get("library_id", "") or "")
-    return {"libraries": libraries, "default_library_id": default_library_id}
+    try:
+        reg_mod = _load_library_registry_module()
+        registry = reg_mod.ensure_registry(legacy_index_root=index_root)
+        return reg_mod.list_libraries_payload(registry)
+    except Exception:
+        return {"libraries": [], "default_library_id": ""}
 
 
 def _resolve_views_json(cli_views_json: Path | None, runs_root: Path) -> Path:
@@ -795,28 +785,60 @@ def make_handler(
         }
 
     libraries_index_root = Path(os.getenv("LITERATURE_LIBRARY_INDEX_ROOT", "outputs/literature_libraries") or "outputs/literature_libraries")
+    try:
+        _library_registry_mod = _load_library_registry_module()
+    except Exception:
+        _library_registry_mod = None
+    try:
+        _library_codex_cfg_mod = _load_library_codex_config_module()
+    except Exception:
+        _library_codex_cfg_mod = None
+
+    def _current_library_registry() -> dict[str, Any]:
+        if _library_registry_mod is None:
+            return {"version": 1, "default_library_id": "", "libraries": []}
+        return _library_registry_mod.ensure_registry(legacy_index_root=libraries_index_root)
 
     def _resolve_library_workspace(library_id: str) -> str:
-        payload = _scan_literature_libraries(libraries_index_root)
-        rows = payload.get("libraries", []) if isinstance(payload, dict) else []
-        if not isinstance(rows, list):
-            rows = []
-        target = str(library_id or payload.get("default_library_id", "") or "").strip()
+        target = str(library_id or "").strip()
         if not target:
             return ""
-        for item in rows:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("library_id", "") or "").strip() != target:
-                continue
-            workspace = str(item.get("workspace_path", "") or "").strip()
-            if workspace:
-                return workspace
-            idx_file = str(item.get("path", "") or "").strip()
-            if idx_file:
-                return str(Path(idx_file).resolve().parent)
-            break
-        return ""
+        registry = _current_library_registry()
+        if _library_registry_mod is None:
+            return ""
+        return str(_library_registry_mod.resolve_workspace_root(registry, target) or "").strip()
+
+    def _load_library_codex_config_payload(library_id: str) -> dict[str, Any]:
+        lib = str(library_id or "").strip()
+        if not lib:
+            return {"error": "library_id_required"}
+        workspace = _resolve_library_workspace(lib)
+        if not workspace:
+            return {"error": "codex_workspace_path_missing", "library_id": lib}
+        if _library_codex_cfg_mod is None:
+            return {"error": "library_codex_config_unavailable", "library_id": lib}
+        cfg = _library_codex_cfg_mod.load_or_init_library_codex_config(workspace_path=workspace, library_id=lib)
+        cfg["workspace_path"] = workspace
+        return cfg
+
+    def _save_library_codex_config_payload(library_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        lib = str(library_id or "").strip()
+        if not lib:
+            return {"error": "library_id_required"}
+        workspace = _resolve_library_workspace(lib)
+        if not workspace:
+            return {"error": "codex_workspace_path_missing", "library_id": lib}
+        if _library_codex_cfg_mod is None:
+            return {"error": "library_codex_config_unavailable", "library_id": lib}
+        current = _library_codex_cfg_mod.load_or_init_library_codex_config(workspace_path=workspace, library_id=lib)
+        next_payload = dict(current)
+        for key in ("codex_home", "mcp_servers", "project_skills"):
+            if key in body:
+                next_payload[key] = body.get(key)
+        next_payload["library_id"] = lib
+        saved = _library_codex_cfg_mod.save_library_codex_config(workspace_path=workspace, payload=next_payload)
+        saved["workspace_path"] = workspace
+        return saved
 
     codex_config_path = Path(os.getenv("CHAT_CODEX_CONFIG_PATH", "outputs/chat/codex_runner_config.json") or "outputs/chat/codex_runner_config.json")
     try:
@@ -829,12 +851,17 @@ def make_handler(
             return {}
         cfg = _agent_runner_mod.load_codex_config(codex_config_path)
         return {
-            "cli_command": str(cfg.cli_command or ""),
-            "cli_args": list(cfg.cli_args),
+            "app_server_command": str(cfg.app_server_command or ""),
+            "app_server_args": list(cfg.app_server_args),
             "healthcheck_args": list(cfg.healthcheck_args),
             "timeout_seconds": int(cfg.timeout_seconds),
             "install_command": str(cfg.install_command or ""),
             "extra_env": dict(cfg.extra_env),
+            "model": str(cfg.model or ""),
+            "approval_policy": str(cfg.approval_policy or ""),
+            "sandbox_mode": str(cfg.sandbox_mode or ""),
+            "personality": str(cfg.personality or ""),
+            "mcp_servers": list(cfg.mcp_servers),
             "config_path": str(codex_config_path.resolve()),
         }
 
@@ -842,12 +869,235 @@ def make_handler(
         codex_config_path.parent.mkdir(parents=True, exist_ok=True)
         existing = _load_codex_config_payload()
         next_payload = dict(existing)
-        for key in ("cli_command", "cli_args", "healthcheck_args", "timeout_seconds", "install_command", "extra_env"):
+        for key in (
+            "app_server_command",
+            "app_server_args",
+            "healthcheck_args",
+            "timeout_seconds",
+            "install_command",
+            "extra_env",
+            "model",
+            "approval_policy",
+            "sandbox_mode",
+            "personality",
+            "mcp_servers",
+        ):
             if key in body:
                 next_payload[key] = body.get(key)
         to_write = {k: v for k, v in next_payload.items() if k != "config_path"}
         codex_config_path.write_text(json.dumps(to_write, ensure_ascii=False, indent=2), encoding="utf-8")
         return _load_codex_config_payload()
+
+    def _check_codex_health() -> dict[str, Any]:
+        payload = {"name": "codex_health", "passed": False, "stage": "codex_health", "backend": "codex"}
+        if _agent_runner_mod is None:
+            payload["code"] = "agent_runner_module_unavailable"
+            payload["detail"] = "agent runner module unavailable"
+            payload["suggestion"] = "检查 scripts/smj_pipeline/agent_runner.py 是否存在且可导入"
+            return payload
+        try:
+            cfg = _agent_runner_mod.load_codex_config(codex_config_path)
+            runner = _agent_runner_mod.CodexRunner(cfg)
+            health = runner.health()
+            payload["detail"] = json.dumps(health, ensure_ascii=False)
+            payload["version"] = str(health.get("version", "") or "")
+            if bool(health.get("available")):
+                payload["passed"] = True
+                payload["code"] = "ok"
+            else:
+                payload["code"] = str(health.get("reason", "codex_unavailable") or "codex_unavailable")
+                payload["suggestion"] = "确认 OpenAI 鉴权环境变量、Codex CLI 安装与网络可达性"
+            return payload
+        except Exception as exc:
+            payload["code"] = "codex_healthcheck_failed"
+            payload["detail"] = str(exc)
+            payload["suggestion"] = "检查 codex 配置文件与可执行命令"
+            return payload
+
+    def _check_workspace_and_library_config(library_id: str) -> list[dict[str, Any]]:
+        checks: list[dict[str, Any]] = []
+        lib = str(library_id or "").strip()
+
+        ws_row: dict[str, Any] = {
+            "name": "workspace_path",
+            "passed": False,
+            "stage": "workspace_resolution",
+            "backend": "builtin",
+            "code": "workspace_path_missing",
+            "detail": "",
+        }
+        workspace = _resolve_library_workspace(lib)
+        ws_row["detail"] = workspace or ""
+        if workspace and Path(workspace).exists() and Path(workspace).is_dir():
+            ws_row["passed"] = True
+            ws_row["code"] = "ok"
+        else:
+            ws_row["suggestion"] = "???????????????? workspace ??"
+        checks.append(ws_row)
+
+        cfg_row: dict[str, Any] = {
+            "name": "library_codex_config",
+            "passed": False,
+            "stage": "library_config",
+            "backend": "builtin",
+            "code": "library_codex_config_missing",
+            "detail": "",
+        }
+        skill_row: dict[str, Any] = {
+            "name": "library_project_skills",
+            "passed": False,
+            "stage": "library_config",
+            "backend": "builtin",
+            "code": "project_skills_missing",
+            "detail": "",
+        }
+        mcp_cfg_row: dict[str, Any] = {
+            "name": "library_mcp_servers",
+            "passed": False,
+            "stage": "library_config",
+            "backend": "builtin",
+            "code": "mcp_servers_missing",
+            "detail": "",
+        }
+
+        payload = _load_library_codex_config_payload(lib)
+        if isinstance(payload, dict) and str(payload.get("error", "")).strip():
+            cfg_row["code"] = str(payload.get("error", "library_codex_config_missing"))
+            cfg_row["detail"] = json.dumps(payload, ensure_ascii=False)
+            cfg_row["suggestion"] = "?? /chat/codex/libraries/{library_id}/config ????"
+            checks.extend([cfg_row, skill_row, mcp_cfg_row])
+            return checks
+
+        cfg = payload if isinstance(payload, dict) else {}
+        cfg_row["detail"] = json.dumps(cfg, ensure_ascii=False)[:1200]
+        cfg_row["passed"] = True
+        cfg_row["code"] = "ok"
+
+        project_skills = cfg.get("project_skills", [])
+        skill_row["detail"] = json.dumps(project_skills, ensure_ascii=False)
+        valid_skills = 0
+        if isinstance(project_skills, list):
+            for item in project_skills:
+                if not isinstance(item, dict):
+                    continue
+                pth = str(item.get("path", "") or "").strip()
+                if pth and Path(pth).exists():
+                    valid_skills += 1
+        if valid_skills > 0:
+            skill_row["passed"] = True
+            skill_row["code"] = "ok"
+        else:
+            skill_row["passed"] = True
+            skill_row["code"] = "optional_unset"
+            skill_row["suggestion"] = "????? project_skills?Codex ?? workspace ?????????"
+
+        mcp_servers = cfg.get("mcp_servers", [])
+        mcp_cfg_row["detail"] = json.dumps(mcp_servers, ensure_ascii=False)
+        if isinstance(mcp_servers, list) and len(mcp_servers) > 0:
+            mcp_cfg_row["passed"] = True
+            mcp_cfg_row["code"] = "ok"
+        else:
+            mcp_cfg_row["passed"] = True
+            mcp_cfg_row["code"] = "optional_unset"
+            mcp_cfg_row["suggestion"] = "??? workspace ? mcp_servers?Codex ??????????"
+
+        checks.extend([cfg_row, skill_row, mcp_cfg_row])
+        return checks
+
+    def _check_mcp_probe(library_id: str, base_url: str) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "name": "mcp_rag_search_probe",
+            "passed": False,
+            "stage": "mcp_probe",
+            "backend": "mcp",
+            "code": "mcp_probe_failed",
+            "detail": "",
+        }
+        probe_script = Path(__file__).resolve().parent / "mcp_probe.py"
+        if not probe_script.exists():
+            row["code"] = "mcp_probe_script_missing"
+            row["detail"] = str(probe_script)
+            row["suggestion"] = "确认 scripts/smj_pipeline/mcp_probe.py 已存在"
+            return row
+        cmd = [
+            sys.executable,
+            str(probe_script),
+            "--api-base-url",
+            str(base_url or "").strip(),
+            "--library-id",
+            str(library_id or "").strip(),
+            "--query",
+            "supply chain resilience",
+            "--top-k",
+            "1",
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(Path(__file__).resolve().parents[2]),
+                capture_output=True,
+                text=True,
+                timeout=35,
+                check=False,
+            )
+            out = str(proc.stdout or "").strip()
+            err = str(proc.stderr or "").strip()
+            row["detail"] = (out + ("\n" + err if err else "")).strip()[:2000]
+            if int(proc.returncode) == 0:
+                row["passed"] = True
+                row["code"] = "ok"
+            else:
+                row["code"] = f"mcp_probe_failed:{int(proc.returncode)}"
+                row["suggestion"] = "检查 kn_mcp_server、文献检索接口与 library_id 是否可用"
+        except Exception as exc:
+            row["code"] = "mcp_probe_exception"
+            row["detail"] = str(exc)
+            row["suggestion"] = "检查 Python 运行环境与 mcp_probe.py 可执行性"
+        return row
+
+    def _build_preflight_payload(library_id: str, base_url: str) -> dict[str, Any]:
+        checks: list[dict[str, Any]] = []
+        checks.append(_check_codex_health())
+        checks.extend(_check_workspace_and_library_config(library_id))
+        checks.append(_check_mcp_probe(library_id=library_id, base_url=base_url))
+
+        critical_names = {"codex_health", "workspace_path", "library_codex_config"}
+        failed = [x for x in checks if not bool(x.get("passed"))]
+        warning_rows = [x for x in failed if str(x.get("name", "") or "").strip() not in critical_names]
+        error_rows = [x for x in failed if str(x.get("name", "") or "").strip() in critical_names]
+        if error_rows:
+            severity = "error"
+        elif warning_rows:
+            severity = "warn"
+        else:
+            severity = "ok"
+        ok = severity != "error"
+        if severity == "ok":
+            summary = "ok"
+        elif severity == "warn":
+            summary = "warn:" + ",".join(str(x.get("name", "")) for x in warning_rows)
+        else:
+            summary = "failed:" + ",".join(str(x.get("name", "")) for x in error_rows)
+        for idx, row in enumerate(checks, start=1):
+            name = str(row.get("name", "") or "").strip()
+            row["check_id"] = f"preflight_{idx}_{name or 'check'}"
+            if bool(row.get("passed")):
+                row["severity"] = "ok"
+            elif name in critical_names:
+                row["severity"] = "error"
+            else:
+                row["severity"] = "warn"
+        return {
+            "ok": ok,
+            "severity": severity,
+            "library_id": str(library_id or "").strip(),
+            "summary": summary,
+            "checks": checks,
+            "failed_count": len(failed),
+            "warning_count": len(warning_rows),
+            "error_count": len(error_rows),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     chat = chat_service
     if chat is None:
@@ -872,6 +1122,11 @@ def make_handler(
                 paper_get_fn=_paper_get,
                 variable_get_fn=_variable_get,
                 library_workspace_resolver_fn=_resolve_library_workspace,
+                library_codex_config_resolver_fn=lambda workspace_path, library_id: (
+                    _library_codex_cfg_mod.load_or_init_library_codex_config(workspace_path=workspace_path, library_id=library_id)
+                    if _library_codex_cfg_mod is not None
+                    else {}
+                ),
             )
         except Exception:
             chat = None
@@ -918,6 +1173,24 @@ def make_handler(
                     return _json(self, {"ok": True, "config": saved}, status=200)
                 except Exception as exc:
                     return _json(self, {"error": "codex_config_save_failed", "detail": str(exc)}, status=400)
+
+            if path.startswith("/chat/codex/libraries/") and path.endswith("/config"):
+                try:
+                    prefix = "/chat/codex/libraries/"
+                    library_id = str(path[len(prefix) : -len("/config")]).strip().strip("/")
+                    if not library_id:
+                        return _json(self, {"error": "library_id_required"}, status=400)
+                    body = self._read_json_body()
+                    if not isinstance(body, dict):
+                        return _json(self, {"error": "invalid_payload"}, status=400)
+                    saved = _save_library_codex_config_payload(library_id, body)
+                    if isinstance(saved, dict) and str(saved.get("error", "")).strip():
+                        code = str(saved.get("error", "")).strip()
+                        status_code = 404 if code == "codex_workspace_path_missing" else 500
+                        return _json(self, saved, status=status_code)
+                    return _json(self, {"ok": True, "config": saved}, status=200)
+                except Exception as exc:
+                    return _json(self, {"error": "library_codex_config_save_failed", "detail": str(exc)}, status=400)
 
             if path == "/chat/codex/install":
                 try:
@@ -1047,8 +1320,13 @@ def make_handler(
                 try:
                     body = self._read_json_body()
                     title = str(body.get("title", "") or "")
-                    payload = chat.create_session(title=title, default_mode="agent")
+                    library_id = str(body.get("library_id", "") or "").strip()
+                    if not library_id:
+                        return _json(self, {"error": "library_id_required"}, status=400)
+                    payload = chat.create_session(title=title, default_mode="agent", library_id=library_id)
                     return _json(self, payload, status=201)
+                except ValueError as exc:
+                    return _json(self, {"error": str(exc)}, status=400)
                 except Exception as exc:
                     return _json(self, {"error": "chat_create_session_failed", "detail": str(exc)}, status=500)
 
@@ -1070,6 +1348,8 @@ def make_handler(
                     model = "codex-local"
                     stream = bool(body.get("stream", True))
                     library_id = str(body.get("library_id", "") or "").strip()
+                    if not library_id:
+                        return _json(self, {"error": "library_id_required"}, status=400)
                     payload = chat.submit_message(
                         session_id=session_id,
                         content=content,
@@ -1091,8 +1371,22 @@ def make_handler(
                     )
                 except KeyError:
                     return _json(self, {"error": "session_not_found"}, status=404)
+                except ValueError as exc:
+                    return _json(self, {"error": str(exc)}, status=400)
                 except Exception as exc:
-                    return _json(self, {"error": "chat_submit_failed", "detail": str(exc)}, status=500)
+                    detail = str(exc)
+                    error_code = detail.split(":", 1)[0] if ":" in detail else (detail or "chat_submit_failed")
+                    backend = "codex" if str(error_code).startswith("codex_") else ("hermes" if str(error_code).startswith("hermes_") else "")
+                    return _json(
+                        self,
+                        {
+                            "error": "chat_submit_failed",
+                            "detail": detail,
+                            "error_code": error_code,
+                            "backend": backend,
+                        },
+                        status=500,
+                    )
 
             if path.startswith("/chat/sessions/") and path.endswith("/restore"):
                 if chat is None:
@@ -1102,7 +1396,10 @@ def make_handler(
                     session_id = str(path[len(prefix) : -len("/restore")]).strip().rstrip("/")
                     if not session_id:
                         return _json(self, {"error": "session_id_required"}, status=400)
-                    payload = chat.restore_session(session_id)
+                    library_id = str((parse_qs(urlparse(self.path).query).get("library_id", [""])[0] or "")).strip()
+                    if not library_id:
+                        return _json(self, {"error": "library_id_required"}, status=400)
+                    payload = chat.restore_session(session_id, library_id=library_id)
                     if not isinstance(payload, dict):
                         return _json(self, {"error": "chat_restore_failed"}, status=500)
                     if not bool(payload.get("restored")):
@@ -1110,6 +1407,8 @@ def make_handler(
                         status_code = 409 if error == "restore_window_expired" else 404
                         return _json(self, {"error": error, "session_id": session_id}, status=status_code)
                     return _json(self, payload, status=200)
+                except ValueError as exc:
+                    return _json(self, {"error": str(exc)}, status=400)
                 except Exception as exc:
                     return _json(self, {"error": "chat_restore_failed", "detail": str(exc)}, status=500)
 
@@ -1125,7 +1424,9 @@ def make_handler(
                     if not isinstance(options, dict):
                         options = {}
                     library_id = str(body.get("library_id", "") or "").strip()
-                    if library_id and "library_id" not in options:
+                    if not library_id:
+                        return _json(self, {"error": "library_id_required"}, status=400)
+                    if "library_id" not in options:
                         options["library_id"] = library_id
                     result = literature.import_manifest(manifest_path, options=options if isinstance(options, dict) else None)
                     return _json(self, result)
@@ -1145,13 +1446,15 @@ def make_handler(
                     else:
                         parsed_levels = _parse_levels(str(levels or "sentence"))
                     library_id = str(body.get("library_id", "") or "").strip()
+                    if not library_id:
+                        return _json(self, {"error": "library_id_required"}, status=400)
                     keyword_weight = float(body.get("keyword_weight", 0.4) or 0.4)
                     rag_weight = float(body.get("rag_weight", 0.6) or 0.6)
                     if literature is None:
                         return _json(
                             self,
                             {
-                                "answer": "当前文献服务暂不可用，已降级返回空引用结果。",
+                                "answer": "文献服务暂不可用，当前无法基于文献库给出可靠回答。",
                                 "citations": [],
                                 "retrieval": {
                                     "keyword_hits": [],
@@ -1195,6 +1498,7 @@ def make_handler(
         def do_DELETE(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = parsed.path
+            qs = parse_qs(parsed.query)
 
             if path.startswith("/chat/sessions/"):
                 if chat is None:
@@ -1203,10 +1507,15 @@ def make_handler(
                     session_id = str(path[len("/chat/sessions/") :]).strip().rstrip("/")
                     if not session_id:
                         return _json(self, {"error": "session_id_required"}, status=400)
-                    payload = chat.delete_session(session_id=session_id, undo_window_seconds=5)
+                    library_id = str((qs.get("library_id", [""])[0] or "")).strip()
+                    if not library_id:
+                        return _json(self, {"error": "library_id_required"}, status=400)
+                    payload = chat.delete_session(session_id=session_id, undo_window_seconds=5, library_id=library_id)
                     return _json(self, payload, status=200)
                 except KeyError:
                     return _json(self, {"error": "session_not_found"}, status=404)
+                except ValueError as exc:
+                    return _json(self, {"error": str(exc)}, status=400)
                 except Exception as exc:
                     return _json(self, {"error": "chat_delete_session_failed", "detail": str(exc)}, status=500)
 
@@ -1285,8 +1594,13 @@ def make_handler(
                 if chat is None:
                     return _json(self, {"error": "chat_service_unavailable"}, status=503)
                 try:
-                    payload = {"sessions": chat.list_sessions()}
+                    library_id = str((qs.get("library_id", [""])[0] or "")).strip()
+                    if not library_id:
+                        return _json(self, {"error": "library_id_required"}, status=400)
+                    payload = {"sessions": chat.list_sessions(library_id=library_id)}
                     return _json(self, payload)
+                except ValueError as exc:
+                    return _json(self, {"error": str(exc)}, status=400)
                 except Exception as exc:
                     return _json(self, {"error": "chat_list_sessions_failed", "detail": str(exc)}, status=500)
 
@@ -1295,6 +1609,30 @@ def make_handler(
                     return _json(self, {"config": _load_codex_config_payload()}, status=200)
                 except Exception as exc:
                     return _json(self, {"error": "codex_config_load_failed", "detail": str(exc)}, status=500)
+
+            if path == "/chat/codex/preflight":
+                library_id = str((qs.get("library_id", [""])[0] or "")).strip()
+                if not library_id:
+                    return _json(self, {"error": "library_id_required"}, status=400)
+                host = str(self.headers.get("Host", "") or "").strip()
+                if not host:
+                    host = f"127.0.0.1:{int(self.server.server_address[1])}"
+                scheme = "https" if str(self.headers.get("X-Forwarded-Proto", "")).lower() == "https" else "http"
+                base_url = f"{scheme}://{host}"
+                payload = _build_preflight_payload(library_id=library_id, base_url=base_url)
+                return _json(self, payload, status=200)
+
+            if path.startswith("/chat/codex/libraries/") and path.endswith("/config"):
+                prefix = "/chat/codex/libraries/"
+                library_id = str(path[len(prefix) : -len("/config")]).strip().strip("/")
+                if not library_id:
+                    return _json(self, {"error": "library_id_required"}, status=400)
+                payload = _load_library_codex_config_payload(library_id)
+                if isinstance(payload, dict) and str(payload.get("error", "")).strip():
+                    code = str(payload.get("error", "")).strip()
+                    status_code = 404 if code == "codex_workspace_path_missing" else 500
+                    return _json(self, payload, status=status_code)
+                return _json(self, {"config": payload}, status=200)
 
             if path == "/chat/codex/health":
                 if _agent_runner_mod is None:
@@ -1366,11 +1704,16 @@ def make_handler(
                 session_id = str(path[len("/chat/sessions/") :]).strip().rstrip("/")
                 if not session_id:
                     return _json(self, {"error": "session_id_required"}, status=400)
+                library_id = str((qs.get("library_id", [""])[0] or "")).strip()
+                if not library_id:
+                    return _json(self, {"error": "library_id_required"}, status=400)
                 try:
-                    payload = chat.get_session_with_messages(session_id)
+                    payload = chat.get_session_with_messages(session_id, library_id=library_id)
                     if payload is None:
                         return _json(self, {"error": "session_not_found", "session_id": session_id}, status=404)
                     return _json(self, payload)
+                except ValueError as exc:
+                    return _json(self, {"error": str(exc)}, status=400)
                 except Exception as exc:
                     return _json(self, {"error": "chat_get_session_failed", "detail": str(exc)}, status=500)
 
@@ -1382,6 +1725,8 @@ def make_handler(
                 raw_levels = (qs.get("levels", ["sentence"])[0] or "sentence").strip()
                 levels = _parse_levels(raw_levels)
                 library_id = (qs.get("library_id", [""])[0] or "").strip()
+                if not library_id:
+                    return _json(self, {"error": "library_id_required"}, status=400)
                 include_expanded_context = (qs.get("include_expanded_context", ["true"])[0] or "true").strip().lower() in {"1", "true", "yes"}
                 keyword_weight = float((qs.get("keyword_weight", ["0.4"])[0] or "0.4"))
                 rag_weight = float((qs.get("rag_weight", ["0.6"])[0] or "0.6"))
@@ -1415,8 +1760,9 @@ def make_handler(
                 return _json(self, payload)
 
             if path == "/literature/libraries":
-                root = Path(os.getenv("LITERATURE_LIBRARY_INDEX_ROOT", "outputs/literature_libraries") or "outputs/literature_libraries")
-                return _json(self, _scan_literature_libraries(root))
+                if _library_registry_mod is None:
+                    return _json(self, {"libraries": [], "default_library_id": ""})
+                return _json(self, _library_registry_mod.list_libraries_payload(_current_library_registry()))
 
             if path == "/api/v2/workspace/layouts":
                 try:

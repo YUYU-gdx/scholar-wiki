@@ -1,13 +1,18 @@
-(function () {
+﻿(function () {
   "use strict";
 
   const els = {
-    cliCommand: document.getElementById("codex-cli-command"),
-    cliArgs: document.getElementById("codex-cli-args"),
+    appServerCommand: document.getElementById("codex-app-server-command"),
+    appServerArgs: document.getElementById("codex-app-server-args"),
     healthArgs: document.getElementById("codex-healthcheck-args"),
     installCommand: document.getElementById("codex-install-command"),
     timeout: document.getElementById("codex-timeout-seconds"),
     extraEnv: document.getElementById("codex-extra-env"),
+    model: document.getElementById("codex-model"),
+    approvalPolicy: document.getElementById("codex-approval-policy"),
+    sandboxMode: document.getElementById("codex-sandbox-mode"),
+    personality: document.getElementById("codex-personality"),
+    mcpServers: document.getElementById("codex-mcp-servers"),
     healthBtn: document.getElementById("codex-health-btn"),
     installBtn: document.getElementById("codex-install-btn"),
     saveBtn: document.getElementById("codex-save-btn"),
@@ -44,22 +49,32 @@
 
   function fillConfig(cfg) {
     const c = cfg && typeof cfg === "object" ? cfg : {};
-    els.cliCommand.value = String(c.cli_command || "");
-    els.cliArgs.value = JSON.stringify(Array.isArray(c.cli_args) ? c.cli_args : [], null, 2);
+    els.appServerCommand.value = String(c.app_server_command || "");
+    els.appServerArgs.value = JSON.stringify(Array.isArray(c.app_server_args) ? c.app_server_args : [], null, 2);
     els.healthArgs.value = JSON.stringify(Array.isArray(c.healthcheck_args) ? c.healthcheck_args : [], null, 2);
     els.installCommand.value = String(c.install_command || "");
     els.timeout.value = String(Number(c.timeout_seconds || 180));
     els.extraEnv.value = JSON.stringify(c.extra_env && typeof c.extra_env === "object" ? c.extra_env : {}, null, 2);
+    els.model.value = String(c.model || "gpt-5.2");
+    els.approvalPolicy.value = String(c.approval_policy || "never");
+    els.sandboxMode.value = String(c.sandbox_mode || "workspace-write");
+    els.personality.value = String(c.personality || "pragmatic");
+    els.mcpServers.value = JSON.stringify(Array.isArray(c.mcp_servers) ? c.mcp_servers : [], null, 2);
   }
 
   function collectConfig() {
     return {
-      cli_command: String(els.cliCommand.value || "").trim(),
-      cli_args: parseJson(els.cliArgs.value, []),
+      app_server_command: String(els.appServerCommand.value || "").trim(),
+      app_server_args: parseJson(els.appServerArgs.value, []),
       healthcheck_args: parseJson(els.healthArgs.value, []),
       install_command: String(els.installCommand.value || "").trim(),
       timeout_seconds: Number(els.timeout.value || 180),
-      extra_env: parseJson(els.extraEnv.value, {})
+      extra_env: parseJson(els.extraEnv.value, {}),
+      model: String(els.model.value || "").trim(),
+      approval_policy: String(els.approvalPolicy.value || "").trim(),
+      sandbox_mode: String(els.sandboxMode.value || "").trim(),
+      personality: String(els.personality.value || "").trim(),
+      mcp_servers: parseJson(els.mcpServers.value, [])
     };
   }
 

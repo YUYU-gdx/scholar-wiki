@@ -133,9 +133,11 @@ CREATE INDEX IF NOT EXISTS idx_interaction_inputs_interaction_id ON interaction_
 CREATE TABLE IF NOT EXISTS chat_sessions (
   session_id TEXT PRIMARY KEY,
   title TEXT NOT NULL DEFAULT '',
-  default_mode TEXT NOT NULL DEFAULT 'fast',
+  default_mode TEXT NOT NULL DEFAULT 'agent',
+  library_id TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL
+  updated_at TIMESTAMPTZ NOT NULL,
+  deleted_at TIMESTAMPTZ NULL
 );
 
 CREATE TABLE IF NOT EXISTS chat_messages (

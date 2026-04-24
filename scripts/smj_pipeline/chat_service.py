@@ -27,6 +27,17 @@ def _safe_json(raw: object, fallback: Any) -> Any:
         return fallback
 
 
+def _clip(raw: object, limit: int) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if int(limit) <= 0:
+        return text
+    if len(text) <= int(limit):
+        return text
+    return text[: int(limit)] + "..."
+
+
 def _load_agent_runner_factory_class():
     module_path = Path(__file__).resolve().parent / "agent_runner.py"
     spec = __import__("importlib.util").util.spec_from_file_location(
@@ -41,14 +52,28 @@ def _load_agent_runner_factory_class():
     return mod.AgentRunnerFactory
 
 
+def _load_library_codex_config_module():
+    module_path = Path(__file__).resolve().parent / "codex_library_config.py"
+    spec = __import__("importlib.util").util.spec_from_file_location(
+        "smj_pipeline_codex_library_config_for_chat_service",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("codex_library_config_unavailable")
+    mod = __import__("importlib.util").util.module_from_spec(spec)
+    __import__("sys").modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 class ChatStore(Protocol):
-    def create_session(self, title: str, default_mode: str) -> dict[str, Any]: ...
+    def create_session(self, title: str, default_mode: str, library_id: str) -> dict[str, Any]: ...
 
-    def list_sessions(self) -> list[dict[str, Any]]: ...
+    def list_sessions(self, library_id: str) -> list[dict[str, Any]]: ...
 
-    def get_session(self, session_id: str) -> dict[str, Any] | None: ...
-    def soft_delete_session(self, session_id: str, deleted_at: str) -> dict[str, Any] | None: ...
-    def restore_session(self, session_id: str) -> dict[str, Any] | None: ...
+    def get_session(self, session_id: str, library_id: str) -> dict[str, Any] | None: ...
+    def soft_delete_session(self, session_id: str, deleted_at: str, library_id: str) -> dict[str, Any] | None: ...
+    def restore_session(self, session_id: str, library_id: str) -> dict[str, Any] | None: ...
 
     def create_message(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -66,7 +91,7 @@ class InMemoryChatStore:
         self._messages: dict[str, dict[str, Any]] = {}
         self._session_messages: dict[str, list[str]] = defaultdict(list)
 
-    def create_session(self, title: str, default_mode: str) -> dict[str, Any]:
+    def create_session(self, title: str, default_mode: str, library_id: str) -> dict[str, Any]:
         with self._lock:
             now = _now_iso()
             session_id = f"sess_{uuid.uuid4().hex}"
@@ -74,6 +99,7 @@ class InMemoryChatStore:
                 "session_id": session_id,
                 "title": title.strip() or "新会话",
                 "default_mode": default_mode,
+                "library_id": str(library_id or "").strip(),
                 "created_at": now,
                 "updated_at": now,
                 "deleted_at": None,
@@ -81,24 +107,30 @@ class InMemoryChatStore:
             self._sessions[session_id] = dict(row)
             return dict(row)
 
-    def list_sessions(self) -> list[dict[str, Any]]:
+    def list_sessions(self, library_id: str) -> list[dict[str, Any]]:
         with self._lock:
+            target_library = str(library_id or "").strip()
             rows = list(self._sessions.values())
             rows = [r for r in rows if not str(r.get("deleted_at", "") or "").strip()]
+            rows = [r for r in rows if str(r.get("library_id", "") or "").strip() == target_library]
             rows.sort(key=lambda x: str(x.get("updated_at", "")), reverse=True)
             return [dict(r) for r in rows]
 
-    def get_session(self, session_id: str) -> dict[str, Any] | None:
+    def get_session(self, session_id: str, library_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self._sessions.get(session_id)
             if isinstance(row, dict) and str(row.get("deleted_at", "") or "").strip():
                 return None
+            if isinstance(row, dict) and str(row.get("library_id", "") or "").strip() != str(library_id or "").strip():
+                return None
             return dict(row) if isinstance(row, dict) else None
 
-    def soft_delete_session(self, session_id: str, deleted_at: str) -> dict[str, Any] | None:
+    def soft_delete_session(self, session_id: str, deleted_at: str, library_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self._sessions.get(str(session_id))
             if not isinstance(row, dict):
+                return None
+            if str(row.get("library_id", "") or "").strip() != str(library_id or "").strip():
                 return None
             if str(row.get("deleted_at", "") or "").strip():
                 return None
@@ -106,10 +138,12 @@ class InMemoryChatStore:
             row["updated_at"] = _now_iso()
             return dict(row)
 
-    def restore_session(self, session_id: str) -> dict[str, Any] | None:
+    def restore_session(self, session_id: str, library_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self._sessions.get(str(session_id))
             if not isinstance(row, dict):
+                return None
+            if str(row.get("library_id", "") or "").strip() != str(library_id or "").strip():
                 return None
             if not str(row.get("deleted_at", "") or "").strip():
                 return None
@@ -168,7 +202,8 @@ class PostgresChatStore:
         create table if not exists chat_sessions (
             session_id text primary key,
             title text not null default '',
-            default_mode text not null default 'fast',
+            default_mode text not null default 'agent',
+            library_id text not null default '',
             created_at timestamptz not null,
             updated_at timestamptz not null,
             deleted_at timestamptz null
@@ -178,7 +213,7 @@ class PostgresChatStore:
             message_id text primary key,
             session_id text not null,
             role text not null,
-            mode text not null default 'fast',
+            mode text not null default 'agent',
             provider text not null default '',
             model text not null default '',
             content text not null default '',
@@ -205,15 +240,17 @@ class PostgresChatStore:
             with conn.cursor() as cur:
                 cur.execute(ddl)
                 cur.execute("alter table chat_sessions add column if not exists deleted_at timestamptz null")
+                cur.execute("alter table chat_sessions add column if not exists library_id text not null default ''")
             conn.commit()
 
-    def create_session(self, title: str, default_mode: str) -> dict[str, Any]:
+    def create_session(self, title: str, default_mode: str, library_id: str) -> dict[str, Any]:
         session_id = f"sess_{uuid.uuid4().hex}"
         now = _now_iso()
         row = {
             "session_id": session_id,
             "title": title.strip() or "新会话",
             "default_mode": default_mode,
+            "library_id": str(library_id or "").strip(),
             "created_at": now,
             "updated_at": now,
             "deleted_at": None,
@@ -222,24 +259,25 @@ class PostgresChatStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    insert into chat_sessions(session_id, title, default_mode, created_at, updated_at)
-                    values (%(session_id)s, %(title)s, %(default_mode)s, %(created_at)s, %(updated_at)s)
+                    insert into chat_sessions(session_id, title, default_mode, library_id, created_at, updated_at)
+                    values (%(session_id)s, %(title)s, %(default_mode)s, %(library_id)s, %(created_at)s, %(updated_at)s)
                     """,
                     row,
                 )
             conn.commit()
         return row
 
-    def list_sessions(self) -> list[dict[str, Any]]:
+    def list_sessions(self, library_id: str) -> list[dict[str, Any]]:
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    select session_id, title, default_mode, created_at, updated_at, deleted_at
+                    select session_id, title, default_mode, library_id, created_at, updated_at, deleted_at
                     from chat_sessions
-                    where deleted_at is null
+                    where deleted_at is null and library_id=%s
                     order by updated_at desc
-                    """
+                    """,
+                    (str(library_id or "").strip(),),
                 )
                 rows = cur.fetchall()
         out: list[dict[str, Any]] = []
@@ -249,19 +287,21 @@ class PostgresChatStore:
                     "session_id": row[0],
                     "title": row[1],
                     "default_mode": row[2],
-                    "created_at": str(row[3]),
-                    "updated_at": str(row[4]),
-                    "deleted_at": str(row[5]) if row[5] is not None else None,
+                    "library_id": row[3],
+                    "created_at": str(row[4]),
+                    "updated_at": str(row[5]),
+                    "deleted_at": str(row[6]) if row[6] is not None else None,
                 }
             )
         return out
 
-    def get_session(self, session_id: str) -> dict[str, Any] | None:
+    def get_session(self, session_id: str, library_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "select session_id, title, default_mode, created_at, updated_at, deleted_at from chat_sessions where session_id=%s and deleted_at is null",
-                    (session_id,),
+                    "select session_id, title, default_mode, library_id, created_at, updated_at, deleted_at "
+                    "from chat_sessions where session_id=%s and library_id=%s and deleted_at is null",
+                    (session_id, str(library_id or "").strip()),
                 )
                 row = cur.fetchone()
         if row is None:
@@ -270,22 +310,23 @@ class PostgresChatStore:
             "session_id": row[0],
             "title": row[1],
             "default_mode": row[2],
-            "created_at": str(row[3]),
-            "updated_at": str(row[4]),
-            "deleted_at": str(row[5]) if row[5] is not None else None,
+            "library_id": row[3],
+            "created_at": str(row[4]),
+            "updated_at": str(row[5]),
+            "deleted_at": str(row[6]) if row[6] is not None else None,
         }
 
-    def soft_delete_session(self, session_id: str, deleted_at: str) -> dict[str, Any] | None:
+    def soft_delete_session(self, session_id: str, deleted_at: str, library_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     update chat_sessions
                     set deleted_at=%s, updated_at=%s
-                    where session_id=%s and deleted_at is null
-                    returning session_id, title, default_mode, created_at, updated_at, deleted_at
+                    where session_id=%s and library_id=%s and deleted_at is null
+                    returning session_id, title, default_mode, library_id, created_at, updated_at, deleted_at
                     """,
-                    (str(deleted_at or _now_iso()), _now_iso(), str(session_id)),
+                    (str(deleted_at or _now_iso()), _now_iso(), str(session_id), str(library_id or "").strip()),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -295,22 +336,23 @@ class PostgresChatStore:
             "session_id": row[0],
             "title": row[1],
             "default_mode": row[2],
-            "created_at": str(row[3]),
-            "updated_at": str(row[4]),
-            "deleted_at": str(row[5]) if row[5] is not None else None,
+            "library_id": row[3],
+            "created_at": str(row[4]),
+            "updated_at": str(row[5]),
+            "deleted_at": str(row[6]) if row[6] is not None else None,
         }
 
-    def restore_session(self, session_id: str) -> dict[str, Any] | None:
+    def restore_session(self, session_id: str, library_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     update chat_sessions
                     set deleted_at=null, updated_at=%s
-                    where session_id=%s and deleted_at is not null
-                    returning session_id, title, default_mode, created_at, updated_at, deleted_at
+                    where session_id=%s and library_id=%s and deleted_at is not null
+                    returning session_id, title, default_mode, library_id, created_at, updated_at, deleted_at
                     """,
-                    (_now_iso(), str(session_id)),
+                    (_now_iso(), str(session_id), str(library_id or "").strip()),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -320,9 +362,10 @@ class PostgresChatStore:
             "session_id": row[0],
             "title": row[1],
             "default_mode": row[2],
-            "created_at": str(row[3]),
-            "updated_at": str(row[4]),
-            "deleted_at": str(row[5]) if row[5] is not None else None,
+            "library_id": row[3],
+            "created_at": str(row[4]),
+            "updated_at": str(row[5]),
+            "deleted_at": str(row[6]) if row[6] is not None else None,
         }
 
     def create_message(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -551,6 +594,7 @@ class ChatService:
         paper_get_fn: Callable[[str], dict[str, Any] | None],
         variable_get_fn: Callable[[str], dict[str, Any] | None],
         library_workspace_resolver_fn: Callable[[str], str] | None = None,
+        library_codex_config_resolver_fn: Callable[[str, str], dict[str, Any]] | None = None,
         agent_backend: str | None = None,
     ) -> None:
         self._store = self._build_store()
@@ -562,6 +606,18 @@ class ChatService:
         self._paper_get = paper_get_fn
         self._variable_get = variable_get_fn
         self._library_workspace_resolver = library_workspace_resolver_fn
+        self._library_codex_config_resolver = library_codex_config_resolver_fn
+        if self._library_codex_config_resolver is None:
+            try:
+                _lib_cfg_mod = _load_library_codex_config_module()
+                self._library_codex_config_resolver = (
+                    lambda workspace_path, library_id: _lib_cfg_mod.load_or_init_library_codex_config(
+                        workspace_path=workspace_path,
+                        library_id=library_id,
+                    )
+                )
+            except Exception:
+                self._library_codex_config_resolver = None
         self._agent_backend = str(agent_backend or os.getenv("CHAT_AGENT_BACKEND", "codex")).strip().lower() or "codex"
         factory_cls = _load_agent_runner_factory_class()
         config_path = Path(os.getenv("CHAT_CODEX_CONFIG_PATH", "outputs/chat/codex_runner_config.json") or "outputs/chat/codex_runner_config.json")
@@ -577,45 +633,59 @@ class ChatService:
                 return InMemoryChatStore()
         return InMemoryChatStore()
 
-    def create_session(self, title: str = "", default_mode: str = "agent") -> dict[str, Any]:
+    def create_session(self, title: str = "", default_mode: str = "agent", library_id: str = "") -> dict[str, Any]:
         _ = default_mode
-        return self._store.create_session(title=title, default_mode="agent")
+        lib = str(library_id or "").strip()
+        if not lib:
+            raise ValueError("library_id_required")
+        return self._store.create_session(title=title, default_mode="agent", library_id=lib)
 
-    def list_sessions(self) -> list[dict[str, Any]]:
+    def list_sessions(self, library_id: str = "") -> list[dict[str, Any]]:
         self._cleanup_restore_deadlines()
-        return self._store.list_sessions()
+        lib = str(library_id or "").strip()
+        if not lib:
+            raise ValueError("library_id_required")
+        return self._store.list_sessions(library_id=lib)
 
-    def delete_session(self, session_id: str, undo_window_seconds: int = 5) -> dict[str, Any]:
-        sess = self._store.get_session(session_id)
+    def delete_session(self, session_id: str, undo_window_seconds: int = 5, library_id: str = "") -> dict[str, Any]:
+        lib = str(library_id or "").strip()
+        if not lib:
+            raise ValueError("library_id_required")
+        sess = self._store.get_session(session_id, library_id=lib)
         if sess is None:
             raise KeyError("session_not_found")
         now = datetime.now(timezone.utc)
-        deleted = self._store.soft_delete_session(session_id=session_id, deleted_at=now.isoformat())
+        deleted = self._store.soft_delete_session(session_id=session_id, deleted_at=now.isoformat(), library_id=lib)
         if deleted is None:
             raise KeyError("session_not_found")
         window = max(1, int(undo_window_seconds))
         deadline = now + timedelta(seconds=window)
-        self._restore_deadline_by_session[str(session_id)] = deadline.timestamp()
+        self._restore_deadline_by_session[f"{lib}:{str(session_id)}"] = deadline.timestamp()
         return {
             "session_id": str(session_id),
+            "library_id": lib,
             "deleted_at": now.isoformat(),
             "undo_window_seconds": window,
             "undo_deadline": deadline.isoformat(),
         }
 
-    def restore_session(self, session_id: str) -> dict[str, Any]:
+    def restore_session(self, session_id: str, library_id: str = "") -> dict[str, Any]:
+        lib = str(library_id or "").strip()
+        if not lib:
+            raise ValueError("library_id_required")
         self._cleanup_restore_deadlines()
-        deadline_ts = self._restore_deadline_by_session.get(str(session_id))
+        restore_key = f"{lib}:{str(session_id)}"
+        deadline_ts = self._restore_deadline_by_session.get(restore_key)
         if deadline_ts is None:
-            return {"session_id": str(session_id), "restored": False, "error": "restore_window_expired"}
+            return {"session_id": str(session_id), "library_id": lib, "restored": False, "error": "restore_window_expired"}
         if time.time() > float(deadline_ts):
-            self._restore_deadline_by_session.pop(str(session_id), None)
-            return {"session_id": str(session_id), "restored": False, "error": "restore_window_expired"}
-        restored = self._store.restore_session(session_id=session_id)
+            self._restore_deadline_by_session.pop(restore_key, None)
+            return {"session_id": str(session_id), "library_id": lib, "restored": False, "error": "restore_window_expired"}
+        restored = self._store.restore_session(session_id=session_id, library_id=lib)
         if restored is None:
-            return {"session_id": str(session_id), "restored": False, "error": "session_not_found"}
-        self._restore_deadline_by_session.pop(str(session_id), None)
-        return {"session_id": str(session_id), "restored": True}
+            return {"session_id": str(session_id), "library_id": lib, "restored": False, "error": "session_not_found"}
+        self._restore_deadline_by_session.pop(restore_key, None)
+        return {"session_id": str(session_id), "library_id": lib, "restored": True}
 
     def _cleanup_restore_deadlines(self) -> None:
         now_ts = time.time()
@@ -623,8 +693,11 @@ class ChatService:
         for sid in expired:
             self._restore_deadline_by_session.pop(sid, None)
 
-    def get_session_with_messages(self, session_id: str) -> dict[str, Any] | None:
-        sess = self._store.get_session(session_id)
+    def get_session_with_messages(self, session_id: str, library_id: str = "") -> dict[str, Any] | None:
+        lib = str(library_id or "").strip()
+        if not lib:
+            raise ValueError("library_id_required")
+        sess = self._store.get_session(session_id, library_id=lib)
         if sess is None:
             return None
         messages = [self._hydrate_message(m) for m in self._store.list_messages(session_id)]
@@ -640,15 +713,18 @@ class ChatService:
         stream: bool,
         library_id: str = "",
     ) -> dict[str, Any]:
-        session = self._store.get_session(session_id)
+        session = self._store.get_session(session_id, library_id=str(library_id or "").strip())
         if session is None:
             raise KeyError("session_not_found")
+        if not str(library_id or "").strip():
+            raise ValueError("library_id_required")
         now = _now_iso()
+        normalized_mode = "agent"
         user_msg = {
             "message_id": f"msg_{uuid.uuid4().hex}",
             "session_id": session_id,
             "role": "user",
-            "mode": mode,
+            "mode": normalized_mode,
             "provider": provider,
             "model": model,
             "content": content,
@@ -667,7 +743,7 @@ class ChatService:
             "message_id": assistant_id,
             "session_id": session_id,
             "role": "assistant",
-            "mode": mode,
+            "mode": normalized_mode,
             "provider": provider,
             "model": model,
             "content": "",
@@ -683,7 +759,7 @@ class ChatService:
 
         t = threading.Thread(
             target=self._run_assistant_message,
-            args=(assistant_id, content, mode, provider, model, stream, str(library_id or "").strip()),
+            args=(assistant_id, content, normalized_mode, provider, model, stream, str(library_id or "").strip()),
             daemon=True,
         )
         t.start()
@@ -712,13 +788,11 @@ class ChatService:
         stream: bool,
         library_id: str = "",
     ) -> None:
-        self._emit(message_id, "started", {"message_id": message_id, "mode": mode})
-        self._emit(message_id, "status", {"stage": "rewrite", "label": "正在改写问题"})
+        _ = mode
+        self._emit(message_id, "started", {"message_id": message_id, "mode": "agent"})
+        self._emit(message_id, "status", {"stage": "retrieve", "label": "正在规划工具调用"})
         try:
-            if mode == "agent":
-                result = self._run_agent(message_id, query, provider, model, stream, library_id=library_id)
-            else:
-                result = self._run_fast(message_id, query, provider, model, stream, library_id=library_id)
+            result = self._run_agent(message_id, query, provider, model, stream, library_id=library_id)
             self._store.update_message(
                 message_id,
                 {
@@ -743,17 +817,39 @@ class ChatService:
             self._emit(message_id, "status", {"stage": "done", "label": "完成", "state": "completed"})
         except Exception as exc:
             detail = str(exc)
-            backend = ""
-            if detail.startswith("agent_backend_unavailable:"):
-                backend = detail.split(":", 1)[1].strip()
-            error_code = detail.split(":", 1)[0] if ":" in detail else detail
+            error_code = self._extract_error_code(detail)
+            backend = self._extract_backend(detail)
             self._store.update_message(message_id, {"status": "failed", "error_detail": detail})
             self._emit(
                 message_id,
                 "failed",
-                {"message_id": message_id, "error": detail, "error_code": error_code, "backend": backend},
+                {
+                    "message_id": message_id,
+                    "error": detail,
+                    "error_code": error_code,
+                    "backend": backend,
+                    "library_id": str(library_id or "").strip(),
+                },
             )
             self._emit(message_id, "status", {"stage": "done", "label": "失败", "state": "failed"})
+
+    @staticmethod
+    def _extract_error_code(detail: str) -> str:
+        text = str(detail or "").strip()
+        if not text:
+            return "unknown_error"
+        return text.split(":", 1)[0] if ":" in text else text
+
+    @staticmethod
+    def _extract_backend(detail: str) -> str:
+        text = str(detail or "").strip()
+        if text.startswith("agent_backend_unavailable:"):
+            return text.split(":", 1)[1].strip()
+        if text.startswith("codex_"):
+            return "codex"
+        if text.startswith("hermes_"):
+            return "hermes"
+        return ""
 
     def _call_literature_search(self, query: str, top_k: int, library_id: str = "") -> dict[str, Any]:
         try:
@@ -800,13 +896,25 @@ class ChatService:
         summary: str,
         extra: dict[str, Any] | None = None,
     ) -> None:
-        payload = {"backend": backend, "step_id": step_id, "state": state, "summary": summary}
+        payload = {
+            "backend": backend,
+            "step_id": step_id,
+            "state": state,
+            "summary": summary,
+            "timestamp": _now_iso(),
+            "kind": "tool",
+            "event": "tool_call",
+        }
         if isinstance(extra, dict):
             payload.update(extra)
         self._emit(message_id, "tool_call", payload)
 
     def _emit_agent_item(self, message_id: str, event_name: str, payload: dict[str, Any]) -> None:
-        self._emit(message_id, event_name, dict(payload))
+        row = dict(payload)
+        row.setdefault("timestamp", _now_iso())
+        row.setdefault("event", str(event_name or "").strip())
+        row.setdefault("kind", "agent_item")
+        self._emit(message_id, event_name, row)
 
     def _resolve_workspace_path(self, library_id: str) -> str:
         lib = str(library_id or "").strip()
@@ -814,10 +922,10 @@ class ChatService:
             raise RuntimeError("codex_workspace_resolver_unavailable")
         resolved = str(self._library_workspace_resolver(lib) or "").strip()
         if not resolved:
-            raise RuntimeError("codex_workspace_path_missing")
+            raise RuntimeError(f"codex_workspace_path_missing:library_id={lib}")
         path = Path(resolved).resolve()
         if not path.exists() or not path.is_dir():
-            raise RuntimeError("codex_workspace_path_invalid")
+            raise RuntimeError(f"codex_workspace_path_invalid:library_id={lib}:path={path}")
         return str(path)
 
     def _rewrite_query(self, query: str, provider: str, model: str) -> str:
@@ -879,6 +987,8 @@ class ChatService:
         stream: bool,
         library_id: str = "",
     ) -> dict[str, Any]:
+        if not str(library_id or "").strip():
+            raise RuntimeError("library_id_required")
         rewritten = self._rewrite_query(query=query, provider=provider, model=model)
         self._emit(message_id, "citation", {"phase": "query_rewrite", "query": rewritten})
         self._emit(message_id, "status", {"stage": "retrieve", "label": "正在召回相关片段"})
@@ -982,290 +1092,352 @@ class ChatService:
         stream: bool,
         library_id: str = "",
     ) -> dict[str, Any]:
+        _ = provider, model
+        if not str(library_id or "").strip():
+            raise RuntimeError("library_id_required")
         backend = self._agent_backend
-        if backend == "codex":
-            runner = self._runner_factory.build("codex")
-            workspace = self._resolve_workspace_path(library_id)
-            self._emit(message_id, "status", {"stage": "retrieve", "label": "正在检索文献段落"})
-
-            step_search = "codex-1"
-            self._emit_tool_call(
-                message_id,
-                "codex",
-                step_search,
-                "started",
-                "weaviate.search",
-                {"tool": "weaviate.search", "phase": "observe"},
-            )
-            self._emit_agent_item(message_id, "agent_item_started", {"backend": "codex", "step_id": step_search, "item": "tool"})
-            search_payload = self._call_literature_search(query, 8, library_id)
-            merged = list(search_payload.get("merged_hits", []))[:8]
-            paragraph_hits, dropped_non_paragraph_count = self._collect_paragraph_evidence(merged)
-            self._emit_tool_call(
-                message_id,
-                "codex",
-                step_search,
-                "completed",
-                f"weaviate.search paragraphs={len(paragraph_hits)} dropped={dropped_non_paragraph_count}",
-                {
-                    "tool": "weaviate.search",
-                    "result_size": len(paragraph_hits),
-                    "dropped_non_paragraph_count": dropped_non_paragraph_count,
-                },
-            )
-            self._emit_agent_item(
-                message_id,
-                "agent_item_completed",
-                {
-                    "backend": "codex",
-                    "step_id": step_search,
-                    "item": "tool",
-                    "summary": f"paragraph_hits={len(paragraph_hits)}",
-                },
-            )
-            if not paragraph_hits:
-                raise RuntimeError("paragraph_context_unavailable")
-
-            citations = paragraph_hits[:6]
-            evidence_lines: list[str] = []
-            for idx, item in enumerate(citations, start=1):
-                snippet = str(item.get("text", "") or item.get("title", "") or "").strip()
-                evidence_lines.append(f"[{idx}] {snippet[:500]}")
-            codex_prompt = (
-                "你是论文问答 Agent。必须仅依据给定段落证据回答，并给出 [编号] 引用。\n\n"
-                f"问题：{query}\n\n"
-                "段落证据：\n"
-                + "\n".join(evidence_lines)
-            )
-
-            step_generate = "codex-2"
-            self._emit(message_id, "status", {"stage": "generate", "label": "正在由 Codex 生成回答"})
-            self._emit_tool_call(
-                message_id,
-                "codex",
-                step_generate,
-                "started",
-                "codex.run",
-                {"tool": "codex.run", "workdir": workspace},
-            )
-            self._emit_agent_item(
-                message_id,
-                "agent_item_started",
-                {"backend": "codex", "step_id": step_generate, "item": "completion"},
-            )
-            answer = runner.run(prompt=codex_prompt, workdir=workspace)
-            if stream:
-                chunk_size = 180
-                for i in range(0, len(answer), chunk_size):
-                    chunk = answer[i : i + chunk_size]
-                    if not chunk:
-                        continue
-                    self._emit(message_id, "delta", {"text": chunk})
-                    self._emit_agent_item(
-                        message_id,
-                        "agent_item_delta",
-                        {"backend": "codex", "step_id": step_generate, "text": chunk},
-                    )
-            else:
-                self._emit(message_id, "delta", {"text": answer})
-
-            self._emit_tool_call(
-                message_id,
-                "codex",
-                step_generate,
-                "completed",
-                "codex.run completed",
-                {"tool": "codex.run", "output_chars": len(answer)},
-            )
-            self._emit_agent_item(
-                message_id,
-                "agent_item_completed",
-                {
-                    "backend": "codex",
-                    "step_id": step_generate,
-                    "item": "completion",
-                    "summary": f"output_chars={len(answer)}",
-                },
-            )
-            return {
-                "answer": answer.strip(),
-                "citations": citations,
-                "retrieval_trace": {
-                    "backend": "codex",
-                    "library_id": str(library_id or "").strip(),
-                    "workspace_path": workspace,
-                    "paragraph_context_applied": True,
-                    "dropped_non_paragraph_count": dropped_non_paragraph_count,
-                },
-                "tool_trace": [
-                    {
-                        "backend": "codex",
-                        "step": 1,
-                        "step_id": step_search,
-                        "state": "completed",
-                        "tool": "weaviate.search",
-                        "args": {"query": query, "top_k": 8, "library_id": str(library_id or "").strip()},
-                        "result_size": len(paragraph_hits),
-                        "dropped_non_paragraph_count": dropped_non_paragraph_count,
-                        "summary": f"paragraph_hits={len(paragraph_hits)}",
-                    },
-                    {
-                        "backend": "codex",
-                        "step": 2,
-                        "step_id": step_generate,
-                        "state": "completed",
-                        "tool": "codex.run",
-                        "args": {"workdir": workspace},
-                        "result_size": 1,
-                        "summary": f"output_chars={len(answer)}",
-                    },
-                ],
-            }
         if backend == "hermes":
             runner = self._runner_factory.build("hermes")
             _ = runner
             raise RuntimeError("agent_backend_unavailable:hermes")
-        if backend != "builtin":
+        if backend != "codex":
             raise RuntimeError(f"agent_backend_invalid:{backend}")
-        max_steps = 6
-        max_tool_calls = 12
-        tool_calls = 0
-        tool_trace: list[dict[str, Any]] = []
-        observations: list[str] = []
-        dropped_non_paragraph_total = 0
-        backend = "builtin"
-        self._emit(message_id, "status", {"stage": "retrieve", "label": "正在召回相关片段"})
 
-        for step in range(1, max_steps + 1):
-            step_id = f"{backend}-{step}"
-            self._emit_tool_call(message_id, backend, step_id, "started", "planning", {"phase": "plan", "step": step})
-            if step == 1:
-                tool_calls += 1
-                res = self._call_literature_search(query, 6, library_id)
-                merged = list(res.get("merged_hits", []))[:4]
-                paragraph_hits, dropped_non_paragraph_count = self._collect_paragraph_evidence(merged)
-                dropped_non_paragraph_total += dropped_non_paragraph_count
-                tool_trace.append(
-                    {
-                        "backend": backend,
-                        "step": step,
-                        "step_id": step_id,
-                        "state": "completed",
-                        "tool": "literature.search",
-                        "args": {"query": query, "top_k": 6, "library_id": str(library_id or "").strip()},
-                        "result_size": len(paragraph_hits),
-                        "dropped_non_paragraph_count": dropped_non_paragraph_count,
-                        "summary": f"paragraph_hits={len(paragraph_hits)} dropped={dropped_non_paragraph_count}",
-                    }
-                )
-                observations.extend([str(x.get("text", "") or x.get("title", ""))[:200] for x in paragraph_hits])
-                self._emit_tool_call(
+        workspace = self._resolve_workspace_path(library_id)
+        runner = self._runner_factory.build("codex")
+        self._emit(message_id, "status", {"stage": "retrieve", "label": "正在由 Codex 进行工具调用与分析"})
+
+        tool_trace: list[dict[str, Any]] = []
+        citations: list[dict[str, Any]] = []
+        answer_parts: list[str] = []
+        final_answer = ""
+        step_no = 0
+        rag_hits_seen = 0
+        rag_error_reason = ""
+        rag_tool_called = False
+
+        runtime_overrides: dict[str, Any] = {}
+        if callable(self._library_codex_config_resolver):
+            try:
+                lib_cfg = self._library_codex_config_resolver(workspace, str(library_id or "").strip())
+            except Exception:
+                lib_cfg = {}
+            if isinstance(lib_cfg, dict):
+                runtime_overrides = {
+                    "codex_home": str(lib_cfg.get("codex_home", "") or "").strip(),
+                    "mcp_servers": lib_cfg.get("mcp_servers", []),
+                    "project_skills": lib_cfg.get("project_skills", []),
+                }
+
+        def _item_id(item: dict[str, Any], fallback_prefix: str = "item") -> str:
+            raw = str(item.get("id", "") or "").strip()
+            if raw:
+                return raw
+            return f"{fallback_prefix}-{uuid.uuid4().hex[:8]}"
+
+        def _on_app_event(msg: dict[str, Any]) -> None:
+            nonlocal step_no, final_answer, rag_hits_seen, rag_error_reason, rag_tool_called
+            method = str(msg.get("method", "") or "")
+            params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+
+            if method == "item/started":
+                item = params.get("item") if isinstance(params.get("item"), dict) else {}
+                item_type = str(item.get("type", "") or "")
+                step_no += 1
+                step_id = _item_id(item, "started")
+                item_tool = str(item.get("tool", "") or "").strip()
+                item_cmd = str(item.get("command", "") or "").strip()
+                summary = item_tool or item_cmd or item_type or "item_started"
+                self._emit_agent_item(
                     message_id,
-                    backend,
-                    step_id,
-                    "completed",
-                    f"literature.search hits={len(paragraph_hits)} dropped={dropped_non_paragraph_count}",
-                    {"phase": "observe", "tool": "literature.search", "step": step, "hits": len(paragraph_hits)},
-                )
-            elif step == 2 and tool_calls < max_tool_calls:
-                tool_calls += 1
-                g = self._graph_search(query, 6)
-                tool_trace.append(
+                    "agent_item_started",
                     {
-                        "backend": backend,
-                        "step": step,
+                        "backend": "codex",
                         "step_id": step_id,
-                        "state": "completed",
-                        "tool": "graph.search",
-                        "args": {"query": query, "limit": 6},
-                        "result_size": len(g),
-                        "summary": f"graph_hits={len(g)}",
-                    }
+                        "item": item_type or "unknown",
+                        "state": "started",
+                        "kind": "agent_item",
+                        "summary": summary,
+                        "detail": _clip(json.dumps(item, ensure_ascii=False), 640),
+                    },
                 )
-                observations.extend([str(x.get("title", "") or x.get("text", "") or "")[:180] for x in g[:3]])
-                self._emit_tool_call(
-                    message_id,
-                    backend,
-                    step_id,
-                    "completed",
-                    f"graph.search hits={len(g)}",
-                    {"phase": "observe", "tool": "graph.search", "step": step, "hits": len(g)},
-                )
-            elif step == 3 and tool_calls < max_tool_calls:
-                # Try a deep read on the first graph/paper candidate.
-                target = None
-                for entry in tool_trace:
-                    if entry.get("tool") == "graph.search":
-                        target = entry
-                        break
-                if target is not None:
-                    tool_calls += 1
-                    doc = self._paper_get(str(query))  # fallback no-op for unmatched id
-                    if doc is None:
-                        doc = {}
-                    tool_trace.append(
-                        {
-                            "backend": backend,
-                            "step": step,
-                            "step_id": step_id,
-                            "state": "completed",
-                            "tool": "paper.get",
-                            "args": {"paper_id_or_doi": query},
-                            "result_size": 1 if doc else 0,
-                            "summary": "paper_loaded" if doc else "paper_not_found",
-                        }
-                    )
-                    if doc:
-                        observations.append(str(doc.get("doi", "") or doc.get("paper_id", "")))
+                if item_type in {"mcpToolCall", "commandExecution", "fileChange"}:
+                    label = summary
+                    kind = "tool" if item_type == "mcpToolCall" else ("command" if item_type == "commandExecution" else "file_change")
                     self._emit_tool_call(
                         message_id,
-                        backend,
+                        "codex",
                         step_id,
-                        "completed",
-                        "paper.get completed",
-                        {"phase": "observe", "tool": "paper.get", "step": step},
+                        "started",
+                        label,
+                        {
+                            "tool": label,
+                            "backend": "codex",
+                            "kind": kind,
+                            "args_preview": _clip(json.dumps(item.get("arguments", {}), ensure_ascii=False), 260),
+                            "detail": _clip(json.dumps(item, ensure_ascii=False), 640),
+                        },
                     )
-            else:
-                self._emit_tool_call(message_id, backend, step_id, "completed", "reflect", {"phase": "reflect", "step": step})
-                break
+                return
 
-        if not any(str(item.get("tool", "")) == "literature.search" and int(item.get("result_size", 0)) > 0 for item in tool_trace):
-            raise RuntimeError("paragraph_context_unavailable")
-        context = "\n".join(x for x in observations if x)[:4000]
-        prompt = [
-            {"role": "system", "content": "你是谨慎的 Agent 总结器。基于观察信息直接回答用户问题。"},
-            {"role": "user", "content": f"问题：{query}\n\n观察：\n{context}"},
-        ]
-        answer = ""
-        degraded_reason = ""
-        self._emit(message_id, "status", {"stage": "generate", "label": "正在生成回答"})
-        try:
-            if stream:
-                for chunk in self._models.stream(provider=provider, model=model, messages=prompt, timeout_seconds=90):
-                    if not chunk:
-                        continue
-                    answer += chunk
-                    self._emit(message_id, "delta", {"text": chunk})
-            else:
-                answer = self._models.complete(provider=provider, model=model, messages=prompt, timeout_seconds=90)
-                if answer:
-                    self._emit(message_id, "delta", {"text": answer})
-        except Exception as exc:
-            degraded_reason = str(exc)
-            answer = self._build_agent_fallback_answer(query=query, observations=observations, reason=degraded_reason)
+            if method == "item/agentMessage/delta":
+                delta = str(params.get("delta", "") or "")
+                if not delta:
+                    return
+                answer_parts.append(delta)
+                if stream:
+                    self._emit(message_id, "delta", {"text": delta})
+                self._emit_agent_item(
+                    message_id,
+                    "agent_item_delta",
+                    {
+                        "backend": "codex",
+                        "step_id": "agent-message",
+                        "kind": "message",
+                        "state": "streaming",
+                        "text": delta[:1000],
+                        "summary": _clip(delta, 220),
+                    },
+                )
+                return
+
+            if method == "item/completed":
+                item = params.get("item") if isinstance(params.get("item"), dict) else {}
+                item_type = str(item.get("type", "") or "")
+                step_id = _item_id(item, "completed")
+
+                if item_type == "agentMessage":
+                    text = str(item.get("text", "") or "").strip()
+                    if text:
+                        final_answer = text
+                    self._emit_agent_item(
+                        message_id,
+                        "agent_item_completed",
+                        {
+                            "backend": "codex",
+                            "step_id": step_id,
+                            "item": "agentMessage",
+                            "kind": "message",
+                            "state": "completed",
+                            "summary": _clip(text, 220) or "message_completed",
+                        },
+                    )
+                    return
+
+                if item_type in {"mcpToolCall", "mcp_tool_call"} or bool(item.get("tool")):
+                    server = str(item.get("server", "") or "")
+                    tool = str(item.get("tool", "") or "")
+                    status = str(item.get("status", "") or "completed")
+                    arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+                    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+                    output = item.get("output") if isinstance(item.get("output"), dict) else {}
+                    structured = (
+                        result.get("structuredContent")
+                        if isinstance(result.get("structuredContent"), dict)
+                        else (
+                            result.get("structured_content")
+                            if isinstance(result.get("structured_content"), dict)
+                            else (
+                                output.get("structuredContent")
+                                if isinstance(output.get("structuredContent"), dict)
+                                else {}
+                            )
+                        )
+                    )
+                    summary = f"{server}:{tool}" if server else tool
+                    tool_norm = tool.split(".")[-1].strip().lower()
+
+                    if not structured:
+                        content_obj = result.get("content")
+                        content_rows = content_obj if isinstance(content_obj, list) else []
+                        if content_rows:
+                            first = content_rows[0] if isinstance(content_rows[0], dict) else {}
+                            first_text = str(first.get("text", "") or "").strip()
+                            if first_text.startswith("{") and first_text.endswith("}"):
+                                parsed = _safe_json(first_text, {})
+                                if isinstance(parsed, dict):
+                                    structured = parsed
+
+                    if tool_norm == "rag_search":
+                        rag_tool_called = True
+                        if bool(result.get("isError")) and not rag_error_reason:
+                            rag_error_reason = str(structured.get("error", "") or summary or "rag_search_error")
+                        paragraph_hits = structured.get("paragraph_hits") if isinstance(structured.get("paragraph_hits"), list) else []
+                        rag_hits_seen += len(paragraph_hits)
+                        for hit in paragraph_hits[:8]:
+                            if not isinstance(hit, dict):
+                                continue
+                            text = str(hit.get("text", "") or "").strip()
+                            if not text:
+                                continue
+                            citations.append(
+                                {
+                                    "id": str(hit.get("id", "") or hit.get("paper_id", "") or f"rag_{len(citations)+1}"),
+                                    "title": str(hit.get("title", "") or ""),
+                                    "text": text,
+                                    "context": {"paragraph": {"text": text}},
+                                }
+                            )
+
+                    output_summary = _clip(json.dumps(result.get("content", "") or structured, ensure_ascii=False), 240)
+                    args_preview = _clip(json.dumps(arguments, ensure_ascii=False), 240)
+                    detail_text = _clip(json.dumps({"arguments": arguments, "result": result, "output": output}, ensure_ascii=False), 900)
+                    trace_row = {
+                        "backend": "codex",
+                        "step": len(tool_trace) + 1,
+                        "step_id": step_id,
+                        "state": "completed" if status in {"completed", "ok", "success"} else "failed",
+                        "kind": "tool",
+                        "tool": tool or "mcpToolCall",
+                        "args": arguments,
+                        "summary": summary,
+                        "args_preview": args_preview,
+                        "output_summary": output_summary,
+                        "detail": detail_text,
+                        "raw": {"arguments": arguments, "result": result, "output": output},
+                    }
+                    tool_trace.append(trace_row)
+                    self._emit_tool_call(
+                        message_id,
+                        "codex",
+                        step_id,
+                        trace_row["state"],
+                        summary,
+                        {
+                            "tool": trace_row["tool"],
+                            "backend": "codex",
+                            "kind": "tool",
+                            "summary": summary,
+                            "state": trace_row["state"],
+                            "step_id": step_id,
+                            "args_preview": args_preview,
+                            "output_summary": output_summary,
+                            "detail": detail_text,
+                            "raw": {"arguments": arguments, "result": result, "output": output},
+                        },
+                    )
+                    self._emit_agent_item(
+                        message_id,
+                        "agent_item_completed",
+                        {
+                            "backend": "codex",
+                            "step_id": step_id,
+                            "item": "mcpToolCall",
+                            "kind": "tool",
+                            "state": trace_row["state"],
+                            "summary": summary,
+                            "detail": output_summary,
+                        },
+                    )
+                    return
+
+                self._emit_agent_item(
+                    message_id,
+                    "agent_item_completed",
+                    {
+                        "backend": "codex",
+                        "step_id": step_id,
+                        "item": item_type or "unknown",
+                        "kind": "agent_item",
+                        "state": "completed",
+                        "summary": "completed",
+                    },
+                )
+                return
+
+            if method == "mcpServer/startupStatus/updated":
+                name = str(params.get("name", "") or "")
+                status = str(params.get("status", "") or "")
+                error = str(params.get("error", "") or "")
+                detail = f"{name}:{status}" if name else status
+                if error:
+                    detail = f"{detail}:{error}" if detail else error
+                self._emit_tool_call(
+                    message_id,
+                    "codex",
+                    f"mcp-{len(tool_trace)+1}",
+                    "completed" if status == "ready" else "started",
+                    "mcp.startup",
+                    {
+                        "backend": "codex",
+                        "kind": "system",
+                        "summary": detail,
+                        "state": status,
+                        "detail": detail,
+                    },
+                )
+                return
+
+        result = runner.run_turn(
+            query=query,
+            workdir=workspace,
+            library_id=library_id,
+            runtime_overrides=runtime_overrides,
+            on_event=_on_app_event,
+        )
+        self._emit(message_id, "status", {"stage": "generate", "label": "正在由 Codex 生成回答"})
+
+        answer = str(result.get("answer", "") or "").strip()
+        if not answer:
+            answer = "".join(answer_parts).strip()
+        if not answer:
+            raise RuntimeError("agent_backend_unavailable:codex:empty_output")
+
+        if not stream:
             self._emit(message_id, "delta", {"text": answer})
-        citations = [{"id": f"agent_obs_{i+1}", "text": t[:220]} for i, t in enumerate(observations[:5])]
+        elif not answer_parts:
+            self._emit(message_id, "delta", {"text": answer})
+
+        def _is_smalltalk(raw_query: str) -> bool:
+            text = str(raw_query or "").strip().lower()
+            if not text or len(text) > 24:
+                return False
+            simple_hits = (
+                "hi",
+                "hello",
+                "hey",
+                "你好",
+                "您好",
+                "嗨",
+                "在吗",
+                "在么",
+                "早上好",
+                "下午好",
+                "晚上好",
+            )
+            return any(token in text for token in simple_hits)
+
+        if not citations:
+            return {
+                "answer": answer,
+                "citations": [],
+                "retrieval_trace": {
+                    "backend": "codex",
+                    "library_id": str(library_id or "").strip(),
+                    "workspace_path": workspace,
+                    "paragraph_context_applied": False,
+                    "smalltalk_bypass": _is_smalltalk(query),
+                    "rag_tool_called": bool(rag_tool_called),
+                    "rag_hits_seen": rag_hits_seen,
+                    "rag_error_reason": rag_error_reason,
+                    "thread_id": str(result.get("thread_id", "") or ""),
+                    "turn_id": str(result.get("turn_id", "") or ""),
+                },
+                "tool_trace": tool_trace,
+            }
+
         return {
-            "answer": answer.strip(),
-            "citations": citations,
+            "answer": answer,
+            "citations": citations[:8],
             "retrieval_trace": {
-                "agent_observations": observations[:8],
-                "max_steps": max_steps,
-                "max_tool_calls": max_tool_calls,
-                "model_degraded": degraded_reason,
-                "paragraph_context_applied": True,
-                "dropped_non_paragraph_count": dropped_non_paragraph_total,
+                "backend": "codex",
                 "library_id": str(library_id or "").strip(),
+                "workspace_path": workspace,
+                "paragraph_context_applied": True,
+                "dropped_non_paragraph_count": 0,
+                "rag_hits_seen": rag_hits_seen,
+                "thread_id": str(result.get("thread_id", "") or ""),
+                "turn_id": str(result.get("turn_id", "") or ""),
             },
             "tool_trace": tool_trace,
         }
@@ -1276,5 +1448,8 @@ class ChatService:
         out["citations"] = _safe_json(out.get("citations_json", "[]"), [])
         out["retrieval"] = _safe_json(out.get("retrieval_json", "{}"), {})
         out["tool_trace"] = _safe_json(out.get("tool_trace_json", "[]"), [])
+        detail = str(out.get("error_detail", "") or "").strip()
+        out["error_code"] = ChatService._extract_error_code(detail) if detail else ""
+        out["error_backend"] = ChatService._extract_backend(detail) if detail else ""
         return out
 

@@ -2,7 +2,7 @@
 
 import unittest
 
-from tests._e2e_helpers import WorkbenchE2EHarness, ensure_playwright_ready
+from _e2e_helpers import WorkbenchE2EHarness, ensure_playwright_ready
 
 
 class WorkbenchPlaywrightE2ETest(unittest.TestCase):
@@ -103,11 +103,73 @@ class WorkbenchPlaywrightE2ETest(unittest.TestCase):
         self._open_panel("chat")
         self.page.locator("[data-testid='graph-to-chat-btn']").click()
         self.page.wait_for_timeout(600)
-        # Should open another chat panel carrying graph context in URL.
         chat_iframes = self.page.locator("[data-panel-type='chat'] iframe")
         self.assertGreaterEqual(chat_iframes.count(), 1)
         urls = [chat_iframes.nth(i).get_attribute("src") or "" for i in range(chat_iframes.count())]
         self.assertTrue(any("from_node=" in u for u in urls))
+
+    def test_chat_panel_can_send_and_complete(self) -> None:
+        self._goto_workbench()
+        self._open_panel("chat")
+        iframe = self.page.locator("[data-panel-type='chat'] iframe:visible").first
+        iframe.wait_for(timeout=15000)
+        handle = iframe.element_handle()
+        self.assertIsNotNone(handle)
+        assert handle is not None
+        frame = handle.content_frame()
+        self.assertIsNotNone(frame)
+        assert frame is not None
+        frame.wait_for_selector("[data-testid='message-input']", timeout=15000)
+        frame.wait_for_function(
+            "() => document.querySelectorAll('.session-item').length >= 1",
+            timeout=15000,
+        )
+        frame.locator(".session-item").first.click()
+        frame.wait_for_timeout(150)
+        frame.wait_for_function(
+            "() => document.querySelector('[data-testid=\"library-select\"]') && document.querySelector('[data-testid=\"library-select\"]').options.length >= 1",
+            timeout=15000,
+        )
+        frame.evaluate(
+            """
+            () => {
+              const sel = document.querySelector('[data-testid="library-select"]');
+              if (sel) {
+                if (![...sel.options].some((x) => x.value === 'supply_chain')) {
+                  const opt = document.createElement('option');
+                  opt.value = 'supply_chain';
+                  opt.textContent = 'supply_chain';
+                  sel.appendChild(opt);
+                }
+                sel.value = 'supply_chain';
+                sel.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+              const input = document.querySelector('[data-testid="message-input"]');
+              if (input) {
+                input.value = 'hello in workbench';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+              const btn = document.querySelector('[data-testid="send-btn"]');
+              if (btn) btn.click();
+            }
+            """
+        )
+        frame.wait_for_selector("[data-testid='message-assistant'][data-stream-status='completed']", timeout=45000)
+        text = frame.locator("[data-testid='message-assistant'][data-stream-status='completed'] .msg-content").last.inner_text()
+        self.assertIn("hello world", text)
+
+    def test_graph_panel_and_chat_panel_coexist_after_reload(self) -> None:
+        self._goto_workbench()
+        if self.page.locator("[data-panel-type='graph']").count() < 1:
+            self._open_panel("graph")
+        if self.page.locator("[data-panel-type='chat']").count() < 1:
+            self._open_panel("chat")
+        self.page.locator("[data-testid='save-layout-btn']").click()
+        self.page.wait_for_timeout(300)
+        self.page.reload(wait_until="domcontentloaded")
+        self.page.wait_for_selector("[data-testid='workbench-root']", timeout=15000)
+        self.assertGreaterEqual(self.page.locator("[data-panel-type='graph']").count(), 1)
+        self.assertGreaterEqual(self.page.locator("[data-panel-type='chat']").count(), 1)
 
 
 if __name__ == "__main__":

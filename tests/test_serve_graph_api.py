@@ -41,6 +41,12 @@ class ServeGraphApiTest(unittest.TestCase):
         tmp_path = Path(self.tmp.name)
         self._old_codex_cfg = os.environ.get("CHAT_CODEX_CONFIG_PATH")
         os.environ["CHAT_CODEX_CONFIG_PATH"] = str(tmp_path / "codex_runner_config.json")
+        self._old_library_registry = os.environ.get("LITERATURE_LIBRARY_REGISTRY_PATH")
+        os.environ["LITERATURE_LIBRARY_REGISTRY_PATH"] = str(tmp_path / "library_registry.json")
+        self._old_library_index_root = os.environ.get("LITERATURE_LIBRARY_INDEX_ROOT")
+        self._test_library_index_root = tmp_path / "libraries"
+        self._test_library_index_root.mkdir(parents=True, exist_ok=True)
+        os.environ["LITERATURE_LIBRARY_INDEX_ROOT"] = str(self._test_library_index_root)
         (tmp_path / "index.html").write_text("<html><body>ok</body></html>", encoding="utf-8")
         workbench_dir = tmp_path / "workbench"
         workbench_dir.mkdir(parents=True, exist_ok=True)
@@ -159,6 +165,14 @@ class ServeGraphApiTest(unittest.TestCase):
             os.environ.pop("CHAT_CODEX_CONFIG_PATH", None)
         else:
             os.environ["CHAT_CODEX_CONFIG_PATH"] = self._old_codex_cfg
+        if self._old_library_registry is None:
+            os.environ.pop("LITERATURE_LIBRARY_REGISTRY_PATH", None)
+        else:
+            os.environ["LITERATURE_LIBRARY_REGISTRY_PATH"] = self._old_library_registry
+        if self._old_library_index_root is None:
+            os.environ.pop("LITERATURE_LIBRARY_INDEX_ROOT", None)
+        else:
+            os.environ["LITERATURE_LIBRARY_INDEX_ROOT"] = self._old_library_index_root
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=1)
@@ -251,25 +265,42 @@ class ServeGraphApiTest(unittest.TestCase):
         self.assertEqual(args.workbench_frontend_dir, Path("frontend/workbench_spa"))
 
     def test_literature_search_endpoint_returns_two_routes_and_merged(self) -> None:
-        payload = self._get_json("/literature/search?query=test&top_k=3&levels=sentence,paragraph&include_expanded_context=true")
+        payload = self._get_json("/literature/search?query=test&top_k=3&levels=sentence,paragraph&include_expanded_context=true&library_id=lib_a")
         self.assertIn("keyword_hits", payload)
         self.assertIn("rag_hits", payload)
         self.assertIn("merged_hits", payload)
 
     def test_literature_import_endpoint_accepts_manifest_path(self) -> None:
-        payload = self._post_json("/literature/import", {"manifest_path": "D:/tmp/manifest.jsonl"})
+        payload = self._post_json("/literature/import", {"manifest_path": "D:/tmp/manifest.jsonl", "library_id": "lib_a"})
         self.assertEqual(payload["imported_count"], 1)
         self.assertEqual(payload["manifest_path"], "D:/tmp/manifest.jsonl")
 
     def test_literature_answer_endpoint_returns_answer_and_citations(self) -> None:
-        payload = self._post_json("/literature/answer", {"query": "What?"})
+        payload = self._post_json("/literature/answer", {"query": "What?", "library_id": "lib_a"})
         self.assertEqual(payload["answer"], "mock-answer")
         self.assertGreaterEqual(len(payload["citations"]), 1)
 
+    def test_literature_endpoints_require_library_id(self) -> None:
+        with self.assertRaises(HTTPError) as ctx:
+            urlopen(f"http://127.0.0.1:{self.port}/literature/search?query=test&top_k=3")
+        self.assertEqual(ctx.exception.code, 400)
+        body = json.loads(ctx.exception.read().decode("utf-8") or "{}")
+        self.assertEqual(body.get("error"), "library_id_required")
+
+        req = __import__("urllib.request", fromlist=["Request"]).Request(
+            f"http://127.0.0.1:{self.port}/literature/answer",
+            data=json.dumps({"query": "What?"}, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as ctx2:
+            urlopen(req)
+        self.assertEqual(ctx2.exception.code, 400)
+        body2 = json.loads(ctx2.exception.read().decode("utf-8") or "{}")
+        self.assertEqual(body2.get("error"), "library_id_required")
+
     def test_literature_libraries_endpoint_scans_index_root(self) -> None:
-        libraries_root = Path(self.tmp.name) / "libraries"
-        libraries_root.mkdir(parents=True, exist_ok=True)
-        (libraries_root / "lib_a.json").write_text(
+        (self._test_library_index_root / "lib_a.json").write_text(
             json.dumps(
                 {
                     "library_id": "lib_a",
@@ -281,16 +312,8 @@ class ServeGraphApiTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        (libraries_root / "invalid.json").write_text("{not-json", encoding="utf-8")
-        old_val = os.environ.get("LITERATURE_LIBRARY_INDEX_ROOT")
-        os.environ["LITERATURE_LIBRARY_INDEX_ROOT"] = str(libraries_root)
-        try:
-            payload = self._get_json("/literature/libraries")
-        finally:
-            if old_val is None:
-                os.environ.pop("LITERATURE_LIBRARY_INDEX_ROOT", None)
-            else:
-                os.environ["LITERATURE_LIBRARY_INDEX_ROOT"] = old_val
+        (self._test_library_index_root / "invalid.json").write_text("{not-json", encoding="utf-8")
+        payload = self._get_json("/literature/libraries")
         self.assertIn("libraries", payload)
         self.assertEqual(len(payload["libraries"]), 1)
         self.assertEqual(payload["libraries"][0]["library_id"], "lib_a")
@@ -312,19 +335,66 @@ class ServeGraphApiTest(unittest.TestCase):
         got = self._get_json("/chat/codex/config")
         self.assertIn("config", got)
         payload = {
-            "cli_command": "codex",
-            "cli_args": ["exec", "--cwd", "{workdir}", "{prompt}"],
+            "app_server_command": "codex",
+            "app_server_args": ["app-server", "--listen", "stdio://"],
             "healthcheck_args": ["--version"],
             "timeout_seconds": 120,
             "install_command": "npm install -g @openai/codex",
             "extra_env": {"A": "B"},
+            "model": "gpt-5.4",
+            "approval_policy": "never",
+            "sandbox_mode": "workspace-write",
+            "personality": "pragmatic",
+            "mcp_servers": [{"name": "kn_graph_tools", "command": "uv", "args": ["run", "python", "-m", "scripts.smj_pipeline.kn_mcp_server"]}],
         }
         saved = self._post_json("/chat/codex/config", payload)
         self.assertTrue(bool(saved.get("ok")))
         got2 = self._get_json("/chat/codex/config")
         cfg = got2.get("config", {})
-        self.assertEqual(cfg.get("cli_command"), "codex")
+        self.assertEqual(cfg.get("app_server_command"), "codex")
         self.assertEqual(cfg.get("timeout_seconds"), 120)
+
+    def test_library_codex_config_endpoint_supports_get_and_save(self) -> None:
+        (self._test_library_index_root / "lib_a.json").write_text(
+            json.dumps({"library_id": "lib_a", "paper_count": 1, "paper_ids": ["p1"]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        got = self._get_json("/chat/codex/libraries/lib_a/config")
+        self.assertIn("config", got)
+        cfg = got.get("config", {})
+        self.assertEqual(cfg.get("library_id"), "lib_a")
+        self.assertIn("workspace_path", cfg)
+
+        saved = self._post_json(
+            "/chat/codex/libraries/lib_a/config",
+            {
+                "project_skills": [{"name": "回答文献库问题", "path": "D:/Code/kn_gragh/skills/answer_library_question"}],
+            },
+        )
+        self.assertTrue(bool(saved.get("ok")))
+        cfg2 = saved.get("config", {})
+        self.assertEqual(cfg2.get("library_id"), "lib_a")
+        self.assertTrue(isinstance(cfg2.get("project_skills"), list))
+    def test_codex_preflight_endpoint_returns_structured_checks(self) -> None:
+        (self._test_library_index_root / "lib_a.json").write_text(
+            json.dumps({"library_id": "lib_a", "paper_count": 1, "paper_ids": ["p1"]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        url = f"http://127.0.0.1:{self.port}/chat/codex/preflight?library_id=lib_a"
+        try:
+            with urlopen(url) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except HTTPError as exc:
+            payload = json.loads(exc.read().decode("utf-8") or "{}")
+        self.assertIn("ok", payload)
+        self.assertIn("checks", payload)
+        self.assertTrue(isinstance(payload.get("checks"), list))
+        if payload.get("checks"):
+            first = payload["checks"][0]
+            self.assertIn("name", first)
+            self.assertIn("passed", first)
+            self.assertIn("stage", first)
+            self.assertIn("code", first)
 
     def test_workbench_frontend_entry_is_served(self) -> None:
         with urlopen(f"http://127.0.0.1:{self.port}/frontend/workbench/") as resp:
@@ -344,7 +414,7 @@ class ServeGraphApiTest(unittest.TestCase):
         )
         self.assertEqual(payload["kind"], "moderation")
         self.assertIn("调节", payload["title"])
-        self.assertNotIn("璋", payload["title"])
+        self.assertNotIn("moderation", payload["title"])
 
 
 class ServeGraphApiLiteratureDegradedTest(unittest.TestCase):
@@ -407,7 +477,7 @@ class ServeGraphApiLiteratureDegradedTest(unittest.TestCase):
             return int(exc.code), json.loads(raw or "{}")
 
     def test_literature_search_degrades_when_service_unavailable(self) -> None:
-        status, payload = self._get_json("/literature/search?query=test&top_k=3")
+        status, payload = self._get_json("/literature/search?query=test&top_k=3&library_id=lib_a")
         self.assertEqual(status, 200)
         self.assertTrue(bool(payload.get("degraded")))
         self.assertEqual(payload.get("degraded_reason"), "literature_service_unavailable")
@@ -416,13 +486,20 @@ class ServeGraphApiLiteratureDegradedTest(unittest.TestCase):
         self.assertEqual(payload.get("merged_hits"), [])
 
     def test_literature_answer_degrades_when_service_unavailable(self) -> None:
-        status, payload = self._post_json("/literature/answer", {"query": "What?"})
+        status, payload = self._post_json("/literature/answer", {"query": "What?", "library_id": "lib_a"})
         self.assertEqual(status, 200)
         self.assertTrue(bool(payload.get("degraded")))
         self.assertEqual(payload.get("degraded_reason"), "literature_service_unavailable")
         self.assertIn("answer", payload)
         self.assertEqual(payload.get("citations"), [])
         self.assertEqual(payload.get("retrieval", {}).get("merged_hits"), [])
+
+
+class ServeGraphApiDynamicImportTest(unittest.TestCase):
+    def test_load_literature_service_class_dynamic_import(self) -> None:
+        cls = _MOD._load_literature_service_class()
+        obj = cls()
+        self.assertTrue(hasattr(obj, "search"))
 
 
 class ServeGraphApiWorkspaceFallbackTest(unittest.TestCase):

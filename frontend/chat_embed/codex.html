@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
@@ -21,23 +21,43 @@
         <header class="toolbar">
           <div class="toolbar-group">
             <div class="field">
-              <label>CLI 命令</label>
-              <input id="codex-cli-command" placeholder="codex" />
+              <label>App Server 命令</label>
+              <input id="codex-app-server-command" placeholder="codex" />
+            </div>
+            <div class="field">
+              <label>模型</label>
+              <input id="codex-model" placeholder="gpt-5.4" />
             </div>
             <div class="field">
               <label>超时（秒）</label>
-              <input id="codex-timeout-seconds" type="number" min="10" step="1" />
+              <input id="codex-timeout-seconds" type="number" min="15" step="1" />
             </div>
           </div>
         </header>
         <section class="chat-feed">
           <div class="field">
-            <label>执行参数（JSON 数组）</label>
-            <textarea id="codex-cli-args" rows="4"></textarea>
+            <label>App Server 参数（JSON 数组）</label>
+            <textarea id="codex-app-server-args" rows="3"></textarea>
           </div>
           <div class="field">
             <label>健康检查参数（JSON 数组）</label>
             <textarea id="codex-healthcheck-args" rows="2"></textarea>
+          </div>
+          <div class="field">
+            <label>审批策略</label>
+            <input id="codex-approval-policy" placeholder="never" />
+          </div>
+          <div class="field">
+            <label>沙箱模式</label>
+            <input id="codex-sandbox-mode" placeholder="workspace-write" />
+          </div>
+          <div class="field">
+            <label>人格</label>
+            <input id="codex-personality" placeholder="pragmatic" />
+          </div>
+          <div class="field">
+            <label>MCP Servers（JSON 数组）</label>
+            <textarea id="codex-mcp-servers" rows="6"></textarea>
           </div>
           <div class="field">
             <label>安装命令</label>

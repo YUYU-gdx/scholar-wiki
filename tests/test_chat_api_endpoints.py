@@ -47,23 +47,28 @@ class _FakeChatService:
         self.deleted: set[str] = set()
         self.last_submit_payload: dict[str, object] | None = None
 
-    def create_session(self, title: str = "", default_mode: str = "fast") -> dict[str, object]:
+    def create_session(self, title: str = "", default_mode: str = "fast", library_id: str = "") -> dict[str, object]:
         sid = f"sess_{len(self.sessions) + 1}"
-        row = {"session_id": sid, "title": title or "新会话", "default_mode": default_mode}
+        row = {"session_id": sid, "title": title or "新会话", "default_mode": default_mode, "library_id": str(library_id or "").strip()}
         self.sessions[sid] = row
         self.messages.setdefault(sid, [])
         return row
 
-    def list_sessions(self) -> list[dict[str, object]]:
-        return [v for k, v in self.sessions.items() if k not in self.deleted]
+    def list_sessions(self, library_id: str = "") -> list[dict[str, object]]:
+        lib = str(library_id or "").strip()
+        return [v for k, v in self.sessions.items() if k not in self.deleted and str(v.get("library_id", "")) == lib]
 
-    def get_session_with_messages(self, session_id: str) -> dict[str, object] | None:
+    def get_session_with_messages(self, session_id: str, library_id: str = "") -> dict[str, object] | None:
         if session_id not in self.sessions or session_id in self.deleted:
+            return None
+        if str(self.sessions[session_id].get("library_id", "")) != str(library_id or "").strip():
             return None
         return {"session": self.sessions[session_id], "messages": self.messages.get(session_id, [])}
 
-    def delete_session(self, session_id: str, undo_window_seconds: int = 5) -> dict[str, object]:
+    def delete_session(self, session_id: str, undo_window_seconds: int = 5, library_id: str = "") -> dict[str, object]:
         if session_id not in self.sessions or session_id in self.deleted:
+            raise KeyError("session_not_found")
+        if str(self.sessions[session_id].get("library_id", "")) != str(library_id or "").strip():
             raise KeyError("session_not_found")
         self.deleted.add(session_id)
         return {
@@ -73,8 +78,10 @@ class _FakeChatService:
             "undo_deadline": "2026-01-01T00:00:05+00:00",
         }
 
-    def restore_session(self, session_id: str) -> dict[str, object]:
+    def restore_session(self, session_id: str, library_id: str = "") -> dict[str, object]:
         if session_id not in self.sessions:
+            return {"session_id": session_id, "restored": False, "error": "session_not_found"}
+        if str(self.sessions[session_id].get("library_id", "")) != str(library_id or "").strip():
             return {"session_id": session_id, "restored": False, "error": "session_not_found"}
         if session_id not in self.deleted:
             return {"session_id": session_id, "restored": False, "error": "restore_window_expired"}
@@ -102,6 +109,10 @@ class _FakeChatService:
         }
         if session_id not in self.sessions:
             raise KeyError("session_not_found")
+        if str(self.sessions[session_id].get("library_id", "")) != str(library_id or "").strip():
+            raise KeyError("session_not_found")
+        if "force_submit_error" in content:
+            raise RuntimeError("codex_workspace_path_missing:library_id=lib_x")
 
         user_id = f"msg_user_{len(self.messages[session_id]) + 1}"
         assistant_id = "msg_assistant_failed" if "force_failed" in content else "msg_assistant_ok"
@@ -234,16 +245,16 @@ class ChatApiEndpointsTest(unittest.TestCase):
         return out
 
     def test_create_list_detail_submit_and_stream_sequence(self) -> None:
-        status, created = self._post_json("/chat/sessions", {"title": "abc", "default_mode": "fast"})
+        status, created = self._post_json("/chat/sessions", {"title": "abc", "default_mode": "fast", "library_id": "lib_a"})
         self.assertEqual(status, 201)
         self.assertTrue(str(created["session_id"]).startswith("sess_"))
         session_id = str(created["session_id"])
 
-        status, listed = self._get_json("/chat/sessions")
+        status, listed = self._get_json("/chat/sessions?library_id=lib_a")
         self.assertEqual(status, 200)
         self.assertEqual(len(listed["sessions"]), 1)
 
-        status, detail = self._get_json(f"/chat/sessions/{session_id}")
+        status, detail = self._get_json(f"/chat/sessions/{session_id}?library_id=lib_a")
         self.assertEqual(status, 200)
         self.assertEqual(detail["session"]["session_id"], session_id)
 
@@ -255,6 +266,7 @@ class ChatApiEndpointsTest(unittest.TestCase):
                 "provider": "glm",
                 "model": "glm-4.5-flash",
                 "stream": True,
+                "library_id": "lib_a",
             },
         )
         self.assertEqual(status, 202)
@@ -280,29 +292,29 @@ class ChatApiEndpointsTest(unittest.TestCase):
         self.assertIn("event: delta", text_cursor)
 
     def test_delete_and_restore_session(self) -> None:
-        status, created = self._post_json("/chat/sessions", {"title": "delete-me", "default_mode": "fast"})
+        status, created = self._post_json("/chat/sessions", {"title": "delete-me", "default_mode": "fast", "library_id": "lib_a"})
         self.assertEqual(status, 201)
         session_id = str(created["session_id"])
 
-        status, payload = self._delete_json(f"/chat/sessions/{session_id}")
+        status, payload = self._delete_json(f"/chat/sessions/{session_id}?library_id=lib_a")
         self.assertEqual(status, 200)
         self.assertEqual(str(payload.get("session_id", "")), session_id)
         self.assertIn("undo_deadline", payload)
 
-        status, listed = self._get_json("/chat/sessions")
+        status, listed = self._get_json("/chat/sessions?library_id=lib_a")
         self.assertEqual(status, 200)
         self.assertEqual(len(listed.get("sessions", [])), 0)
 
-        status, restored = self._post_json(f"/chat/sessions/{session_id}/restore", {})
+        status, restored = self._post_json(f"/chat/sessions/{session_id}/restore?library_id=lib_a", {})
         self.assertEqual(status, 200)
         self.assertTrue(bool(restored.get("restored")))
 
-        status, listed = self._get_json("/chat/sessions")
+        status, listed = self._get_json("/chat/sessions?library_id=lib_a")
         self.assertEqual(status, 200)
         self.assertEqual(len(listed.get("sessions", [])), 1)
 
     def test_stream_can_emit_failed_terminal_event(self) -> None:
-        _, created = self._post_json("/chat/sessions", {"title": "x", "default_mode": "fast"})
+        _, created = self._post_json("/chat/sessions", {"title": "x", "default_mode": "fast", "library_id": "lib_a"})
         session_id = str(created["session_id"])
         _, submitted = self._post_json(
             f"/chat/sessions/{session_id}/messages",
@@ -312,6 +324,7 @@ class ChatApiEndpointsTest(unittest.TestCase):
                 "provider": "glm",
                 "model": "glm-4.5-flash",
                 "stream": True,
+                "library_id": "lib_a",
             },
         )
 
@@ -324,25 +337,32 @@ class ChatApiEndpointsTest(unittest.TestCase):
         self.assertEqual(names[-1], "failed")
 
     def test_parameter_validation_and_not_found_paths(self) -> None:
-        status, created = self._post_json("/chat/sessions", {"title": "x", "default_mode": "fast"})
+        status, created = self._post_json("/chat/sessions", {"title": "x", "default_mode": "fast", "library_id": "lib_a"})
         self.assertEqual(status, 201)
         session_id = str(created["session_id"])
 
         status, payload = self._post_json(
             f"/chat/sessions/{session_id}/messages",
-            {"content": " ", "mode": "fast", "provider": "glm", "model": "glm-4.5-flash", "stream": True},
+            {"content": " ", "mode": "fast", "provider": "glm", "model": "glm-4.5-flash", "stream": True, "library_id": "lib_a"},
         )
         self.assertEqual(status, 400)
         self.assertEqual(payload.get("error"), "content_required")
 
         status, payload = self._post_json(
-            "/chat/sessions/not_found/messages",
+            f"/chat/sessions/{session_id}/messages",
             {"content": "hi", "mode": "fast", "provider": "glm", "model": "glm-4.5-flash", "stream": True},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload.get("error"), "library_id_required")
+
+        status, payload = self._post_json(
+            "/chat/sessions/not_found/messages",
+            {"content": "hi", "mode": "fast", "provider": "glm", "model": "glm-4.5-flash", "stream": True, "library_id": "lib_a"},
         )
         self.assertEqual(status, 404)
         self.assertEqual(payload.get("error"), "session_not_found")
 
-        status, payload = self._get_json("/chat/sessions/not_found")
+        status, payload = self._get_json("/chat/sessions/not_found?library_id=lib_a")
         self.assertEqual(status, 404)
         self.assertEqual(payload.get("error"), "session_not_found")
 
@@ -351,7 +371,7 @@ class ChatApiEndpointsTest(unittest.TestCase):
         self.assertEqual(payload.get("error"), "message_id_required")
 
     def test_submit_message_accepts_library_id(self) -> None:
-        status, created = self._post_json("/chat/sessions", {"title": "abc", "default_mode": "fast"})
+        status, created = self._post_json("/chat/sessions", {"title": "abc", "default_mode": "fast", "library_id": "lib_a"})
         self.assertEqual(status, 201)
         session_id = str(created["session_id"])
         status, submitted = self._post_json(
@@ -362,14 +382,34 @@ class ChatApiEndpointsTest(unittest.TestCase):
                 "provider": "glm",
                 "model": "glm-4.5-flash",
                 "stream": True,
-                "library_id": "supply_chain",
+                "library_id": "lib_a",
             },
         )
         self.assertEqual(status, 202)
         self.assertTrue(str(submitted.get("assistant_message_id", "")).startswith("msg_assistant_"))
         self.assertIsNotNone(self.fake_chat_service.last_submit_payload)
         assert self.fake_chat_service.last_submit_payload is not None
-        self.assertEqual(self.fake_chat_service.last_submit_payload.get("library_id"), "supply_chain")
+        self.assertEqual(self.fake_chat_service.last_submit_payload.get("library_id"), "lib_a")
+
+    def test_submit_message_structured_error_payload_on_unexpected_failure(self) -> None:
+        status, created = self._post_json("/chat/sessions", {"title": "abc", "default_mode": "fast", "library_id": "lib_x"})
+        self.assertEqual(status, 201)
+        session_id = str(created["session_id"])
+        status, payload = self._post_json(
+            f"/chat/sessions/{session_id}/messages",
+            {
+                "content": "force_submit_error",
+                "mode": "agent",
+                "provider": "codex",
+                "model": "codex-local",
+                "stream": True,
+                "library_id": "lib_x",
+            },
+        )
+        self.assertEqual(status, 500)
+        self.assertEqual(payload.get("error"), "chat_submit_failed")
+        self.assertEqual(payload.get("error_code"), "codex_workspace_path_missing")
+        self.assertEqual(payload.get("backend"), "codex")
 
     def test_provider_test_endpoint_validation(self) -> None:
         status, payload = self._post_json("/chat/provider-test", {})
@@ -428,7 +468,7 @@ class ChatApiLoaderIntegrationTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_default_loader_can_create_session(self) -> None:
-        body = json.dumps({"title": "abc", "default_mode": "fast"}, ensure_ascii=False).encode("utf-8")
+        body = json.dumps({"title": "abc", "default_mode": "fast", "library_id": "lib_a"}, ensure_ascii=False).encode("utf-8")
         req = Request(
             f"http://127.0.0.1:{self.port}/chat/sessions",
             data=body,
@@ -485,6 +525,7 @@ class ChatServiceFastModeFallbackCitationTest(unittest.TestCase):
                 provider="glm",
                 model="glm-4.5-flash",
                 stream=False,
+                library_id="lib_a",
             )
         self.assertIn("paragraph_context_unavailable", str(ctx.exception))
 
@@ -515,6 +556,7 @@ class ChatServiceModelDegradedFallbackTest(unittest.TestCase):
             provider="glm",
             model="glm-4.5-flash",
             stream=False,
+            library_id="lib_a",
         )
 
         self.assertIn("model_degraded", result["retrieval_trace"])
@@ -525,3 +567,4 @@ class ChatServiceModelDegradedFallbackTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
