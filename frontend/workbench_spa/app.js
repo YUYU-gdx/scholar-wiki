@@ -93,86 +93,617 @@
   }
 
   function ImportPanel() {
-    const [optionsText, setOptionsText] = useState('{"llm_provider":"zhipu"}');
-    const [jobId, setJobId] = useState("");
-    const [resultText, setResultText] = useState("");
+    const [queueRows, setQueueRows] = useState([]);
+    const [totalJobs, setTotalJobs] = useState(0);
+    const [page, setPage] = useState(1);
+    const [pageSize] = useState(25);
+    const [statusFilter, setStatusFilter] = useState("");
+    const [queryText, setQueryText] = useState("");
+    const [uploadLibraryId, setUploadLibraryId] = useState("");
+    const [queueLibraryId, setQueueLibraryId] = useState("");
+    const [libraries, setLibraries] = useState([]);
+    const [selectedJobId, setSelectedJobId] = useState("");
+    const [selectedJob, setSelectedJob] = useState(null);
+    const [eventLines, setEventLines] = useState(["等待导入任务"]);
+    const [queueUnavailable, setQueueUnavailable] = useState(false);
+    const [busy, setBusy] = useState(false);
     const fileRef = useRef(null);
-
-    const submitFile = async function () {
+    const eventSourceRef = useRef(null);
+    const ASYNC_BASE = useMemo(function () {
       try {
-        const file = fileRef.current && fileRef.current.files ? fileRef.current.files[0] : null;
-        if (!file) {
-          setResultText("请选择 PDF 文件");
+        const params = new URLSearchParams(window.location.search || "");
+        const p = String(params.get("async_port") || "").trim() || "8021";
+        return window.location.protocol + "//" + window.location.hostname + ":" + p;
+      } catch (_err) {
+        return "http://127.0.0.1:8021";
+      }
+    }, []);
+    const terminalStatus = useMemo(function () {
+      return new Set(["completed", "failed", "cancelled"]);
+    }, []);
+
+    const STAGE_LABELS = {
+      accepted: "任务已接收",
+      parse_pdf: "解析 PDF",
+      extract_entities: "抽取信息",
+      finalize: "整理结果",
+      completed: "处理完成",
+      failed: "处理失败",
+      cancelled: "已取消",
+    };
+
+    const BEHAVIOR_LABELS = {
+      queued: "任务排队中",
+      accepted: "待处理",
+      parse_pdf: "正在解析 PDF",
+      extract_entities: "正在抽取结构化信息",
+      finalize: "正在整理并入库",
+      completed: "任务处理完成",
+      failed: "任务处理失败",
+      cancelled: "任务已取消",
+    };
+
+    const appendEventLine = function (line) {
+      setEventLines(function (prev) {
+        const next = prev.concat([line]);
+        return next.slice(-20);
+      });
+    };
+
+    const closeEventSource = function () {
+      if (eventSourceRef.current) {
+        try {
+          eventSourceRef.current.close();
+        } catch (_err) {
+          // ignore
+        }
+      }
+      eventSourceRef.current = null;
+    };
+
+    const isoToLocal = function (value) {
+      const text = String(value || "").trim();
+      if (!text) return "-";
+      const dt = new Date(text);
+      if (Number.isNaN(dt.getTime())) return text;
+      return dt.toLocaleString();
+    };
+
+    const renderMarkdownHtml = function (markdownText) {
+      const raw = String(markdownText || "");
+      try {
+        if (window.marked && typeof window.marked.parse === "function") {
+          const parsed = window.marked.parse(raw);
+          if (window.DOMPurify && typeof window.DOMPurify.sanitize === "function") {
+            return window.DOMPurify.sanitize(parsed);
+          }
+          return parsed;
+        }
+      } catch (_err) {
+        // ignore and fallback
+      }
+      return raw
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\n/g, "<br/>");
+    };
+
+    const buildStatusLine = function (row, eventType) {
+      const status = String((row && row.status) || "");
+      const stage = String((row && row.stage) || "");
+      const progress = Number(row && row.progress);
+      if (status === "queued") {
+        return "已进入队列，等待处理";
+      }
+      if (status === "running") {
+        const label = STAGE_LABELS[stage] || stage || "处理中";
+        if (Number.isFinite(progress)) {
+          return label + " · " + String(Math.max(0, Math.min(100, Math.round(progress)))) + "%";
+        }
+        return label;
+      }
+      if (status === "completed") return "处理完成";
+      if (status === "failed") return "处理失败";
+      if (status === "cancelled") return "任务已取消";
+      if (eventType && STAGE_LABELS[eventType]) return STAGE_LABELS[eventType];
+      return "处理中";
+    };
+
+    const behaviorText = function (row) {
+      const status = String((row && row.status_code) || (row && row.status) || "").toLowerCase();
+      const stage = String((row && row.stage_code) || (row && row.stage) || "").toLowerCase();
+      const cancelRequested = Boolean(row && row.requested_cancel);
+      if (cancelRequested && (status === "queued" || status === "running")) {
+        return "取消中";
+      }
+      if (status === "running") {
+        return BEHAVIOR_LABELS[stage] || ("处理中(" + (stage || "unknown") + ")");
+      }
+      if (status === "queued") return BEHAVIOR_LABELS.accepted;
+      return BEHAVIOR_LABELS[status] || "状态更新";
+    };
+
+    const applyJobPayload = function (row, eventType) {
+      if (!row || typeof row !== "object") return;
+      const status = String(row.status || "").toLowerCase();
+      const stage = String(row.stage || "");
+      const progressNum = Number(row.progress);
+      const progressText = Number.isFinite(progressNum) ? String(Math.max(0, Math.min(100, Math.round(progressNum)))) + "%" : "";
+      const statusLine = buildStatusLine(row, eventType);
+      const stageLabel = STAGE_LABELS[stage] || STAGE_LABELS[eventType] || stage || status || "update";
+      appendEventLine(stageLabel + (progressText ? " (" + progressText + ")" : ""));
+      if (selectedJobId && String(row.job_id || "") === selectedJobId) {
+        setSelectedJob(Object.assign({}, row, { status_line: statusLine }));
+      }
+      if (terminalStatus.has(status)) {
+        closeEventSource();
+      }
+    };
+
+    const refreshQueue = async function (forcePage, forceRequest) {
+      if (queueUnavailable && !forceRequest) return;
+      try {
+        const targetPage = Math.max(1, Number(forcePage || page) || 1);
+        const params = new URLSearchParams();
+        params.set("page", String(targetPage));
+        params.set("page_size", String(pageSize));
+        if (statusFilter) params.set("status", statusFilter);
+        if (queryText.trim()) params.set("q", queryText.trim());
+        if (queueLibraryId) params.set("library_id", queueLibraryId);
+        const payload = await jsonFetch(ASYNC_BASE + "/v1/jobs?" + params.toString(), { method: "GET" });
+        const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+        setQueueRows(jobs);
+        setTotalJobs(Number(payload.total || 0));
+        setQueueUnavailable(false);
+      } catch (err) {
+        const msg = String(err || "");
+        if (msg.indexOf("(404)") >= 0) {
+          setQueueUnavailable(true);
+          appendEventLine("任务队列接口不可用（404）：请重启桌面应用，确保 async 后端已启动且端口正确。");
           return;
         }
+        appendEventLine("任务列表刷新失败: " + msg);
+      }
+    };
+
+    const startEventStream = function (sseUrl) {
+      closeEventSource();
+      if (!sseUrl || !window.EventSource) {
+        appendEventLine("当前环境不支持 SSE，改用列表轮询刷新");
+        return;
+      }
+      try {
+        const source = new window.EventSource(sseUrl);
+        eventSourceRef.current = source;
+        source.onopen = function () {
+          appendEventLine("已连接状态流");
+        };
+        const handleEvent = function (eventType, evt) {
+          try {
+            const row = JSON.parse(evt.data || "{}");
+            applyJobPayload(row, eventType);
+          } catch (_err) {
+            // ignore bad event payload
+          }
+        };
+        ["accepted", "stage_started", "stage_progress", "stage_done", "completed", "failed", "cancelled"].forEach(function (eventType) {
+          source.addEventListener(eventType, function (evt) {
+            handleEvent(eventType, evt);
+          });
+        });
+        source.onmessage = function (evt) {
+          handleEvent("message", evt);
+        };
+        source.onerror = function () {
+          appendEventLine("状态流中断，已保留队列轮询刷新");
+          closeEventSource();
+        };
+      } catch (_err) {
+        appendEventLine("状态流连接失败");
+      }
+    };
+
+    useEffect(function () {
+      jsonFetch("/literature/libraries")
+        .then(function (payload) {
+          const rows = Array.isArray(payload.libraries) ? payload.libraries : [];
+          setLibraries(rows);
+          const fallback = String(payload.default_library_id || "").trim() || (rows[0] ? String(rows[0].library_id || "").trim() : "");
+          setUploadLibraryId(fallback);
+          setQueueLibraryId("");
+        })
+        .catch(function () {
+          setLibraries([]);
+          setUploadLibraryId("");
+          setQueueLibraryId("");
+        });
+    }, []);
+
+    useEffect(function () {
+      refreshQueue(1, true);
+      const timer = window.setInterval(function () {
+        refreshQueue();
+      }, 1800);
+      return function () {
+        window.clearInterval(timer);
+        closeEventSource();
+      };
+    }, [statusFilter, queryText, queueLibraryId, page]);
+
+    useEffect(function () {
+      if (!selectedJobId) {
+        closeEventSource();
+        setSelectedJob(null);
+        return;
+      }
+      jsonFetch(ASYNC_BASE + "/v1/jobs/" + encodeURIComponent(selectedJobId), { method: "GET" })
+        .then(function (payload) {
+          setSelectedJob(payload);
+          startEventStream(ASYNC_BASE + "/v1/jobs/" + encodeURIComponent(selectedJobId) + "/events");
+        })
+        .catch(function (err) {
+          appendEventLine("任务详情加载失败: " + String(err));
+        });
+      return function () {
+        closeEventSource();
+      };
+    }, [selectedJobId]);
+
+    const submitFiles = async function () {
+      try {
+        const files = fileRef.current && fileRef.current.files ? Array.from(fileRef.current.files) : [];
+        if (!files.length) {
+          appendEventLine("请选择一个或多个 PDF 文件");
+          return;
+        }
+        if (!uploadLibraryId) {
+          appendEventLine("请选择文献库");
+          return;
+        }
+        setBusy(true);
         const form = new FormData();
-        form.append("file", file, file.name);
-        if ((optionsText || "").trim()) {
-          form.append("options", optionsText);
+        files.forEach(function (file) {
+          form.append("files", file, file.name);
+        });
+        form.append("library_id", uploadLibraryId);
+        const payload = await jsonFetch(ASYNC_BASE + "/v1/pipeline/parse-extract/batch", { method: "POST", body: form });
+        appendEventLine("批量入队完成：成功 " + String(payload.accepted_count || 0) + "，失败 " + String(payload.rejected_count || 0));
+        const accepted = Array.isArray(payload.accepted) ? payload.accepted : [];
+        if (accepted.length) {
+          setSelectedJobId(String(accepted[0].job_id || ""));
         }
-        const payload = await jsonFetch("/v1/pipeline/parse-extract", { method: "POST", body: form });
-        setJobId(String(payload.job_id || ""));
-        setResultText(JSON.stringify(payload, null, 2));
+        setPage(1);
+        await refreshQueue(1, true);
       } catch (err) {
-        setResultText(String(err));
+        appendEventLine("批量导入失败: " + String(err));
+      } finally {
+        setBusy(false);
       }
     };
 
-    const fetchJob = async function (kind) {
+    const actionJob = async function (kind, row) {
       try {
-        if (!jobId) {
-          setResultText("请先创建任务");
+        const jobId = String(row && row.job_id ? row.job_id : "");
+        if (!jobId) return;
+        setBusy(true);
+      if (kind === "cancel") {
+          const payload = await jsonFetch(ASYNC_BASE + "/v1/jobs/" + encodeURIComponent(jobId) + "/cancel", { method: "POST" });
+          appendEventLine("已请求取消任务: " + String(payload.job_id || jobId));
+          await refreshQueue(undefined, true);
           return;
         }
-        if (kind === "cancel") {
-          const payload = await jsonFetch("/v1/jobs/" + encodeURIComponent(jobId) + "/cancel", { method: "POST" });
-          setResultText(JSON.stringify(payload, null, 2));
-          return;
+        if (kind === "retry") {
+          const payload = await jsonFetch(ASYNC_BASE + "/v1/jobs/" + encodeURIComponent(jobId) + "/retry", { method: "POST" });
+          const newJob = payload && payload.new_job ? payload.new_job : {};
+          const newJobId = String(newJob.job_id || "");
+          appendEventLine("重试已创建新任务: " + (newJobId || "unknown"));
+          if (newJobId) setSelectedJobId(newJobId);
+          await refreshQueue(1, true);
         }
-        const suffix = kind === "result" ? "/result" : "";
-        const payload = await jsonFetch("/v1/jobs/" + encodeURIComponent(jobId) + suffix, { method: "GET" });
-        setResultText(JSON.stringify(payload, null, 2));
       } catch (err) {
-        setResultText(String(err));
+        appendEventLine("任务操作失败: " + String(err));
+      } finally {
+        setBusy(false);
       }
     };
+
+    const statusText = function (row) {
+      return buildStatusLine(row || {}, "");
+    };
+
+    const statusClass = function (row) {
+      const status = String((row && row.status) || "").toLowerCase();
+      if (status === "completed") return "status-pill status-completed";
+      if (status === "failed") return "status-pill status-failed";
+      if (status === "cancelled") return "status-pill status-cancelled";
+      if (status === "running") return "status-pill status-running";
+      if (status === "queued") return "status-pill status-queued";
+      return "status-pill";
+    };
+
+    const totalPages = Math.max(1, Math.ceil(Math.max(0, totalJobs) / pageSize));
+    const STAGE_FLOW = ["accepted", "parse_pdf", "extract_entities", "finalize"];
+    const STAGE_FLOW_LABELS = {
+      accepted: "待处理",
+      parse_pdf: "解析",
+      extract_entities: "抽取",
+      finalize: "整理",
+    };
+    const stageIndexFor = function (row) {
+      const status = String((row && row.status_code) || (row && row.status) || "").toLowerCase();
+      const stage = String((row && row.stage_code) || (row && row.stage) || "").toLowerCase();
+      if (status === "queued") return 0;
+      const idx = STAGE_FLOW.indexOf(stage);
+      if (idx >= 0) return idx;
+      if (status === "completed") return STAGE_FLOW.length - 1;
+      return 0;
+    };
+    const stepClass = function (row, step) {
+      const status = String((row && row.status_code) || (row && row.status) || "").toLowerCase();
+      const idx = stageIndexFor(row);
+      const target = STAGE_FLOW.indexOf(step);
+      if (status === "failed" || status === "cancelled") {
+        if (target === idx) return "fsm-step failed";
+        if (target < idx) return "fsm-step done";
+        return "fsm-step pending";
+      }
+      if (status === "completed") return "fsm-step done";
+      if (target < idx) return "fsm-step done";
+      if (target === idx) return "fsm-step active";
+      return "fsm-step pending";
+    };
+    const selectedJobInList =
+      selectedJobId && queueRows.length ? queueRows.find(function (x) { return String(x.job_id || "") === selectedJobId; }) : null;
+    const currentJob = selectedJob || selectedJobInList || null;
+    const currentResult = currentJob && currentJob.result && typeof currentJob.result === "object" ? currentJob.result : {};
+    const currentExtract = currentResult.extract && typeof currentResult.extract === "object" ? currentResult.extract : {};
+    const currentSummary = currentExtract.summary && typeof currentExtract.summary === "object" ? currentExtract.summary : {};
+    const relationHints = []
+      .concat(currentSummary.relational_variables || [])
+      .concat(currentSummary.relationships || [])
+      .slice(0, 8);
+    const markdownText = [
+      "# AI 沉淀详情",
+      "",
+      "## 元数据",
+      "- 任务ID: `" + String(currentJob && currentJob.job_id ? currentJob.job_id : "-") + "`",
+      "- 文件: " + String(currentJob && currentJob.file_name ? currentJob.file_name : "-"),
+      "- 文献库: " + String(currentJob && currentJob.library_id ? currentJob.library_id : "-"),
+      "- 当前状态: " + String(currentJob ? behaviorText(currentJob) : "-"),
+      "- 创建时间: " + isoToLocal(currentJob && currentJob.created_at),
+      "- 更新时间: " + isoToLocal(currentJob && currentJob.updated_at),
+      "",
+      "## 核心变量",
+      Object.keys(currentSummary || {}).length
+        ? Object.keys(currentSummary)
+            .slice(0, 12)
+            .map(function (key) {
+              const value = currentSummary[key];
+              return "- **" + key + "**: " + (typeof value === "string" ? value : JSON.stringify(value));
+            })
+            .join("\n")
+        : "- 暂无抽取变量",
+      "",
+      "## 因果关系图（摘要）",
+      relationHints.length
+        ? relationHints
+            .map(function (item, idx) {
+              if (typeof item === "string") return String(idx + 1) + ". " + item;
+              try {
+                return String(idx + 1) + ". " + JSON.stringify(item);
+              } catch (_err) {
+                return String(idx + 1) + ". [complex relation]";
+              }
+            })
+            .join("\n")
+        : "暂无关系数据，可在任务完成后查看。",
+    ].join("\n");
+    const markdownHtml = renderMarkdownHtml(markdownText);
 
     return e(
       "div",
       { className: "panel-body" },
-      e("h3", null, "导入 / 解析 / 抽取"),
+      e("h3", null, "AI 知识工作台"),
+      queueUnavailable
+        ? e("div", { className: "error-box", style: { marginBottom: "8px" } }, "任务队列接口不可用（404）。请重启应用后重试。")
+        : null,
       e(
         "div",
-        { className: "panel-form" },
-        e("input", { ref: fileRef, type: "file", accept: "application/pdf" }),
-        e("button", { onClick: submitFile }, "上传并创建任务")
-      ),
-      e(
-        "div",
-        { className: "panel-form" },
-        e("textarea", {
-          value: optionsText,
-          onChange: function (evt) {
-            setOptionsText(evt.target.value);
+        { className: "panel-form import-toolbar" },
+        e(
+          "select",
+          {
+            value: uploadLibraryId,
+            onChange: function (evt) {
+              setUploadLibraryId(evt.target.value);
+            },
           },
-          placeholder: "options JSON",
-        })
-      ),
-      e(
-        "div",
-        { className: "panel-form" },
+          e("option", { value: "" }, "选择上传文献库"),
+          libraries.map(function (row, idx) {
+            const id = String(row && row.library_id ? row.library_id : "");
+            const label = id + " (" + String(row && row.paper_count ? row.paper_count : 0) + ")";
+            return e("option", { key: "import-lib-" + idx, value: id }, label);
+          })
+        ),
+        e(
+          "select",
+          {
+            value: queueLibraryId,
+            onChange: function (evt) {
+              setQueueLibraryId(evt.target.value);
+              setPage(1);
+            },
+          },
+          e("option", { value: "" }, "队列: 全部文献库"),
+          libraries.map(function (row, idx) {
+            const id = String(row && row.library_id ? row.library_id : "");
+            const label = "队列: " + id;
+            return e("option", { key: "queue-lib-" + idx, value: id }, label);
+          })
+        ),
         e("input", {
-          value: jobId,
-          onChange: function (evt) {
-            setJobId(evt.target.value);
-          },
-          placeholder: "job_id",
+          ref: fileRef,
+          type: "file",
+          multiple: true,
+          accept: "application/pdf",
         }),
-        e("button", { onClick: function () { fetchJob("status"); } }, "查询状态"),
-        e("button", { onClick: function () { fetchJob("result"); } }, "查询结果"),
-        e("button", { onClick: function () { fetchJob("cancel"); } }, "取消任务")
+        e("button", { className: "primary-action", onClick: submitFiles, disabled: busy }, busy ? "处理中..." : "上传并入队"),
+        e(
+          "select",
+          {
+            value: statusFilter,
+            onChange: function (evt) {
+              setStatusFilter(evt.target.value);
+              setPage(1);
+            },
+          },
+          e("option", { value: "" }, "全部状态"),
+          e("option", { value: "queued" }, "queued"),
+          e("option", { value: "running" }, "running"),
+          e("option", { value: "completed" }, "completed"),
+          e("option", { value: "failed" }, "failed"),
+          e("option", { value: "cancelled" }, "cancelled")
+        ),
+        e("input", {
+          value: queryText,
+          onChange: function (evt) {
+            setQueryText(evt.target.value);
+            setPage(1);
+          },
+          placeholder: "搜索任务ID/文件名",
+        }),
+        e("button", { onClick: function () { refreshQueue(undefined, true); }, disabled: busy }, "刷新")
       ),
-      e("pre", { className: "helper" }, resultText || "等待操作")
+      e(
+        "div",
+        { className: "knowledge-layout" },
+        e(
+          "section",
+          { className: "list-column" },
+          e("div", { className: "column-title" }, "任务列表"),
+          e(
+            "div",
+            { className: "list-frame" },
+            e(
+              "div",
+              { className: "task-card-list full-height" },
+              queueRows.length
+                ? queueRows.map(function (row) {
+                    const id = String(row.job_id || "");
+                    const display = String(row.display_name || row.file_name || "-");
+                    const stageCode = String((row.stage_code || row.stage || "")).toLowerCase();
+                    return e(
+                      "article",
+                      {
+                        key: "card-" + id,
+                        className: "task-card task-row" + (selectedJobId === id ? " active" : ""),
+                        onClick: function () {
+                          setSelectedJobId(id);
+                        },
+                      },
+                      e(
+                        "div",
+                        { className: "task-row-head" },
+                        e("div", { className: "task-card-title", title: display }, display),
+                        e("span", { className: statusClass(row) }, behaviorText(row))
+                      ),
+                      e(
+                        "div",
+                        { className: "task-fields" },
+                        e("span", null, "库: " + String(row.library_id || "-")),
+                        e("span", null, "阶段: " + (STAGE_LABELS[stageCode] || stageCode || "-")),
+                        e("span", null, "进度: " + String(row.progress || 0) + "%"),
+                        e("span", null, "创建: " + isoToLocal(row.created_at)),
+                        e("span", null, "更新: " + isoToLocal(row.updated_at))
+                      ),
+                      e(
+                        "div",
+                        { className: "task-fsm" },
+                        STAGE_FLOW.map(function (step) {
+                          return e(
+                            "div",
+                            { key: id + "-fsm-" + step, className: stepClass(row, step) },
+                            e("span", { className: "dot" }),
+                            e("span", null, STAGE_FLOW_LABELS[step])
+                          );
+                        })
+                      ),
+                      e(
+                        "div",
+                        { className: "task-actions" },
+                        row.can_cancel
+                          ? e(
+                              "button",
+                              {
+                                onClick: function (evt) {
+                                  evt.stopPropagation();
+                                  actionJob("cancel", row);
+                                },
+                              },
+                              "取消"
+                            )
+                          : null,
+                        row.can_retry
+                          ? e(
+                              "button",
+                              {
+                                onClick: function (evt) {
+                                  evt.stopPropagation();
+                                  actionJob("retry", row);
+                                },
+                              },
+                              "重试"
+                            )
+                          : null,
+                        e("span", { className: "helper task-id" }, id)
+                      )
+                    );
+                  })
+                : e("div", { className: "helper" }, "暂无任务")
+            ),
+            e(
+              "div",
+              { className: "stream-pagination panel-form pinned-pagination" },
+              e("button", { disabled: page <= 1, onClick: function () { setPage(Math.max(1, page - 1)); } }, "上一页"),
+              e("span", { className: "helper" }, "第 " + String(page) + " / " + String(totalPages) + " 页"),
+              e("button", { disabled: page >= totalPages, onClick: function () { setPage(Math.min(totalPages, page + 1)); } }, "下一页"),
+              e("span", { className: "helper" }, "总计 " + String(totalJobs) + " 条")
+            )
+          )
+        ),
+        e(
+          "aside",
+          { className: "detail-column" },
+          e("div", { className: "column-title" }, "沉淀详情"),
+          currentJob
+            ? e(
+                "div",
+                { className: "detail-meta helper" },
+                e("div", null, "当前行为: " + behaviorText(currentJob)),
+                String(currentJob.error_code || "").trim() || String(currentJob.error_detail || "").trim()
+                  ? e(
+                      "div",
+                      { className: "error-box" },
+                      e("div", null, "错误码: " + String(currentJob.error_code || "-")),
+                      e("div", null, "错误详情: " + String(currentJob.error_detail || "-"))
+                    )
+                  : null
+              )
+            : e("div", { className: "helper" }, "选择任务后查看沉淀详情"),
+          e("div", {
+            className: "markdown-preview",
+            dangerouslySetInnerHTML: { __html: markdownHtml },
+          }),
+          e(
+            "ul",
+            { className: "result-list helper", style: { marginTop: "10px", marginBottom: "0" } },
+            eventLines.map(function (line, idx) {
+              return e("li", { key: "event-line-" + idx }, line);
+            })
+          )
+        )
+      )
     );
   }
 
@@ -480,12 +1011,7 @@
         e(
           "div",
           { className: "wb-toolbar-group" },
-          e(
-            "span",
-            { className: "status" },
-            status,
-            knownLayouts.length ? " | layouts: " + knownLayouts.join(", ") : ""
-          )
+          null
         )
       ),
       e("div", { ref: containerRef, className: "wb-layout", id: "workbench-layout" })

@@ -1,0 +1,1 @@
+{"mcpServers": {"kn_graph_tools": {"command": "D:\\python\\python.exe", "args": ["-m", "scripts.smj_pipeline.kn_mcp_server"], "env": {"KN_DEFAULT_LIBRARY_ID": "supply_chain"}}}}

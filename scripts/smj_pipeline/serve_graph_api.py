@@ -840,6 +840,25 @@ def make_handler(
         saved["workspace_path"] = workspace
         return saved
 
+    def _bootstrap_library_codex_skills_payload(library_id: str) -> dict[str, Any]:
+        lib = str(library_id or "").strip()
+        if not lib:
+            return {"error": "library_id_required"}
+        workspace = _resolve_library_workspace(lib)
+        if not workspace:
+            return {"error": "codex_workspace_path_missing", "library_id": lib}
+        if _library_codex_cfg_mod is None:
+            return {"error": "library_codex_config_unavailable", "library_id": lib}
+        cfg = _library_codex_cfg_mod.bootstrap_library_codex_config(workspace_path=workspace, library_id=lib)
+        skills = cfg.get("project_skills", [])
+        return {
+            "ok": True,
+            "library_id": lib,
+            "workspace_path": workspace,
+            "loaded_skills": skills if isinstance(skills, list) else [],
+            "config": cfg,
+        }
+
     codex_config_path = Path(os.getenv("CHAT_CODEX_CONFIG_PATH", "outputs/chat/codex_runner_config.json") or "outputs/chat/codex_runner_config.json")
     try:
         _agent_runner_mod = _load_agent_runner_module()
@@ -1191,6 +1210,21 @@ def make_handler(
                     return _json(self, {"ok": True, "config": saved}, status=200)
                 except Exception as exc:
                     return _json(self, {"error": "library_codex_config_save_failed", "detail": str(exc)}, status=400)
+
+            if path.startswith("/chat/codex/libraries/") and path.endswith("/skills/bootstrap"):
+                try:
+                    prefix = "/chat/codex/libraries/"
+                    library_id = str(path[len(prefix) : -len("/skills/bootstrap")]).strip().strip("/")
+                    if not library_id:
+                        return _json(self, {"error": "library_id_required"}, status=400)
+                    payload = _bootstrap_library_codex_skills_payload(library_id)
+                    if isinstance(payload, dict) and str(payload.get("error", "")).strip():
+                        code = str(payload.get("error", "")).strip()
+                        status_code = 404 if code == "codex_workspace_path_missing" else 500
+                        return _json(self, payload, status=status_code)
+                    return _json(self, payload, status=200)
+                except Exception as exc:
+                    return _json(self, {"error": "library_skills_bootstrap_failed", "detail": str(exc)}, status=400)
 
             if path == "/chat/codex/install":
                 try:

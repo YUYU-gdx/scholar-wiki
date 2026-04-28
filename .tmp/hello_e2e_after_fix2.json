@@ -1,0 +1,10 @@
+﻿{
+    "ok":  true,
+    "port":  8027,
+    "library_id":  "supply_chain",
+    "session_id":  "sess_34c58265e2d643fcb0da7d736e4e9d0b",
+    "assistant_message_id":  "msg_bdd49ebdc48d4f50a42d0ede915f3daf",
+    "status":  "failed",
+    "content":  "",
+    "error_detail":  "paragraph_context_unavailable:rag_tool_called=False:rag_hits_seen=0:library_id=supply_chain"
+}

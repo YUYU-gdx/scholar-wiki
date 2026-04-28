@@ -28,7 +28,6 @@
     librarySelect: document.getElementById("library-select"),
     prompt: document.getElementById("prompt-input"),
     send: document.getElementById("send-btn"),
-    chatStatusStrip: document.getElementById("chat-status-strip"),
 
     settingsModal: document.getElementById("provider-modal"),
     settingsClose: document.getElementById("provider-modal-close"),
@@ -144,18 +143,8 @@
   }
 
   function setChatStage(stage, detail) {
-    const key = String(stage || "done");
-    const base = STAGE_LABELS[key] || STAGE_LABELS.ready;
-    const extra = String(detail || "").trim();
-    if (key === "done") {
-      els.chatStatusStrip.textContent = STAGE_LABELS.done;
-      return;
-    }
-    if (key === "failed") {
-      els.chatStatusStrip.textContent = extra ? (STAGE_LABELS.failed + ": " + extra) : STAGE_LABELS.failed;
-      return;
-    }
-    els.chatStatusStrip.textContent = extra ? (base + " · " + extra) : base;
+    void stage;
+    void detail;
   }
 
   function getSelectedLibraryId() {
@@ -214,6 +203,25 @@
       })
       .catch(function () {
         renderLibraryOptions([], "");
+      });
+  }
+
+  function bootstrapLibrarySkills(libraryId) {
+    const lib = String(libraryId || "").trim();
+    if (!lib) return Promise.resolve(null);
+    return fetch("/chat/codex/libraries/" + encodeURIComponent(lib) + "/skills/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    })
+      .then(function (resp) {
+        return resp.json().catch(function () { return {}; }).then(function (payload) {
+          if (!resp.ok) throw new Error(String((payload && payload.error) || "skills_bootstrap_failed"));
+          return payload;
+        });
+      })
+      .catch(function () {
+        return null;
       });
   }
 
@@ -355,6 +363,17 @@
     return s.replace(/\s+/g, " ").trim();
   }
 
+  const CODEX_ACTION_TYPES = Object.freeze([
+    "tool_mcp_call",
+    "tool_mcp_startup",
+    "tool_command_execution",
+    "tool_file_change",
+    "thinking_stream",
+    "plan_step",
+    "final_answer",
+    "unknown"
+  ]);
+
   function _normalizeTraceEntry(raw, idx, eventType) {
     const item = raw && typeof raw === "object" ? raw : {};
     const backend = _cleanProcessText(item.backend || "") || "codex";
@@ -373,7 +392,7 @@
     const outputSummary = _cleanProcessText(item.output_summary || item.output_excerpt || "");
     const argsPreview = _cleanProcessText(item.args_preview || "");
     const detail = _cleanProcessText(item.detail || "");
-    return {
+    const normalized = {
       traceKey: String(item.trace_key || stepId || ("trace_" + (idx + 1))).trim(),
       step_id: stepId,
       backend: backend,
@@ -385,19 +404,163 @@
       summary: _clip(summary, 280),
       output_summary: _clip(outputSummary, 320),
       args_preview: _clip(argsPreview, 280),
-      detail: _clip(detail, 420)
+      detail: _clip(detail, 420),
+      raw: item.raw && typeof item.raw === "object" ? item.raw : {}
     };
+    const actionType = _detectActionType(normalized);
+    normalized.action_type = CODEX_ACTION_TYPES.indexOf(actionType) >= 0 ? actionType : "unknown";
+    normalized.category = _classifyActionCategory(normalized.action_type);
+    return normalized;
+  }
+
+  function _safeJsonObject(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch (_err) {
+      return {};
+    }
+  }
+
+  function _extractRawArgs(row) {
+    const item = row && typeof row === "object" ? row : {};
+    const raw = item.raw && typeof item.raw === "object" ? item.raw : {};
+    const args = raw.arguments && typeof raw.arguments === "object" ? raw.arguments : {};
+    if (Object.keys(args).length > 0) return args;
+    return _safeJsonObject(item.args_preview || "");
+  }
+
+  function _detectActionType(row) {
+    const item = row && typeof row === "object" ? row : {};
+    const event = String(item.event || "").trim().toLowerCase();
+    const state = String(item.state || "").trim().toLowerCase();
+    const kind = String(item.kind || "").trim().toLowerCase();
+    const tool = String(item.tool || "").trim().toLowerCase();
+    const itemName = String(item.item || "").trim().toLowerCase();
+
+    if ((event.indexOf("agent_item_completed") >= 0 || event.indexOf("completed") >= 0) && kind === "message" && state === "completed") {
+      return "final_answer";
+    }
+    if (event.indexOf("agent_item_delta") >= 0 || (kind === "message" && state === "streaming")) {
+      return "thinking_stream";
+    }
+    if (tool.indexOf("mcp.startup") >= 0) {
+      return "tool_mcp_startup";
+    }
+    if (itemName.indexOf("commandexecution") >= 0 || tool.indexOf("command") >= 0) {
+      return "tool_command_execution";
+    }
+    if (itemName.indexOf("filechange") >= 0 || kind === "file_change") {
+      return "tool_file_change";
+    }
+    if (itemName.indexOf("mcptoolcall") >= 0 || kind === "tool" || !!tool) {
+      return "tool_mcp_call";
+    }
+    if (event.indexOf("agent_item_started") >= 0 || event.indexOf("started") >= 0 || kind === "agent_item") {
+      return "plan_step";
+    }
+    return "unknown";
+  }
+
+  function _classifyActionCategory(actionType) {
+    const t = String(actionType || "").trim();
+    if (t === "thinking_stream") return "thinking";
+    if (t === "final_answer") return "final";
+    if (t.indexOf("tool_") === 0) return "tool";
+    return "plan";
+  }
+
+  function _categoryLabel(category) {
+    const c = String(category || "").trim();
+    if (c === "tool") return "工具调用";
+    if (c === "thinking") return "思考";
+    if (c === "final") return "最终答案";
+    return "计划";
+  }
+
+  function _resultOverview(row) {
+    const structured = _extractStructured(row);
+    const out = {};
+    if (Array.isArray(structured.paragraph_hits)) out.paragraph_hits = structured.paragraph_hits.length;
+    if (Array.isArray(structured.keyword_hits)) out.keyword_hits = structured.keyword_hits.length;
+    if (Array.isArray(structured.rag_hits)) out.rag_hits = structured.rag_hits.length;
+    if (Array.isArray(structured.merged_hits)) out.merged_hits = structured.merged_hits.length;
+    if (Array.isArray(structured.results)) out.results = structured.results.length;
+    return out;
+  }
+
+  function _actionSummary(row) {
+    const item = row && typeof row === "object" ? row : {};
+    const actionType = String(item.action_type || "unknown");
+    const tool = String(item.tool || "").trim();
+    const state = String(item.state || "").trim().toLowerCase();
+    const done = state === "completed" || state === "ok" || state === "success";
+    const structured = _extractStructured(item);
+    if (actionType === "thinking_stream") return "正在生成回答";
+    if (actionType === "final_answer") return "已产出最终回答";
+    if (actionType === "plan_step") return "正在规划解题步骤";
+    if (actionType === "tool_mcp_startup") return "MCP 服务启动检查";
+    if (actionType === "tool_command_execution") return "执行本地命令";
+    if (actionType === "tool_file_change") return "执行文件修改";
+    if (actionType !== "tool_mcp_call") return "执行中间步骤";
+    const norm = tool.toLowerCase();
+    if (norm.indexOf("rag_search") >= 0) {
+      const hits = Array.isArray(structured.paragraph_hits) ? structured.paragraph_hits.length : 0;
+      return "调用 rag_search，返回 " + hits + " 条段落证据";
+    }
+    if (norm.indexOf("weaviate_query") >= 0) {
+      const merged = Array.isArray(structured.merged_hits) ? structured.merged_hits.length : 0;
+      return "调用 weaviate_query，merged 命中 " + merged + " 条";
+    }
+    if (norm.indexOf("graph_search") >= 0) {
+      const results = Array.isArray(structured.results) ? structured.results.length : 0;
+      return "调用 graph_search，返回 " + results + " 条结果";
+    }
+    if (norm.indexOf("weaviate_fetch_object") >= 0) {
+      return "调用 weaviate_fetch_object，读取对象详情";
+    }
+    return "调用 " + (tool || "工具") + (done ? "（已完成）" : "（执行中）");
+  }
+
+  function _buildTraceDetail(row, idx) {
+    const item = row && typeof row === "object" ? row : {};
+    const args = _extractRawArgs(item);
+    return {
+      step: idx + 1,
+      category: _categoryLabel(item.category || "plan"),
+      action_type: String(item.action_type || "unknown"),
+      event: String(item.event || ""),
+      state: String(item.state || ""),
+      step_id: String(item.step_id || ""),
+      backend: String(item.backend || "codex"),
+      summary: String(item.summary || ""),
+      tool: String(item.tool || ""),
+      key_params: args,
+      result_overview: _resultOverview(item),
+      output_summary: String(item.output_summary || ""),
+      detail: String(item.detail || "")
+    };
+  }
+
+  function _extractStructured(row) {
+    const raw = row && row.raw && typeof row.raw === "object" ? row.raw : {};
+    const result = raw.result && typeof raw.result === "object" ? raw.result : {};
+    const output = raw.output && typeof raw.output === "object" ? raw.output : {};
+    if (result.structuredContent && typeof result.structuredContent === "object") return result.structuredContent;
+    if (result.structured_content && typeof result.structured_content === "object") return result.structured_content;
+    if (output.structuredContent && typeof output.structuredContent === "object") return output.structuredContent;
+    return {};
   }
 
   function _processLine(item, idx) {
     const row = item && typeof item === "object" ? item : {};
-    const step = String(row.step_id || ("step_" + (idx + 1))).trim();
-    const kind = String(row.kind || "").trim();
-    const state = String(row.state || "").trim();
-    const summary = _cleanProcessText(row.summary || row.output_summary || row.detail || "");
-    const tags = [kind, state].filter(Boolean).join(" · ");
-    const prefix = tags ? ("[" + tags + "] ") : "";
-    return prefix + step + (summary ? (" - " + summary) : "");
+    return {
+      index: String(idx + 1),
+      category: _categoryLabel(row.category || "plan"),
+      text: _actionSummary(row)
+    };
   }
 
   function _ensureProcessStream(targetBubble) {
@@ -425,33 +588,88 @@
     list.innerHTML = "";
     arr.forEach(function (entry, idx) {
       const item = entry && typeof entry === "object" ? entry : {};
-      const row = document.createElement("div");
-      row.className = "process-stream-item";
+      const line = _processLine(item, idx);
+      const row = document.createElement("details");
+      row.className = "process-trace-row";
       row.setAttribute("data-trace-state", String(item.state || "").trim() || "unknown");
-      row.textContent = _processLine(item, idx);
+      row.setAttribute("data-trace-category", String(item.category || "plan"));
+      const summary = document.createElement("summary");
+      const idxEl = document.createElement("span");
+      idxEl.className = "trace-index";
+      idxEl.textContent = line.index + ".";
+      const catEl = document.createElement("span");
+      catEl.className = "trace-category";
+      catEl.textContent = line.category;
+      const textEl = document.createElement("span");
+      textEl.className = "trace-title";
+      textEl.textContent = line.text;
+      summary.appendChild(idxEl);
+      summary.appendChild(catEl);
+      summary.appendChild(textEl);
+      const detail = document.createElement("pre");
+      detail.className = "trace-detail";
+      detail.textContent = JSON.stringify(_buildTraceDetail(item, idx), null, 2);
+      row.appendChild(summary);
+      row.appendChild(detail);
       list.appendChild(row);
     });
   }
 
-  function _buildMergedProcessSummary(rows) {
-    const arr = Array.isArray(rows) ? rows : [];
-    if (!arr.length) return "";
-    const lines = arr.slice(0, 8).map(function (x, idx) {
-      return (idx + 1) + ". " + _processLine(x, idx);
+  function _renderProcessSummaryDrawer(targetBubble, rows) {
+    const arr = (Array.isArray(rows) ? rows : []).slice(0, 10);
+    if (!arr.length) return;
+    const old = targetBubble.querySelector(".process-summary-drawer");
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    const drawer = document.createElement("details");
+    drawer.className = "process-summary-drawer";
+    const summary = document.createElement("summary");
+    summary.setAttribute("data-testid", "message-process-summary");
+    summary.textContent = "过程摘要（" + arr.length + " 步）";
+    const panel = document.createElement("div");
+    panel.className = "process-summary-panel";
+    arr.forEach(function (entry, idx) {
+      const item = entry && typeof entry === "object" ? entry : {};
+      const line = _processLine(item, idx);
+      const row = document.createElement("details");
+      row.className = "process-trace-row";
+      row.setAttribute("data-trace-state", String(item.state || "").trim() || "unknown");
+      row.setAttribute("data-trace-category", String(item.category || "plan"));
+      const rowSummary = document.createElement("summary");
+      const idxEl = document.createElement("span");
+      idxEl.className = "trace-index";
+      idxEl.textContent = line.index + ".";
+      const catEl = document.createElement("span");
+      catEl.className = "trace-category";
+      catEl.textContent = line.category;
+      const textEl = document.createElement("span");
+      textEl.className = "trace-title";
+      textEl.textContent = line.text;
+      rowSummary.appendChild(idxEl);
+      rowSummary.appendChild(catEl);
+      rowSummary.appendChild(textEl);
+      const detail = document.createElement("pre");
+      detail.className = "trace-detail";
+      detail.textContent = JSON.stringify(_buildTraceDetail(item, idx), null, 2);
+      row.appendChild(rowSummary);
+      row.appendChild(detail);
+      panel.appendChild(row);
     });
-    return "过程摘要：\n" + lines.join("\n");
+    drawer.appendChild(summary);
+    drawer.appendChild(panel);
+    const content = targetBubble.querySelector(".msg-content");
+    if (content && content.parentNode) {
+      content.parentNode.insertBefore(drawer, content);
+    } else {
+      targetBubble.appendChild(drawer);
+    }
   }
 
   function _mergeProcessIntoMessage(targetBubble, finalAnswer, rows) {
     const content = targetBubble.querySelector(".msg-content");
     if (!content) return;
-    const summary = _buildMergedProcessSummary(rows);
     const answer = String(finalAnswer || "").trim();
-    if (summary) {
-      content.textContent = summary + (answer ? ("\n\n" + answer) : "");
-    } else {
-      content.textContent = answer;
-    }
+    content.textContent = answer;
+    _renderProcessSummaryDrawer(targetBubble, rows);
     const stream = targetBubble.querySelector(".process-stream");
     if (stream && stream.parentNode) {
       stream.parentNode.removeChild(stream);
@@ -871,49 +1089,39 @@
     }
 
     setSendingState(true);
-    setChatStage("retrieve", "发送前自检");
-    return runPreflight(libraryId)
-      .then(function (preflightPayload) {
-        const preflight = preflightPayload && typeof preflightPayload === "object" ? preflightPayload : {};
-        const severity = String(preflight.severity || (preflight.ok ? "ok" : "error")).trim().toLowerCase();
-        if (severity === "error" || preflight.ok === false && !String(preflight.severity || "").trim()) {
-          showPreflightModal(preflight);
-          setChatStage("failed", String(preflight.summary || "preflight_failed"));
-          setSendingState(false);
-          return Promise.resolve();
-        }
-        if (severity === "warn") {
-          showPreflightModal(preflight);
-          setChatStage("retrieve", "自检告警，继续执行");
-        }
-        setChatStage("rewrite", "");
-        Array.from(els.feed.querySelectorAll("[data-testid='message-assistant'][data-stream-status='completed'], [data-testid='message-assistant'][data-stream-status='failed']")).forEach(function (node) {
-          node.setAttribute("data-stream-status", "history");
-        });
-        addMessage("user", text, "");
-        els.prompt.value = "";
+    Array.from(els.feed.querySelectorAll("[data-testid='message-assistant'][data-stream-status='completed'], [data-testid='message-assistant'][data-stream-status='failed']")).forEach(function (node) {
+      node.setAttribute("data-stream-status", "history");
+    });
+    addMessage("user", text, "");
+    els.prompt.value = "";
 
-        return jfetch("/chat/sessions/" + encodeURIComponent(currentSessionId) + "/messages", {
-          method: "POST",
-          body: JSON.stringify({
-            content: text,
-            mode: "agent",
-            stream: true,
-            library_id: libraryId
+    return jfetch("/chat/sessions/" + encodeURIComponent(currentSessionId) + "/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        content: text,
+        mode: "agent",
+        stream: true,
+        library_id: libraryId
+      })
+    })
+      .then(function (payload) {
+        attachStream(payload.stream_url, payload.assistant_message_id || "");
+        runPreflight(libraryId)
+          .then(function (preflightPayload) {
+            const preflight = preflightPayload && typeof preflightPayload === "object" ? preflightPayload : {};
+            const severity = String(preflight.severity || (preflight.ok ? "ok" : "error")).trim().toLowerCase();
+            if (severity === "warn" || severity === "error" || preflight.ok === false) {
+              showPreflightModal(preflight);
+            }
           })
-        })
-          .then(function (payload) {
-            attachStream(payload.stream_url, payload.assistant_message_id || "");
-          });
+          .catch(function () {});
       })
       .catch(function (err) {
         const payload = err && err.payload && typeof err.payload === "object" ? err.payload : null;
         if (payload) {
           showPreflightModal(payload);
-          setChatStage("failed", String(payload.summary || "preflight_failed"));
         } else {
           addMessage("assistant", LABELS.failed + ": " + (err && err.message ? err.message : LABELS.unknownError));
-          setChatStage("failed", err && err.message ? err.message : LABELS.unknownError);
         }
         setSendingState(false);
       });
@@ -1073,7 +1281,9 @@
   });
 
   els.librarySelect.onchange = function () {
-    saveSelectedLibraryId(getSelectedLibraryId());
+    const selected = getSelectedLibraryId();
+    saveSelectedLibraryId(selected);
+    bootstrapLibrarySkills(selected).catch(function () {});
     currentSessionId = "";
     els.feed.innerHTML = "";
     refreshSessions()
@@ -1087,8 +1297,10 @@
       .catch(function () {});
   };
 
-  setChatStage("ready", "");
   loadLibraries()
+    .then(function () {
+      return bootstrapLibrarySkills(getSelectedLibraryId());
+    })
     .then(function () {
       return refreshSessions();
     })
@@ -1101,6 +1313,5 @@
     })
     .catch(function () {
       addMessage("assistant", "无法初始化聊天会话，请检查后端服务。", "");
-      setChatStage("failed", "初始化失败");
     });
 })();

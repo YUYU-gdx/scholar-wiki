@@ -438,6 +438,7 @@ class ChatApiEndpointsTest(unittest.TestCase):
         self.assertIn("KN Graph AI 问答", html)
         self.assertIn("data-testid=\"new-session-btn\"", html)
         self.assertIn("data-testid=\"message-input\"", html)
+        self.assertNotIn("流式输出已开启", html)
 
 
 class ChatApiLoaderIntegrationTest(unittest.TestCase):

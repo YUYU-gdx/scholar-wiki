@@ -93,6 +93,16 @@ def _normalize_legacy_config(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _normalize_sandbox_mode(raw: str) -> str:
+    text = str(raw or "").strip().lower()
+    allowed = {"read-only", "workspace-write", "danger-full-access"}
+    if text in {"workspacewrite", "workspace_write"}:
+        return "workspace-write"
+    if text not in allowed:
+        return "workspace-write"
+    return text
+
+
 def load_codex_config(config_path: Path) -> CodexRunnerConfig:
     fallback = default_codex_config()
     merged = dict(fallback)
@@ -119,7 +129,7 @@ def load_codex_config(config_path: Path) -> CodexRunnerConfig:
         extra_env={str(k): str(v) for k, v in (extra_env_raw.items() if isinstance(extra_env_raw, dict) else [])},
         model=model_name,
         approval_policy=str(merged.get("approval_policy", fallback["approval_policy"]) or fallback["approval_policy"]).strip(),
-        sandbox_mode=str(merged.get("sandbox_mode", fallback["sandbox_mode"]) or fallback["sandbox_mode"]).strip(),
+        sandbox_mode=_normalize_sandbox_mode(merged.get("sandbox_mode", fallback["sandbox_mode"])),
         personality=str(merged.get("personality", fallback["personality"]) or fallback["personality"]).strip(),
         mcp_servers=mcp_servers,
     )

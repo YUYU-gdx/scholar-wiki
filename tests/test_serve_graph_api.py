@@ -375,6 +375,21 @@ class ServeGraphApiTest(unittest.TestCase):
         cfg2 = saved.get("config", {})
         self.assertEqual(cfg2.get("library_id"), "lib_a")
         self.assertTrue(isinstance(cfg2.get("project_skills"), list))
+
+    def test_library_codex_skills_bootstrap_endpoint_is_idempotent(self) -> None:
+        (self._test_library_index_root / "lib_a.json").write_text(
+            json.dumps({"library_id": "lib_a", "paper_count": 1, "paper_ids": ["p1"]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        first = self._post_json("/chat/codex/libraries/lib_a/skills/bootstrap", {})
+        self.assertTrue(bool(first.get("ok")))
+        loaded = first.get("loaded_skills", [])
+        self.assertTrue(isinstance(loaded, list))
+        self.assertGreaterEqual(len(loaded), 1)
+        self.assertIn(".codex_project_skills", str(loaded[0].get("path", "")))
+        second = self._post_json("/chat/codex/libraries/lib_a/skills/bootstrap", {})
+        self.assertTrue(bool(second.get("ok")))
+        self.assertEqual(len(second.get("loaded_skills", [])), len(loaded))
     def test_codex_preflight_endpoint_returns_structured_checks(self) -> None:
         (self._test_library_index_root / "lib_a.json").write_text(
             json.dumps({"library_id": "lib_a", "paper_count": 1, "paper_ids": ["p1"]}, ensure_ascii=False),
@@ -400,6 +415,10 @@ class ServeGraphApiTest(unittest.TestCase):
         with urlopen(f"http://127.0.0.1:{self.port}/frontend/workbench/") as resp:
             html = resp.read().decode("utf-8", errors="ignore")
         self.assertIn("workbench-marker", html)
+        script = (Path(__file__).resolve().parent.parent / "frontend" / "workbench_spa" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn(" | layouts: ", script)
 
     def test_relation_summary_uses_readable_chinese_label_for_moderation(self) -> None:
         payload = relation_summary_from_mention(

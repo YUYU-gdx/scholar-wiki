@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import html
+import hashlib
 import importlib.util
 import json
 import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -25,6 +27,16 @@ def _load_zhipu_client_class():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.ZhipuChatCompletionsClient
+
+
+def _load_library_registry_module():
+    module_path = Path(__file__).resolve().parent.parent / "library_registry.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_library_registry_for_literature", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 _SENTENCE_END_RE = re.compile(r"[^。！？!?\.]+[。！？!?\.]?")
@@ -68,6 +80,57 @@ def _split_sentences(paragraph: str) -> list[str]:
         if sentence:
             out.append(sentence)
     return out
+
+
+def _safe_segment(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    out: list[str] = []
+    for ch in text.lower():
+        if ch.isalnum() or ch in {"_", "-", "."}:
+            out.append(ch)
+        else:
+            out.append("_")
+    cleaned = "".join(out).strip("._-")
+    return re.sub(r"_+", "_", cleaned)
+
+
+def _normalize_doi_for_key(doi: str) -> str:
+    text = str(doi or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"^https?://(dx\.)?doi\.org/", "", text)
+    text = re.sub(r"^doi:\s*", "", text)
+    return _safe_segment(text)
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _extract_first_md_h1(md_text: str) -> str:
+    for line in str(md_text or "").splitlines():
+        text = line.strip()
+        if text.startswith("# "):
+            return text[2:].strip()
+    return ""
+
+
+def _safe_windows_filename(raw: str, fallback: str = "document") -> str:
+    text = str(raw or "").strip()
+    text = re.sub(r"[<>:\"/\\|?*]+", "_", text)
+    text = re.sub(r"\s+", " ", text).strip().strip(". ")
+    if not text:
+        text = fallback
+    return text[:180]
 
 
 def segment_html(paper_id: str, html: str, doi: str = "", title: str = "") -> dict[str, Any]:
@@ -475,6 +538,7 @@ class LiteratureService:
         self._sentence_by_id: dict[str, dict[str, Any]] = {}
         self._paragraph_by_id: dict[str, dict[str, Any]] = {}
         self._document_by_id: dict[str, dict[str, Any]] = {}
+        self._workspace_root_cache: dict[str, Path] = {}
 
     def _default_library_id(self) -> str:
         return (os.getenv("LITERATURE_DEFAULT_LIBRARY_ID", "") or "").strip()
@@ -519,6 +583,223 @@ class LiteratureService:
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _resolve_workspace_root(self, library_id: str) -> Path | None:
+        lib = str(library_id or "").strip()
+        if not lib:
+            return None
+        cached = self._workspace_root_cache.get(lib)
+        if cached is not None:
+            return cached
+        try:
+            lr_mod = _load_library_registry_module()
+            registry = lr_mod.ensure_registry()
+            root = str(lr_mod.resolve_workspace_root(registry, lib) or "").strip()
+        except Exception:
+            root = ""
+        if not root:
+            return None
+        path = Path(root).resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        self._workspace_root_cache[lib] = path
+        return path
+
+    def _paper_key_for_row(self, row: dict[str, Any], source_path: Path | None, html_text: str) -> str:
+        doi_norm = _normalize_doi_for_key(str(row.get("doi", "") or ""))
+        if doi_norm:
+            return f"doi_{doi_norm}"
+        if source_path is not None and source_path.exists() and source_path.is_file():
+            digest = _sha256_file(source_path)
+        else:
+            digest = hashlib.sha256(str(html_text or "").encode("utf-8", errors="ignore")).hexdigest()
+        return f"hash_{digest[:16]}"
+
+    @staticmethod
+    def _write_json(path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _update_workspace_paper_index(self, workspace_root: Path, row: dict[str, Any]) -> None:
+        index_path = workspace_root / "corpus" / "index" / "papers.ndjson"
+        existing: dict[str, dict[str, Any]] = {}
+        if index_path.exists():
+            for line in index_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    obj = json.loads(text)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                key = str(obj.get("paper_key", "") or "").strip()
+                if key:
+                    existing[key] = obj
+        key = str(row.get("paper_key", "") or "").strip()
+        if key:
+            existing[key] = dict(row)
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        with index_path.open("w", encoding="utf-8", newline="\n") as f:
+            for paper_key in sorted(existing.keys()):
+                f.write(json.dumps(existing[paper_key], ensure_ascii=False) + "\n")
+
+    def _run_mineru_to_dir(self, source_pdf: Path, out_dir: Path) -> dict[str, Any]:
+        if out_dir.exists():
+            shutil.rmtree(out_dir, ignore_errors=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        cmd_tpl = os.getenv("MINERU_CMD", "mineru -i {input} -o {output}").strip()
+        cmd = [
+            part.replace("{input}", str(source_pdf)).replace("{output}", str(out_dir))
+            for part in cmd_tpl.split()
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            raise RuntimeError(f"mineru failed: {proc.stderr.strip() or proc.stdout.strip()}")
+        html_files = list(out_dir.rglob("*.html"))
+        md_files = list(out_dir.rglob("*.md"))
+        source_kind = ""
+        html_text = ""
+        main_md_path = ""
+        md_title = ""
+        if html_files:
+            source_kind = "html"
+            html_text = html_files[0].read_text(encoding="utf-8", errors="ignore")
+        if md_files:
+            source_kind = "md"
+            content = md_files[0].read_text(encoding="utf-8", errors="ignore")
+            md_title = _extract_first_md_h1(content)
+            md_name = _safe_windows_filename(md_title, fallback=md_files[0].stem) + ".md"
+            canonical_md = out_dir / md_name
+            if md_files[0].resolve() != canonical_md.resolve():
+                shutil.copy2(str(md_files[0]), str(canonical_md))
+            main_md_path = str(canonical_md.resolve())
+            if not html_text:
+                html_text = f"<html><body><pre>{html.escape(content)}</pre></body></html>"
+        if not html_files and not md_files:
+            raise RuntimeError("mineru produced no html/md output")
+        return {
+            "html_text": html_text,
+            "source_kind": source_kind,
+            "html_files": [str(x.resolve()) for x in html_files],
+            "md_files": [str(x.resolve()) for x in md_files],
+            "main_md_path": main_md_path,
+            "md_title": md_title,
+            "command": cmd,
+        }
+
+    def _materialize_workspace_assets(
+        self,
+        library_id: str,
+        row: dict[str, Any],
+        source_path: Path | None,
+        html_inline: str,
+    ) -> dict[str, Any]:
+        workspace_root = self._resolve_workspace_root(library_id)
+        if workspace_root is None:
+            return {"html_text": html_inline or self._normalize_to_html(source_path), "source_html": str(source_path or ""), "materialized": None}
+
+        html_seed = str(html_inline or "")
+        paper_key = self._paper_key_for_row(row=row, source_path=source_path, html_text=html_seed)
+        paper_root = workspace_root / "corpus" / "papers" / paper_key
+        source_dir = paper_root / "source"
+        html_dir = paper_root / "derived" / "html"
+        mineru_latest_dir = paper_root / "derived" / "mineru" / "latest"
+        meta_path = paper_root / "meta" / "paper.json"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        html_dir.mkdir(parents=True, exist_ok=True)
+        (paper_root / "meta").mkdir(parents=True, exist_ok=True)
+
+        source_pdf_path = ""
+        mineru_main_md_path = ""
+        parser_name = ""
+        parser_version = ""
+        parser_run_at = ""
+        html_text = ""
+
+        ext = source_path.suffix.lower() if isinstance(source_path, Path) else ""
+        if isinstance(source_path, Path) and source_path.exists() and source_path.is_file() and ext == ".pdf":
+            source_pdf = source_dir / _safe_windows_filename(source_path.name, fallback="original.pdf")
+            shutil.copy2(str(source_path), str(source_pdf))
+            source_pdf_path = str(source_pdf.resolve())
+            parser_name = "mineru"
+            parser_version = str(os.getenv("MINERU_VERSION", "") or "").strip() or "unknown"
+            parser_run_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            mineru = self._run_mineru_to_dir(source_pdf, mineru_latest_dir)
+            html_text = str(mineru.get("html_text", "") or "")
+            mineru_main_md_path = str(mineru.get("main_md_path", "") or "")
+        elif html_seed:
+            html_text = html_seed
+            if mineru_latest_dir.exists():
+                shutil.rmtree(mineru_latest_dir, ignore_errors=True)
+        else:
+            html_text = self._normalize_to_html(source_path)
+            if mineru_latest_dir.exists():
+                shutil.rmtree(mineru_latest_dir, ignore_errors=True)
+
+        article_html_path = html_dir / "article.html"
+        article_html_path.write_text(html_text, encoding="utf-8")
+
+        source_hash = ""
+        source_size = 0
+        if isinstance(source_path, Path) and source_path.exists() and source_path.is_file():
+            source_hash = _sha256_file(source_path)
+            try:
+                source_size = int(source_path.stat().st_size)
+            except Exception:
+                source_size = 0
+        else:
+            source_hash = hashlib.sha256(html_text.encode("utf-8", errors="ignore")).hexdigest()
+
+        metadata_payload = {
+            "paper_key": paper_key,
+            "library_id": str(library_id or "").strip(),
+            "paper_id": str(row.get("paper_id", "") or "").strip(),
+            "doi": str(row.get("doi", "") or "").strip(),
+            "title": str(row.get("title", "") or "").strip(),
+            "import_source_path": str(source_path.resolve()) if isinstance(source_path, Path) and source_path.exists() else "",
+            "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "source_pdf_path": source_pdf_path,
+            "html_path": str(article_html_path.resolve()),
+            "mineru_output_path": str(mineru_latest_dir.resolve()) if mineru_latest_dir.exists() else "",
+            "mineru_main_md_path": mineru_main_md_path,
+            "content_hash": source_hash,
+            "file_size": source_size,
+            "parser": {
+                "name": parser_name,
+                "version": parser_version,
+                "run_at": parser_run_at,
+            },
+        }
+        self._write_json(meta_path, metadata_payload)
+        self._update_workspace_paper_index(
+            workspace_root,
+            {
+                "paper_key": paper_key,
+                "library_id": str(library_id or "").strip(),
+                "paper_id": str(row.get("paper_id", "") or "").strip(),
+                "doi": str(row.get("doi", "") or "").strip(),
+                "title": str(row.get("title", "") or "").strip(),
+                "source_pdf_path": source_pdf_path,
+                "html_path": str(article_html_path.resolve()),
+                "mineru_output_path": str(mineru_latest_dir.resolve()) if mineru_latest_dir.exists() else "",
+                "mineru_main_md_path": mineru_main_md_path,
+                "updated_at": metadata_payload["imported_at"],
+            },
+        )
+        return {
+            "html_text": html_text,
+            "source_html": str(article_html_path.resolve()),
+            "workspace_path": str(workspace_root.resolve()),
+            "materialized": {
+                "paper_key": paper_key,
+                "source_pdf_path": source_pdf_path,
+                "html_path": str(article_html_path.resolve()),
+                "mineru_output_path": str(mineru_latest_dir.resolve()) if mineru_latest_dir.exists() else "",
+                "mineru_main_md_path": mineru_main_md_path,
+                "meta_path": str(meta_path.resolve()),
+            },
+        }
 
     @staticmethod
     def _filter_rows_by_paper_ids(rows: list[dict[str, Any]], allowed_paper_ids: set[str]) -> list[dict[str, Any]]:
@@ -574,13 +855,21 @@ class LiteratureService:
         para_count = 0
         doc_count = 0
         imported_paper_ids: list[str] = []
+        materialized_rows: list[dict[str, Any]] = []
+        workspace_path = ""
         for row in rows:
             result = self._import_row(row, library_id=library_id)
             imported += 1
-            imported_paper_ids.append(str(row.get("paper_id") or row.get("doi") or "").strip())
+            imported_paper_ids.append(str(result.get("paper_id", "") or row.get("paper_id") or row.get("doi") or "").strip())
             sent_count += int(result["sentence_count"])
             para_count += int(result["paragraph_count"])
             doc_count += int(result["document_count"])
+            ws = str(result.get("workspace_path", "") or "").strip()
+            if ws and not workspace_path:
+                workspace_path = ws
+            mat = result.get("materialized")
+            if isinstance(mat, dict) and mat:
+                materialized_rows.append(mat)
         self._update_library_index(library_id, imported_paper_ids)
         return {
             "manifest_path": str(path),
@@ -589,15 +878,20 @@ class LiteratureService:
             "sentence_count": sent_count,
             "paragraph_count": para_count,
             "document_count": doc_count,
+            "workspace_path": workspace_path,
+            "materialized_papers": materialized_rows,
         }
 
-    def _import_row(self, row: dict[str, Any], library_id: str = "") -> dict[str, int]:
+    def _import_row(self, row: dict[str, Any], library_id: str = "") -> dict[str, Any]:
         library_id = str(library_id or row.get("library_id", "") or self._default_library_id()).strip()
         paper_id = str(row.get("paper_id") or row.get("doi") or uuid.uuid4().hex).strip()
         doi = str(row.get("doi", "") or "").strip()
         title = str(row.get("title", "") or "").strip()
         source_path = self._resolve_source_path(row)
         html_text = str(row.get("html", "") or "").strip()
+        materialized = self._materialize_workspace_assets(library_id=library_id, row=row, source_path=source_path, html_inline=html_text)
+        html_text = str(materialized.get("html_text", "") or html_text)
+        source_html = str(materialized.get("source_html", "") or (str(source_path) if source_path else ""))
         if not html_text:
             html_text = self._normalize_to_html(source_path)
 
@@ -605,12 +899,15 @@ class LiteratureService:
         sentences = segmented["sentences"]
         paragraphs = segmented["paragraphs"]
         paper = dict(segmented["paper"])
-        paper["source_html"] = str(source_path) if source_path else ""
+        paper["source_html"] = source_html
         paper["metadata"] = {
             k: v
             for k, v in row.items()
             if k not in {"html"}
         }
+        mat_payload = materialized.get("materialized") if isinstance(materialized, dict) else None
+        if isinstance(mat_payload, dict) and mat_payload:
+            paper["metadata"]["paper_key"] = str(mat_payload.get("paper_key", "") or "")
 
         sentence_vectors = self.embedding.embed_texts([str(s.get("text", "")) for s in sentences])
         paragraph_vectors = self.embedding.embed_texts([str(p.get("text", "")) for p in paragraphs])
@@ -648,7 +945,14 @@ class LiteratureService:
             },
             document_vectors[0],
         )
-        return {"sentence_count": len(sentences), "paragraph_count": len(paragraphs), "document_count": 1}
+        return {
+            "paper_id": paper_id,
+            "sentence_count": len(sentences),
+            "paragraph_count": len(paragraphs),
+            "document_count": 1,
+            "workspace_path": str(materialized.get("workspace_path", "") or ""),
+            "materialized": mat_payload if isinstance(mat_payload, dict) else {},
+        }
 
     def _resolve_source_path(self, row: dict[str, Any]) -> Path | None:
         for key in ("source_path", "offline_html_path", "raw_html_path", "html_path", "full_html_path", "file_path"):
@@ -788,6 +1092,7 @@ class LiteratureService:
                 "paragraph_id": paragraph_id,
                 "paper_id": paper_id,
                 "text": str(props.get("text", "") or ""),
+                "source_html": str(props.get("source_html", "") or ""),
             }
         if not paragraph and paragraph_id:
             paragraph = {
@@ -795,6 +1100,7 @@ class LiteratureService:
                 "paragraph_id": paragraph_id,
                 "paper_id": paper_id,
                 "text": str(props.get("text", "") or ""),
+                "source_html": str(props.get("source_html", "") or ""),
             }
         if not document and paper_id:
             document = {
@@ -803,6 +1109,7 @@ class LiteratureService:
                 "doi": str(props.get("doi", "") or ""),
                 "title": str(props.get("title", "") or ""),
                 "full_text": str(props.get("full_text", "") or ""),
+                "source_html": str(props.get("source_html", "") or ""),
             }
         return {"sentence": sentence, "paragraph": paragraph, "document": document}
 

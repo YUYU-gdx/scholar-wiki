@@ -35,15 +35,26 @@ def legacy_index_root_from_env() -> Path:
     return Path(raw)
 
 
+def _default_workspace_root_base() -> Path:
+    if os.name == "nt":
+        preferred = Path(r"D:\KNGraphApp")
+        return preferred / "libraries" / "workspaces"
+    return Path.home() / ".kn_graph" / "libraries" / "workspaces"
+
+
 def workspace_root_base_from_env() -> Path:
     raw = os.getenv("LITERATURE_LIBRARY_WORKSPACES_ROOT", "").strip()
     if raw:
         return Path(raw)
-    return (Path.home() / ".kn_graph" / "libraries" / "workspaces")
+    return _default_workspace_root_base()
 
 
 def _legacy_workspace_root_default() -> Path:
     return (Path(__file__).resolve().parents[2] / "outputs" / "libraries" / "workspaces").resolve()
+
+
+def _home_workspace_root_default() -> Path:
+    return (Path.home() / ".kn_graph" / "libraries" / "workspaces").resolve()
 
 
 def load_registry(path: Path) -> dict[str, Any]:
@@ -91,6 +102,7 @@ def ensure_registry(registry_path: Path | None = None, legacy_index_root: Path |
     workspace_base.mkdir(parents=True, exist_ok=True)
     migrate_legacy_workspace = not str(os.getenv("LITERATURE_LIBRARY_WORKSPACES_ROOT", "") or "").strip()
     legacy_workspace_root = _legacy_workspace_root_default()
+    home_workspace_root = _home_workspace_root_default()
 
     existing = load_registry(reg_path) if reg_path.exists() else {"version": 1, "updated_at": "", "default_library_id": "", "libraries": []}
     by_id = {str(item.get("library_id", "")): dict(item) for item in existing.get("libraries", []) if isinstance(item, dict)}
@@ -139,7 +151,12 @@ def ensure_registry(registry_path: Path | None = None, legacy_index_root: Path |
             if migrate_legacy_workspace:
                 try:
                     root_path = Path(root).resolve()
-                    in_legacy = root_path == legacy_workspace_root or legacy_workspace_root in root_path.parents
+                    in_legacy = (
+                        root_path == legacy_workspace_root
+                        or legacy_workspace_root in root_path.parents
+                        or root_path == home_workspace_root
+                        or home_workspace_root in root_path.parents
+                    )
                     if in_legacy:
                         new_root = (workspace_base / str(lib_id)).resolve()
                         if root_path != new_root:

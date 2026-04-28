@@ -25,14 +25,14 @@
       <main class="main">
         <header class="toolbar">
           <div class="toolbar-group">
-            <div class="field">
+            <div class="field library-field">
               <label>文献库</label>
-              <select id="library-select" data-testid="library-select"></select>
+              <div class="library-select-shell">
+                <select id="library-select" data-testid="library-select"></select>
+              </div>
             </div>
           </div>
-          <div id="stream-hint" class="stream-hint">流式输出已开启</div>
         </header>
-        <div id="chat-status-strip" class="status-strip" data-testid="chat-status-strip">就绪</div>
 
         <section id="chat-feed" class="chat-feed" data-testid="message-container"></section>
 
@@ -116,7 +116,7 @@
     <div id="preflight-modal" class="modal hidden" data-testid="preflight-modal">
       <div class="modal-card preflight-card">
         <header class="modal-header">
-          <h3>发送前自检未通过</h3>
+          <h3>发送后环境检查提示</h3>
           <button id="preflight-modal-close" class="ghost-btn" type="button">关闭</button>
         </header>
         <div class="modal-body">

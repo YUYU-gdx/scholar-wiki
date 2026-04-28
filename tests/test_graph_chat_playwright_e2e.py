@@ -108,10 +108,11 @@ class GraphChatPlaywrightE2ETest(unittest.TestCase):
         )
         self.page.locator("#citation-modal-close").click()
 
+        self.page.locator("[data-testid='message-process-summary']").last.wait_for()
         merged_text = self.page.locator(
             "[data-testid='message-assistant'][data-stream-status='completed'] .msg-content"
         ).last.inner_text()
-        self.assertIn("过程摘要", merged_text)
+        self.assertNotIn("过程摘要", merged_text)
 
     def test_chat_codex_workspace_missing_then_success(self) -> None:
         self._goto_chat()

@@ -116,15 +116,28 @@ def _handle_rag_search(base_url: str, arguments: dict[str, Any]) -> dict[str, An
             continue
         ctx = item.get("context") if isinstance(item.get("context"), dict) else {}
         paragraph = ctx.get("paragraph") if isinstance(ctx.get("paragraph"), dict) else {}
+        document = ctx.get("document") if isinstance(ctx.get("document"), dict) else {}
+        metadata = document.get("metadata") if isinstance(document.get("metadata"), dict) else {}
         text = str(paragraph.get("text", "") or item.get("text", "") or "").strip()
         if not text:
             continue
+        source_html = str(paragraph.get("source_html", "") or document.get("source_html", "") or "").strip()
+        paper_key = str(metadata.get("paper_key", "") or "").strip()
+        if (not paper_key) and source_html:
+            normalized = source_html.replace("\\", "/")
+            marker = "/corpus/papers/"
+            idx = normalized.lower().find(marker)
+            if idx >= 0:
+                rest = normalized[idx + len(marker) :]
+                paper_key = rest.split("/", 1)[0].strip()
         paragraph_hits.append(
             {
                 "id": str(item.get("id", "") or item.get("paper_id", "") or ""),
                 "title": str(item.get("title", "") or item.get("paper_id", "") or ""),
                 "text": text,
                 "paper_id": str(item.get("paper_id", "") or ""),
+                "paper_key": paper_key,
+                "html_path": source_html,
             }
         )
     return {
