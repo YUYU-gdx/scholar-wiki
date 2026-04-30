@@ -34,3 +34,7 @@ prompt_structure_probe.py
 docs/GitNexus/
 docs/mineru_api_docs/
 skills/
+
+# Frontend
+frontend_legacy/**/node_modules/
+frontend_legacy/**/dist/

@@ -6,207 +6,79 @@
 - Graph API 规约：`docs/api.md`
 - 异步端到端 Pipeline API：`docs/async_pipeline_api.md`
 - 数据模型规约：`docs/data_model.md`
-- Run 管理：`docs/run_management.md`
-- 抽取契约设计：`docs/superpowers/specs/2026-04-05-variable-alias-domain-extraction-design.md`
-- SMJ 抽取设计（历史版本）：`docs/superpowers/specs/2026-03-29-smj-extraction-design.md`
-- SMJ 抽取实施计划（历史版本）：`docs/superpowers/plans/2026-03-30-smj-extraction-mvp-plan.md`
+- 后端合并设计文档：`docs/superpowers/specs/2026-04-30-backend-unification-design.md`
+
+## 启动方式
+
+### 当前方式（重构前）
+
+```bash
+# 图谱 + Chat + 文献 API
+uv run python scripts/smj_pipeline/serve_graph_api.py --port 8013 --views-json outputs/.../graph_views.json --allow-non-supply-chain
+
+# 异步 Pipeline API
+uv run python scripts/smj_pipeline/serve_async_pipeline_api.py --host 127.0.0.1 --port 8021
+
+# 桌面启动器（自动启动以上服务 + 打开浏览器）
+uv run python scripts/smj_pipeline/app_launcher.py
+
+# MCP 工具服务器
+uv run python scripts/smj_pipeline/kn_mcp_server.py
+```
+
+### 目标方式（重构后）
+
+```bash
+# 统一 API 服务
+uv run python -m kn_graph serve --port 8013
+
+# Celery Worker（可选）
+uv run python -m kn_graph worker
+
+# MCP 工具服务器（不变）
+uv run python scripts/smj_pipeline/kn_mcp_server.py
+```
+
+## 测试
+
+```bash
+uv run python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+## 关键配置
+
+| 环境变量 | 用途 | 默认值 |
+|----------|------|--------|
+| `KN_GRAPH_PORT` | 主 API 端口 | `8013` |
+| `KN_ASYNC_PIPELINE_PORT` | Pipeline 端口 | `8021` |
+| `CHAT_STORE_DSN` | Chat 存储 DSN | 内存 |
+| `PIPELINE_JOB_STORE_DSN` | Pipeline 存储 DSN | SQLite |
+| `PIPELINE_EXECUTOR` | 执行器类型 | `inline` |
+| `PIPELINE_REDIS_URL` | Celery broker | `redis://127.0.0.1:6379/0` |
+| `ZHIPU_API_KEY` | 智谱 API 密钥 | — |
+| `NVIDIA_API_KEY` | NVIDIA API 密钥 | — |
+| `LLM_PROVIDER_CONFIG_PATH` | LLM 配置路径 | `config/llm_providers.json` |
+| `WEAVIATE_URL` | Weaviate 地址 | `http://127.0.0.1:8090` |
+
+## LLM Provider 配置
+
+- 配置文件：`config/llm_providers.json`
+- 代理注册表：`scripts/smj_pipeline/llm/provider_registry.py`
+- 覆盖配置：`set LLM_PROVIDER_CONFIG_PATH=path/to/config.json`
 
 ## 生产提示词来源
 
-- 当前生产抽取提示词文件：`prompt/extraction_system_prompt.md`
-- 真实接口通过 `scripts/smj_pipeline/extraction/prompts.py` 动态加载该文件。
-- `prompt/` 目录是全项目唯一提示词加载源；若需调整线上抽取行为，请修改该目录下模板。
+- 当前生产抽取提示词：`prompt/extraction_system_prompt.md`
+- 接口通过 `scripts/smj_pipeline/extraction/prompts.py` 动态加载
 
-## SMJ 图谱桌面启动器
+## 重构状态
 
-### 启动
+- **进行中**：后端合并为单 FastAPI 应用，详见设计文档
+- **已封存**：`frontend_legacy/` 不再修改
+- **禁止**：不要创建或修改 `frontend/` 目录
 
-```bash
-uv run python scripts/smj_pipeline/app_launcher.py
-```
-
-### 功能
-
-- 按钮 1：`导入文件并解析`
-  选择前端 artifact JSON，构建 `outputs/smj_batch_full/graph_views.json`。
-- 按钮 2：`导入 PostgreSQL`
-  输入 DSN，导出前端 artifact，再构建 graph views。
-- 按钮 3：`打开展示`
-  自动启动本地图谱服务并打开浏览器。
-
-## 从模型原始输出重建数据（推荐）
-
-当你已经有 `raw_llm_outputs*.jsonl`，推荐走这条链路：
-
-1. 导入 Postgres（唯一事实源）  
-2. 从 Postgres 导出前端 artifact  
-3. 构建 graph views 并启动服务
-
-```bash
-uv run python scripts/smj_pipeline/import_raw_outputs_to_postgres.py ^
-  --dsn postgresql://user:pass@127.0.0.1:5432/kn_graph ^
-  --raw-output-jsonl outputs/your_run/raw_llm_outputs.jsonl ^
-  --apply-schema
-```
-
-```bash
-uv run python scripts/smj_pipeline/export_frontend_artifact_from_postgres.py ^
-  --dsn postgresql://user:pass@127.0.0.1:5432/kn_graph ^
-  --output-json outputs/smj_batch_full/frontend_artifact_from_postgres.json
-```
-
-## 文献基线数据集与数据库全文核查（MVP）
-
-### 1) 全量审计（按目录扫描）
-
-```bash
-uv run python scripts/smj_pipeline/run_literature_dataset_tools.py dataset-audit ^
-  --input-root outputs ^
-  --output-json outputs/literature_base/dataset_audit_report.json
-```
-
-### 2) 构建 base dataset（去重 + 去乱码 + 去空文件）
-
-```bash
-uv run python scripts/smj_pipeline/run_literature_dataset_tools.py dataset-build-base ^
-  --input-root outputs ^
-  --output-dir outputs/literature_base ^
-  --garble-threshold 0.02 ^
-  --budget-cny 100
-```
-
-产物：
-- `outputs/literature_base/base_dataset.jsonl`
-- `outputs/literature_base/rejected_dataset.jsonl`
-- `outputs/literature_base/cost_estimate.md`
-
-### 3) MySQL / PostgreSQL 全文字段核查
-
-```bash
-uv run python scripts/smj_pipeline/run_literature_dataset_tools.py db-check-mysql ^
-  --user root ^
-  --password your_password ^
-  --output-json outputs/literature_base/db_fulltext_check_mysql.json
-```
-
-```bash
-uv run python scripts/smj_pipeline/run_literature_dataset_tools.py db-check-pg ^
-  --dsn postgresql://user:pass@127.0.0.1:5432/dbname ^
-  --output-json outputs/literature_base/db_fulltext_check_pg.json
-```
-
-```bash
-uv run python scripts/smj_pipeline/run_literature_dataset_tools.py db-check-summary ^
-  --mysql-json outputs/literature_base/db_fulltext_check_mysql.json ^
-  --pg-json outputs/literature_base/db_fulltext_check_pg.json ^
-  --output-md outputs/literature_base/db_fulltext_check_summary.md
-```
-
-## 供应链数据源锁定（当前默认）
+## 供应链数据源（当前默认）
 
 - 当前默认运行指针：`outputs/runs/active.json`
-- 已锁定数据源目录：`outputs/smj_supply_chain_batch/supply_chain_merged_20260414_113031`
-- 入口脚本默认拒绝非供应链目录输入；如确需覆盖，显式加 `--allow-non-supply-chain`。
-
-### 可视化
-
-- 启动即全量加载，带加载转圈与阶段提示文案。
-- 边使用清晰箭头（不再依赖小球流动）。
-- 边按三类效果着色：正向 / 负向 / 非线性。
-- 节点色、正向色、负向色、非线性色、背景色可由用户配置。
-
-## Chat 前端（Vite React）
-
-前端工程目录：`frontend/chat_spa`
-
-```bash
-cd frontend/chat_spa
-npm install
-npm run dev
-```
-
-后端启动（含 `/chat/*`）：
-
-```bash
-uv run python scripts/smj_pipeline/serve_graph_api.py --port 8013
-```
-
-## 桌面应用（Electron）
-
-独立桌面应用工程目录：`frontend/desktop_shell`
-
-```bash
-cd frontend/desktop_shell
-npm install
-npm run start
-```
-
-说明：
-- Electron 主进程会自动启动后端：`uv run python scripts/smj_pipeline/serve_graph_api.py --port 8013`
-- 桌面窗口默认加载：`/frontend/workbench/`
-- 若需改端口：设置环境变量 `KN_GRAPH_PORT` 后再启动桌面应用
-
-## LLM Provider 配置化（新增）
-
-- 统一配置文件：`config/llm_providers.json`
-- Chat、异步 Pipeline、抽取 MVP 都走同一套 provider 注册表：`scripts/smj_pipeline/llm/provider_registry.py`
-- 新增或替换模型厂商时，优先改配置，不改业务代码。
-
-### 配置文件字段
-
-- `default_provider`：默认 provider id（可写 alias）
-- `providers[].id`：provider 主标识
-- `providers[].aliases`：别名（例如 `glm -> zhipu`）
-- `providers[].type`：`zhipu` / `nvidia` / `openai_compatible`
-- `providers[].api_key_env`：API Key 环境变量名
-- `providers[].default_model`：默认模型
-- `providers[].base_url`：接口地址
-
-### 覆盖配置路径
-
-```bash
-set LLM_PROVIDER_CONFIG_PATH=D:\Code\kn_gragh\config\llm_providers.json
-```
-
-## SMJ 抽取 MVP 运行器
-
-运行器支持本地 JSONL 输入，单行记录可包含：
-- 内联 `html`
-- 或路径字段：`offline_html_path` / `raw_html_path` / `html_path` / `full_html_path`
-
-### 使用智谱模型运行
-
-```bash
-set ZHIPU_API_KEY=your_key_here
-uv run python scripts/smj_pipeline/run_extraction_mvp.py --input-manifest path/to/manifest.jsonl --sample-size 100 --llm-provider zhipu --llm-model glm-4.5-flash
-```
-
-### 使用 NVIDIA 接口运行（GLM 4.7）
-
-```bash
-set NVIDIA_API_KEY=your_nvapi_key_here
-uv run python scripts/smj_pipeline/run_extraction_mvp.py --input-manifest path/to/manifest.jsonl --sample-size 100 --llm-provider nvidia --llm-model z-ai/glm4.7 --llm-api-key-env NVIDIA_API_KEY --llm-base-url https://integrate.api.nvidia.com/v1/chat/completions
-```
-
-### 可选输出
-
-```bash
-uv run python scripts/smj_pipeline/run_extraction_mvp.py ^
-  --input-manifest path/to/manifest.jsonl ^
-  --sample-size 100 ^
-  --review-queue-jsonl outputs/smj_extraction_mvp/review_queue.jsonl ^
-  --report-output outputs/smj_extraction_mvp/acceptance_report.md
-```
-
-### 行为说明
-
-- 仅处理 Class A 文档。
-- Class B 文档（仅摘要 + 参考文献）会被跳过。
-- Class B 不计入 Class A 分母。
-- 管线顺序：分类 -> 定位 -> 抽取 -> 校验 -> （可选）入库。
-
-## 新版解析模型
-当前生产链路统一使用 casepack 对齐字段：`extractability_status`、`main_effects`、`interactions`、`context_variables`、`operationalization`。  
-数据库物理层仍保留 `direct_effects` 等历史表名用于兼容，但逻辑模型以 `main_effects` 为准。
-详细字段见 docs/data_model.md。
-
+- 供应链目录：`outputs/smj_supply_chain_batch/`
+- 入口脚本默认拒绝非供应链目录，可用 `--allow-non-supply-chain` 覆盖

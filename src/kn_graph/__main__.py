@@ -1,0 +1,43 @@
+import argparse
+import sys
+
+
+def main():
+    parser = argparse.ArgumentParser(description="KN Graph")
+    sub = parser.add_subparsers(dest="command")
+
+    serve_parser = sub.add_parser("serve", help="Start the API server")
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8013)
+    serve_parser.add_argument("--views-json", type=str, default=None)
+    serve_parser.add_argument("--allow-non-supply-chain", action="store_true")
+
+    sub.add_parser("worker", help="Start the Celery worker")
+
+    args = parser.parse_args()
+
+    if args.command == "serve":
+        import uvicorn
+        from kn_graph.config import Settings
+
+        settings = Settings(
+            host=args.host,
+            port=args.port,
+            views_json=args.views_json,
+            allow_non_supply_chain=args.allow_non_supply_chain,
+        )
+        from kn_graph.app import create_app
+        app = create_app(settings)
+        uvicorn.run(app, host=settings.host, port=settings.port)
+
+    elif args.command == "worker":
+        from kn_graph.workers.celery_app import celery_app
+        celery_app.worker_main(sys.argv[2:])
+
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
