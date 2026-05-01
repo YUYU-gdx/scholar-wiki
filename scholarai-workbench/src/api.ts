@@ -65,6 +65,10 @@ export const api = {
       const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
       return jsonFetch<VariableDetail>(`/variable/${encodeURIComponent(id)}${params}`);
     },
+    paperFiles(id: string, libraryId: string = ''): Promise<import('./types').PaperFiles> {
+      const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
+      return jsonFetch<import('./types').PaperFiles>(`/paper/${encodeURIComponent(id)}/files${params}`);
+    },
   },
 
   chat: {
