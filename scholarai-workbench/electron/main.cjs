@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
+ï»¿const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
 const { spawn, execFile } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -158,7 +158,7 @@ async function startBackendServer() {
     }
   }
 
-  // No backend found ¡ª start one
+  // No backend found â€” start one
   runtimePort = await pickRuntimePort(BASE_PORT);
   backendStartedByUs = true;
   const repoRoot = getRepoRoot();
@@ -307,6 +307,17 @@ ipcMain.handle("restart-backend", async () => {
   await startBackendServer();
   await waitForBackendReady();
   return runtimePort;
+});
+ipcMain.handle("open-local-path", async (_evt, targetPath) => {
+  const p = String(targetPath || "").trim();
+  if (!p) return { ok: false, error: "empty_path" };
+  try {
+    const err = await shell.openPath(p);
+    if (err) return { ok: false, error: err };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
 });
 
 app.on("before-quit", () => {

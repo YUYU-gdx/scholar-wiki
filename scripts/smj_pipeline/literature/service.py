@@ -137,6 +137,53 @@ def _extract_first_md_h1(md_text: str) -> str:
     return ""
 
 
+def _extract_md_headings(md_text: str) -> list[tuple[int, str, int]]:
+    headings: list[tuple[int, str, int]] = []
+    for idx, line in enumerate(str(md_text or "").splitlines()):
+        text = line.strip()
+        m = re.match(r"^(#{1,6})\s+(.+?)\s*$", text)
+        if not m:
+            continue
+        level = len(m.group(1))
+        title = m.group(2).strip()
+        if title:
+            headings.append((level, title, idx))
+    return headings
+
+
+def _is_abstract_heading(text: str) -> bool:
+    normalized = re.sub(r"[\s\-_]+", "", str(text or "").strip().lower())
+    return normalized in {"abstract", "summary", "摘要"}
+
+
+def _paper_id_from_md(md_text: str, fallback: str) -> str:
+    headings = _extract_md_headings(md_text)
+    h1s = [(title, line_no) for level, title, line_no in headings if level == 1]
+    if not h1s:
+        return _safe_segment(fallback) or uuid.uuid4().hex
+
+    chosen = h1s[0][0].strip()
+    if len(h1s) >= 2:
+        first_line = h1s[0][1]
+        second_title, second_line = h1s[1]
+        between = str(md_text or "").splitlines()[first_line + 1 : second_line]
+        only_blank_between = all(not str(x).strip() for x in between)
+        if only_blank_between:
+            first_h2_under_second = ""
+            for level, title, line_no in headings:
+                if line_no <= second_line:
+                    continue
+                if level == 1:
+                    break
+                if level == 2:
+                    first_h2_under_second = title
+                    break
+            if first_h2_under_second and not _is_abstract_heading(first_h2_under_second):
+                chosen = second_title.strip()
+
+    return _safe_segment(chosen) or _safe_segment(fallback) or uuid.uuid4().hex
+
+
 def _safe_windows_filename(raw: str, fallback: str = "document") -> str:
     text = str(raw or "").strip()
     text = re.sub(r"[<>:\"/\\|?*]+", "_", text)
@@ -724,6 +771,7 @@ class LiteratureService:
         (paper_root / "meta").mkdir(parents=True, exist_ok=True)
 
         source_pdf_path = ""
+        source_md_path = ""
         mineru_main_md_path = ""
         md_library_path = ""
         parser_name = ""
@@ -732,6 +780,7 @@ class LiteratureService:
         html_text = ""
 
         ext = source_path.suffix.lower() if isinstance(source_path, Path) else ""
+        title_candidate = str(row.get("title", "") or "").strip()
         if isinstance(source_path, Path) and source_path.exists() and source_path.is_file() and ext == ".pdf":
             source_pdf = source_dir / _safe_windows_filename(source_path.name, fallback="original.pdf")
             shutil.copy2(str(source_path), str(source_pdf))
@@ -748,6 +797,18 @@ class LiteratureService:
                 mineru_output_root=mineru_latest_dir,
                 mineru_main_md_path=mineru_main_md_path,
             )
+        elif isinstance(source_path, Path) and source_path.exists() and source_path.is_file() and ext == ".md":
+            md_raw = source_path.read_text(encoding="utf-8", errors="ignore")
+            md_h1 = _extract_first_md_h1(md_raw)
+            if md_h1:
+                title_candidate = md_h1
+            md_name = _safe_windows_filename(md_h1 or source_path.stem, fallback=source_path.stem) + ".md"
+            md_target = source_dir / md_name
+            shutil.copy2(str(source_path), str(md_target))
+            source_md_path = str(md_target.resolve())
+            html_text = f"<html><body><pre>{html.escape(md_raw)}</pre></body></html>"
+            if mineru_latest_dir.exists():
+                shutil.rmtree(mineru_latest_dir, ignore_errors=True)
         elif html_seed:
             html_text = html_seed
             if mineru_latest_dir.exists():
@@ -757,7 +818,8 @@ class LiteratureService:
             if mineru_latest_dir.exists():
                 shutil.rmtree(mineru_latest_dir, ignore_errors=True)
 
-        article_html_path = html_dir / "article.html"
+        html_basename = _safe_windows_filename(title_candidate or str(row.get("paper_id", "") or "article"), fallback="article")
+        article_html_path = html_dir / f"{html_basename}.html"
         article_html_path.write_text(html_text, encoding="utf-8")
 
         source_hash = ""
@@ -776,10 +838,11 @@ class LiteratureService:
             "library_id": str(library_id or "").strip(),
             "paper_id": str(row.get("paper_id", "") or "").strip(),
             "doi": str(row.get("doi", "") or "").strip(),
-            "title": str(row.get("title", "") or "").strip(),
+            "title": title_candidate or str(row.get("title", "") or "").strip(),
             "import_source_path": str(source_path.resolve()) if isinstance(source_path, Path) and source_path.exists() else "",
             "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "source_pdf_path": source_pdf_path,
+            "source_md_path": source_md_path,
             "html_path": str(article_html_path.resolve()),
             "mineru_output_path": str(mineru_latest_dir.resolve()) if mineru_latest_dir.exists() else "",
             "mineru_main_md_path": mineru_main_md_path,
@@ -800,8 +863,9 @@ class LiteratureService:
                 "library_id": str(library_id or "").strip(),
                 "paper_id": str(row.get("paper_id", "") or "").strip(),
                 "doi": str(row.get("doi", "") or "").strip(),
-                "title": str(row.get("title", "") or "").strip(),
+                "title": title_candidate or str(row.get("title", "") or "").strip(),
                 "source_pdf_path": source_pdf_path,
+                "source_md_path": source_md_path,
                 "html_path": str(article_html_path.resolve()),
                 "mineru_output_path": str(mineru_latest_dir.resolve()) if mineru_latest_dir.exists() else "",
                 "mineru_main_md_path": mineru_main_md_path,
@@ -927,12 +991,34 @@ class LiteratureService:
 
     def _import_row(self, row: dict[str, Any], library_id: str = "") -> dict[str, Any]:
         library_id = str(library_id or row.get("library_id", "") or self._default_library_id()).strip()
-        paper_id = str(row.get("paper_id") or row.get("doi") or uuid.uuid4().hex).strip()
         doi = str(row.get("doi", "") or "").strip()
         title = str(row.get("title", "") or "").strip()
         source_path = self._resolve_source_path(row)
         html_text = str(row.get("html", "") or "").strip()
-        materialized = self._materialize_workspace_assets(library_id=library_id, row=row, source_path=source_path, html_inline=html_text)
+        md_text_for_id = ""
+        if isinstance(source_path, Path) and source_path.exists() and source_path.is_file() and source_path.suffix.lower() == ".md":
+            md_text_for_id = source_path.read_text(encoding="utf-8", errors="ignore")
+        elif html_text:
+            m = re.search(r"(?is)<pre[^>]*>(.*?)</pre>", html_text)
+            if m:
+                md_text_for_id = html.unescape(m.group(1))
+        if md_text_for_id.strip():
+            paper_id = _paper_id_from_md(md_text_for_id, fallback=doi or title or str(row.get("paper_id", "") or "paper"))
+        else:
+            paper_id = str(row.get("paper_id") or row.get("doi") or uuid.uuid4().hex).strip()
+        row_for_import = dict(row)
+        row_for_import["paper_id"] = paper_id
+        if not title and md_text_for_id.strip():
+            md_h1 = _extract_first_md_h1(md_text_for_id)
+            if md_h1:
+                title = md_h1
+                row_for_import["title"] = md_h1
+        materialized = self._materialize_workspace_assets(
+            library_id=library_id,
+            row=row_for_import,
+            source_path=source_path,
+            html_inline=html_text,
+        )
         html_text = str(materialized.get("html_text", "") or html_text)
         source_html = str(materialized.get("source_html", "") or (str(source_path) if source_path else ""))
         if not html_text:
@@ -945,7 +1031,7 @@ class LiteratureService:
         paper["source_html"] = source_html
         paper["metadata"] = {
             k: v
-            for k, v in row.items()
+            for k, v in row_for_import.items()
             if k not in {"html"}
         }
         mat_payload = materialized.get("materialized") if isinstance(materialized, dict) else None

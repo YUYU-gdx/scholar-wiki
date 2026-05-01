@@ -56,12 +56,27 @@
     }
   },
   "dependencies": {
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/search": "^6.7.0",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.41.1",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
+    "idb": "^8.0.3",
+    "katex": "^0.16.45",
     "lightningcss-win32-x64-msvc": "^1.32.0",
     "lucide-react": "^0.546.0",
+    "pdfjs-dist": "^4.10.38",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-force-graph-3d": "^1.29.1",
+    "react-markdown": "^9.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
@@ -75,4 +90,3 @@
     "vite": "^6.2.0"
   }
 }
-

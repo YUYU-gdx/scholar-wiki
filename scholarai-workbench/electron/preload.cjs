@@ -6,4 +6,5 @@ contextBridge.exposeInMainWorld("desktopShell", {
   getBackendPort: () => ipcRenderer.invoke("get-backend-port"),
   getBackendUrl: () => ipcRenderer.invoke("get-backend-url"),
   restartBackend: () => ipcRenderer.invoke("restart-backend"),
+  openLocalPath: (targetPath) => ipcRenderer.invoke("open-local-path", targetPath),
 });

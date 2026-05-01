@@ -1,8 +1,12 @@
 export interface GraphNode {
   id: string;
+  library_id?: string;
   label?: string;
   name?: string;
   type?: string;
+  x?: number;
+  y?: number;
+  z?: number;
   validated_variable?: boolean;
   relation_degree?: number;
   latest_concept?: string;
@@ -122,8 +126,15 @@ export interface SearchResponse {
 
 export interface PaperDetail {
   paper_id: string;
+  paper_id_raw?: string;
+  paper_key?: string;
+  library_id?: string;
   doi?: string;
   title?: string;
+  display_title?: string;
+  source_pdf_name?: string;
+  source_md_path?: string;
+  source_pdf_path?: string;
   offline_html_path?: string;
   article_url?: string;
   publication_date?: string;

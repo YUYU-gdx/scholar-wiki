@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext } from 'react';
+﻿import { useState, useEffect, createContext, useContext, useMemo } from 'react';
 import {
   Library,
   Share2,
@@ -17,7 +17,7 @@ import GraphView from './components/GraphView';
 import ReaderView from './components/ReaderView';
 import PipelineView from './components/PipelineView';
 import { api } from './api';
-import type { View, GraphFull, ChatSession, LiteratureLibrary, PipelineJob } from './types';
+import type { View, GraphFull, ChatSession, LiteratureLibrary, PipelineJob, GraphNode, GraphEdge } from './types';
 
 type AppContextType = {
   currentView: View;
@@ -25,9 +25,13 @@ type AppContextType = {
   graphData: GraphFull | null;
   setGraphData: React.Dispatch<React.SetStateAction<GraphFull | null>>;
   selectedNodeId: string | null;
+  selectedNodeLibraryId: string;
   setSelectedNodeId: (id: string | null) => void;
+  setSelectedNodeLibraryId: (id: string) => void;
   selectedPaperId: string | null;
+  selectedPaperLibraryId: string;
   setSelectedPaperId: (id: string | null) => void;
+  setSelectedPaperLibraryId: (id: string) => void;
   sessions: ChatSession[];
   setSessions: React.Dispatch<React.SetStateAction<ChatSession[]>>;
   activeSessionId: string | null;
@@ -35,6 +39,8 @@ type AppContextType = {
   libraries: LiteratureLibrary[];
   activeLibraryId: string;
   setActiveLibraryId: (id: string) => void;
+  selectedLibraryIds: string[];
+  setSelectedLibraryIds: React.Dispatch<React.SetStateAction<string[]>>;
   pipelineJobs: PipelineJob[];
   setPipelineJobs: React.Dispatch<React.SetStateAction<PipelineJob[]>>;
   graphLoading: boolean;
@@ -46,22 +52,83 @@ export function useApp() {
   return useContext(AppContext);
 }
 
+function mergeGraphPayloads(payloads: GraphFull[]): GraphFull {
+  const nodeById = new Map<string, GraphNode>();
+  const edgeByKey = new Map<string, GraphEdge>();
+  const paperMap: Record<string, unknown> = {};
+  const isolatedById = new Map<string, { node_id: string; label?: string; reason?: string }>();
+
+  for (const p of payloads) {
+    const libId = String(p.meta?.library_id || p.meta?.dataset_scope || '');
+    for (const n of p.nodes || []) {
+      const node = { ...n, library_id: libId };
+      const ex = nodeById.get(node.id);
+      if (!ex) {
+        nodeById.set(node.id, node);
+      } else {
+        nodeById.set(node.id, {
+          ...ex,
+          ...node,
+          relation_degree: Math.max(Number(ex.relation_degree || 0), Number(n.relation_degree || 0)),
+          paper_count: Math.max(Number(ex.paper_count || 0), Number(n.paper_count || 0)),
+        });
+      }
+    }
+    for (const e of p.edges || []) {
+      const src = typeof e.source === 'object' ? e.source?.id : e.source;
+      const tgt = typeof e.target === 'object' ? e.target?.id : e.target;
+      const key = `${src}=>${tgt}::${e.paper_id || ''}::${e.direction || ''}`;
+      if (!edgeByKey.has(key)) edgeByKey.set(key, e);
+    }
+    for (const [paperId, paperVal] of Object.entries(p.paper_map || {})) {
+      const scoped = `${libId}::${paperId}`;
+      paperMap[scoped] = { ...(paperVal as Record<string, unknown>), paper_id: paperId, library_id: libId };
+    }
+    for (const iso of p.isolated_nodes || []) {
+      isolatedById.set(iso.node_id, iso);
+    }
+  }
+
+  return {
+    meta: {
+      paper_count: Object.keys(paperMap).length,
+      node_count: nodeById.size,
+      edge_count: edgeByKey.size,
+      library_count: payloads.length,
+      library_id: payloads[0]?.meta?.library_id,
+    },
+    nodes: [...nodeById.values()],
+    edges: [...edgeByKey.values()],
+    moderation_links: payloads.flatMap((p) => p.moderation_links || []),
+    interaction_links: payloads.flatMap((p) => p.interaction_links || []),
+    isolated_nodes: [...isolatedById.values()],
+    paper_map: paperMap as GraphFull['paper_map'],
+  };
+}
+
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('graph');
   const [graphData, setGraphData] = useState<GraphFull | null>(null);
   const [graphLoading, setGraphLoading] = useState(true);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeLibraryId, setSelectedNodeLibraryId] = useState<string>('supply_chain');
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
+  const [selectedPaperLibraryId, setSelectedPaperLibraryId] = useState<string>('supply_chain');
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [libraries, setLibraries] = useState<LiteratureLibrary[]>([]);
   const [activeLibraryId, setActiveLibraryId] = useState('supply_chain');
+  const [selectedLibraryIds, setSelectedLibraryIds] = useState<string[]>(['supply_chain']);
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([]);
 
   useEffect(() => {
     api.literature.listLibraries().then((res) => {
       setLibraries(res.libraries);
-      if (res.default_library_id) setActiveLibraryId(res.default_library_id);
+      const fallback = res.default_library_id || res.libraries[0]?.library_id || 'supply_chain';
+      setActiveLibraryId(fallback);
+      setSelectedLibraryIds([fallback]);
+      setSelectedNodeLibraryId(fallback);
+      setSelectedPaperLibraryId(fallback);
     }).catch(() => {});
   }, []);
 
@@ -72,23 +139,27 @@ export default function App() {
     }).catch(() => {});
   }, [activeLibraryId]);
 
+  const selectedKey = useMemo(() => selectedLibraryIds.slice().sort().join('|'), [selectedLibraryIds]);
+
   useEffect(() => {
+    const libIds = selectedLibraryIds.length ? selectedLibraryIds : (activeLibraryId ? [activeLibraryId] : []);
+    if (!libIds.length) return;
     setGraphLoading(true);
-    api.graph.full(activeLibraryId).then((data) => {
-      setGraphData(data);
+    Promise.all(libIds.map((libId) => api.graph.full(libId))).then((payloads) => {
+      setGraphData(mergeGraphPayloads(payloads));
       setGraphLoading(false);
     }).catch(() => {
       setGraphLoading(false);
     });
-  }, [activeLibraryId]);
+  }, [selectedKey, activeLibraryId]);
 
   useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      const libraryId = detail?.libraryId || activeLibraryId;
+    const handler = () => {
+      const libIds = selectedLibraryIds.length ? selectedLibraryIds : (activeLibraryId ? [activeLibraryId] : []);
+      if (!libIds.length) return;
       setGraphLoading(true);
-      api.graph.full(libraryId).then((data) => {
-        setGraphData(data);
+      Promise.all(libIds.map((libId) => api.graph.full(libId))).then((payloads) => {
+        setGraphData(mergeGraphPayloads(payloads));
         setGraphLoading(false);
       }).catch(() => {
         setGraphLoading(false);
@@ -96,7 +167,7 @@ export default function App() {
     };
     window.addEventListener('pipeline-completed', handler as EventListener);
     return () => window.removeEventListener('pipeline-completed', handler as EventListener);
-  }, [activeLibraryId]);
+  }, [selectedKey, activeLibraryId]);
 
   const navItems = [
     { id: 'library' as View, icon: Library, label: 'Library' },
@@ -116,9 +187,13 @@ export default function App() {
     graphData,
     setGraphData,
     selectedNodeId,
+    selectedNodeLibraryId,
     setSelectedNodeId,
+    setSelectedNodeLibraryId,
     selectedPaperId,
+    selectedPaperLibraryId,
     setSelectedPaperId,
+    setSelectedPaperLibraryId,
     sessions,
     setSessions,
     activeSessionId,
@@ -126,6 +201,8 @@ export default function App() {
     libraries,
     activeLibraryId,
     setActiveLibraryId,
+    selectedLibraryIds,
+    setSelectedLibraryIds,
     pipelineJobs,
     setPipelineJobs,
     graphLoading,
@@ -146,16 +223,29 @@ export default function App() {
           </div>
 
           <div className="px-2 mb-2">
-            <label className="text-[10px] font-mono text-outline uppercase tracking-widest block mb-1">Library</label>
-            <select
-              value={activeLibraryId}
-              onChange={(e) => setActiveLibraryId(e.target.value)}
-              className="w-full bg-surface-container border border-outline-variant rounded-lg px-2 py-1.5 text-xs text-on-surface outline-none focus:ring-1 focus:ring-secondary/30"
-            >
-              {libraries.map((lib) => (
-                <option key={lib.library_id} value={lib.library_id}>{lib.library_id} ({lib.paper_count})</option>
-              ))}
-            </select>
+            <label className="text-[10px] font-mono text-outline uppercase tracking-widest block mb-1">Libraries (Multi-select)</label>
+            <div className="max-h-36 overflow-auto rounded-lg border border-outline-variant bg-surface-container p-1.5 space-y-1">
+              {libraries.map((lib) => {
+                const checked = selectedLibraryIds.includes(lib.library_id);
+                return (
+                  <label key={lib.library_id} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-surface-container-low cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        const next = e.target.checked
+                          ? [...selectedLibraryIds, lib.library_id]
+                          : selectedLibraryIds.filter((id) => id !== lib.library_id);
+                        const ensured = next.length ? next : [lib.library_id];
+                        setSelectedLibraryIds(ensured);
+                        setActiveLibraryId(ensured[0]);
+                      }}
+                    />
+                    <span className="text-xs text-on-surface">{lib.library_id}</span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
 
           <nav className="flex-1 flex flex-col gap-1">

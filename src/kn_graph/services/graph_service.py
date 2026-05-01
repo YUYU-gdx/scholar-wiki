@@ -4,6 +4,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -150,6 +151,15 @@ def _relation_summary_from_mention(m: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _pretty_title(text: str) -> str:
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    s = s.replace("__", " ").replace("_", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 class GraphService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -183,6 +193,10 @@ class GraphService:
         self._meta_public: dict[str, Any] = {}
 
         self._search_items: list[dict[str, Any]] = []
+        self._paper_meta_by_id: dict[str, dict[str, Any]] = {}
+        self._paper_meta_by_key: dict[str, dict[str, Any]] = {}
+        self._paper_key_by_pid: dict[str, str] = {}
+        self._paper_title_cache: dict[str, str] = {}
 
     def _resolve_views_json(self, library_id: str = "") -> Path | None:
         return self._settings.resolve_graph_views_path(library_id)
@@ -480,6 +494,7 @@ class GraphService:
             card = {
                 "kind": "variable",
                 "id": nid,
+                "library_id": self._current_library,
                 "title": str(node.get("label") or node.get("name") or nid),
                 "predecessors": predecessors,
                 "successors": successors,
@@ -510,6 +525,7 @@ class GraphService:
             card = {
                 "kind": "paper",
                 "id": pid,
+                "library_id": self._current_library,
                 "title": str(paper.get("doi", "") or pid),
                 "doi": str(paper.get("doi", "") or pid),
                 "paper_id": pid,
@@ -525,6 +541,76 @@ class GraphService:
                 "tokens": set(_tokenize(text_blob)),
                 "embedding": _hash_embedding(text_blob),
             })
+        self._paper_meta_by_id, self._paper_meta_by_key = self._load_workspace_paper_meta(self._current_library)
+        self._paper_key_by_pid = {
+            str(meta.get("paper_id", "")).strip(): key
+            for key, meta in self._paper_meta_by_key.items()
+            if str(meta.get("paper_id", "")).strip()
+        }
+
+    def _load_workspace_paper_meta(self, library_id: str) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        out_by_id: dict[str, dict[str, Any]] = {}
+        out_by_key: dict[str, dict[str, Any]] = {}
+        lib = str(library_id or "").strip()
+        if not lib:
+            return out_by_id, out_by_key
+        root = self._settings.workspaces_dir / lib / "corpus" / "papers"
+        if not root.exists():
+            return out_by_id, out_by_key
+        for meta_path in root.glob("*/meta/paper.json"):
+            try:
+                payload = json.loads(meta_path.read_text(encoding="utf-8"))
+                paper_id = str(payload.get("paper_id", "") or "").strip()
+                paper_key = str(payload.get("paper_key", "") or "").strip()
+                if paper_id:
+                    out_by_id[paper_id] = payload
+                if paper_key:
+                    out_by_key[paper_key] = payload
+            except Exception:
+                continue
+        return out_by_id, out_by_key
+
+    def _extract_md_first_h1(self, path: Path) -> str:
+        key = str(path.resolve())
+        if key in self._paper_title_cache:
+            return self._paper_title_cache[key]
+        title = ""
+        try:
+            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                text = line.strip()
+                if text.startswith("# "):
+                    title = text[2:].strip()
+                    break
+        except Exception:
+            title = ""
+        self._paper_title_cache[key] = title
+        return title
+
+    def _paper_display_fields(self, paper: dict[str, Any], library_id: str) -> tuple[str, str]:
+        pid = str(paper.get("paper_id", "") or "").strip()
+        fallback_title = _pretty_title(str(paper.get("title", "") or pid).strip())
+        source_pdf_name = ""
+        display_title = fallback_title
+        meta = self._paper_meta_by_id.get(pid, {})
+        import_source_path = str(meta.get("import_source_path", "") or "").strip()
+        source_pdf_path = str(meta.get("source_pdf_path", "") or "").strip()
+        if source_pdf_path:
+            source_pdf_name = Path(source_pdf_path).name
+        if import_source_path:
+            src = Path(import_source_path)
+            if src.suffix.lower() == ".md" and src.exists():
+                h1 = self._extract_md_first_h1(src)
+                if h1:
+                    display_title = _pretty_title(h1)
+            if not source_pdf_name:
+                source_pdf_name = src.name
+        if not display_title:
+            display_title = source_pdf_name or fallback_title
+        display_title = _pretty_title(display_title)
+        if not source_pdf_name:
+            # final fallback from title-ish string
+            source_pdf_name = re.sub(r"\s+", " ", fallback_title).strip()
+        return display_title, source_pdf_name
 
     def get_overview(self, library_id: str = "") -> dict[str, Any]:
         self._ensure_loaded(library_id)
@@ -539,13 +625,54 @@ class GraphService:
 
     def get_full(self, library_id: str = "") -> dict[str, Any]:
         self._ensure_loaded(library_id)
+        paper_map_with_display: dict[str, dict[str, Any]] = {}
+        # Strict mode for library panel: only workspace folder entries, paper_id == folder name (paper_key)
+        for pkey, meta in self._paper_meta_by_key.items():
+            pid = str(meta.get("paper_id", "") or "").strip()
+            base = dict(self._paper_map_unique.get(pid, {}))
+            base["library_id"] = library_id
+            base["paper_id_raw"] = pid
+            base["paper_id"] = pkey
+            base["paper_key"] = pkey
+            base["source_md_path"] = str(meta.get("source_md_path", "") or "")
+            base["source_pdf_path"] = str(meta.get("source_pdf_path", "") or "")
+            base["offline_html_path"] = str(meta.get("html_path", "") or base.get("offline_html_path", "") or "")
+            title_from_key = _pretty_title(pkey)
+            base["display_title"] = title_from_key
+            base["title"] = title_from_key
+            base["source_pdf_name"] = str(meta.get("source_pdf_name", "") or "")
+            paper_map_with_display[pkey] = base
+        edges_mapped: list[dict[str, Any]] = []
+        for edge in self._edges:
+            row = dict(edge)
+            pid_raw = str(row.get("paper_id", "") or "").strip()
+            if pid_raw:
+                row["paper_id_raw"] = pid_raw
+                row["paper_id"] = self._paper_key_by_pid.get(pid_raw, pid_raw)
+            edges_mapped.append(row)
+        moderation_mapped: list[dict[str, Any]] = []
+        for mod in self._moderation_links:
+            row = dict(mod)
+            pid_raw = str(row.get("paper_id", "") or "").strip()
+            if pid_raw:
+                row["paper_id_raw"] = pid_raw
+                row["paper_id"] = self._paper_key_by_pid.get(pid_raw, pid_raw)
+            moderation_mapped.append(row)
+        interaction_mapped: list[dict[str, Any]] = []
+        for inter in self._interaction_links:
+            row = dict(inter)
+            pid_raw = str(row.get("paper_id", "") or "").strip()
+            if pid_raw:
+                row["paper_id_raw"] = pid_raw
+                row["paper_id"] = self._paper_key_by_pid.get(pid_raw, pid_raw)
+            interaction_mapped.append(row)
         return {
-            "meta": self._meta_public,
-            "nodes": list(self._nodes_public_by_id.values()),
-            "edges": self._edges,
-            "moderation_links": self._moderation_links,
-            "interaction_links": self._interaction_links,
-            "paper_map": self._paper_map_unique,
+            "meta": {**self._meta_public, "library_id": library_id},
+            "nodes": [{**n, "library_id": library_id} for n in self._nodes_public_by_id.values()],
+            "edges": edges_mapped,
+            "moderation_links": moderation_mapped,
+            "interaction_links": interaction_mapped,
+            "paper_map": paper_map_with_display,
             "isolated_nodes": self._isolated_nodes,
         }
 
@@ -660,6 +787,12 @@ class GraphService:
         pid = str(paper_id_or_doi or "").strip()
         if not pid:
             return None
+        # Accept workspace paper_key directly.
+        meta_by_key = self._paper_meta_by_key.get(pid)
+        if isinstance(meta_by_key, dict):
+            raw_pid = str(meta_by_key.get("paper_id", "") or "").strip()
+            if raw_pid:
+                pid = raw_pid
         obj = self._paper_map.get(pid)
         if obj is None:
             for candidate in self._paper_map.values():
@@ -676,6 +809,21 @@ class GraphService:
             payload["article_url"] = f"https://sms.onlinelibrary.wiley.com/doi/full/{doi}"
         if "offline_html_path" not in payload:
             payload["offline_html_path"] = ""
+        display_title, source_pdf_name = self._paper_display_fields(payload, library_id)
+        payload["display_title"] = display_title
+        payload["source_pdf_name"] = source_pdf_name
+        payload["library_id"] = library_id
+        pkey = self._paper_key_by_pid.get(str(payload.get("paper_id", "") or "").strip(), "")
+        if pkey:
+            payload["paper_id_raw"] = payload.get("paper_id", "")
+            payload["paper_id"] = pkey
+            payload["paper_key"] = pkey
+            meta = self._paper_meta_by_key.get(pkey, {})
+            payload["source_md_path"] = str(meta.get("source_md_path", "") or payload.get("source_md_path", "") or "")
+            payload["source_pdf_path"] = str(meta.get("source_pdf_path", "") or payload.get("source_pdf_path", "") or "")
+            payload["offline_html_path"] = str(meta.get("html_path", "") or payload.get("offline_html_path", "") or "")
+            payload["display_title"] = _pretty_title(pkey)
+            payload["title"] = _pretty_title(pkey)
         return payload
 
     def reload(self, library_id: str = "") -> dict[str, Any]:
@@ -702,6 +850,7 @@ class GraphService:
         paper_groups: list[dict[str, Any]] = []
         for pid in paper_ids:
             p = self._paper_map_unique.get(pid, {})
+            display_pid = self._paper_key_by_pid.get(pid, pid)
             m: list[dict[str, Any]] = []
             for x in mentions:
                 if x["paper_id"] != pid:
@@ -712,7 +861,10 @@ class GraphService:
                 tgt_name = str(x.get("target_name", "")).strip()
                 if (src and src == tgt) or (_norm_rel_text(src_name) and _norm_rel_text(src_name) == _norm_rel_text(tgt_name)):
                     continue
-                m.append(x)
+                mention_row = dict(x)
+                mention_row["paper_id_raw"] = pid
+                mention_row["paper_id"] = display_pid
+                m.append(mention_row)
             local_html, online_url = _paper_links(p, pid)
             variable_name = str(self._nodes.get(nid, {}).get("label") or self._nodes.get(nid, {}).get("name") or "")
             raw_defs = list(p.get("variable_definitions", []) or [])
@@ -750,7 +902,8 @@ class GraphService:
             relation_summaries = [_relation_summary_from_mention(item) for item in m]
             papers_payload.append(
                 {
-                    "paper_id": pid,
+                    "paper_id": display_pid,
+                    "paper_id_raw": pid,
                     "doi": str(p.get("doi", "") or pid),
                     "publication_year": p.get("publication_year"),
                     "open_local_html": local_html,
@@ -760,7 +913,8 @@ class GraphService:
             )
             paper_groups.append(
                 {
-                    "paper_id": pid,
+                    "paper_id": display_pid,
+                    "paper_id_raw": pid,
                     "doi": str(p.get("doi", "") or pid),
                     "publication_year": p.get("publication_year"),
                     "open_local_html": local_html,
