@@ -12,11 +12,12 @@ export default defineConfig(({mode}) => {
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
-    resolve: {
-      alias: {
-        '@': path.resolve(__dirname, 'src'),
+      resolve: {
+        alias: {
+          '@': path.resolve(__dirname, 'src'),
+          '@reader': path.resolve(__dirname, 'src/components/reader'),
+        },
       },
-    },
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
       proxy: {
