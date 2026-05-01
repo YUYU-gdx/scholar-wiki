@@ -19,17 +19,16 @@ uv run python scripts/smj_pipeline/app_launcher.py
 
 ```
 kn_gragh/
-├── src/kn_graph/              ← Backend package (refactoring in progress)
-├── scripts/smj_pipeline/      ← Current backend entry points (to be replaced)
-│   ├── serve_graph_api.py      ← Main API server (port 8013)
-│   ├── serve_async_pipeline_api.py ← Async pipeline API (port 8021)
-│   └── kn_mcp_server.py       ← MCP tool server (stdin/stdout)
-├── config/                    ← LLM provider config
-├── prompt/                    ← Extraction prompt templates
-├── outputs/                   ← Runtime artifacts
-├── tests/                     ← Tests
-├── frontend_legacy/           ← Archived frontend (frozen, do not modify)
-└── docs/                      ← Documentation
+├── src/kn_graph/              �?Backend package (refactoring in progress)
+├── scripts/smj_pipeline/      �?Current backend entry points (to be replaced)
+�?  ├── serve_graph_api.py      �?Main API server (port 8013)
+�?  ├── serve_async_pipeline_api.py �?Async pipeline API (port 8021)
+�?  └── kn_mcp_server.py       �?MCP tool server (stdin/stdout)
+├── config/                    �?LLM provider config
+├── prompt/                    �?Extraction prompt templates
+├── outputs/                   �?Runtime artifacts
+├── tests/                     �?Tests
+└── docs/                      �?Documentation
 ```
 
 ## Documentation
@@ -50,8 +49,8 @@ kn_gragh/
 | `PIPELINE_JOB_STORE_DSN` | Pipeline job store DSN | SQLite |
 | `PIPELINE_EXECUTOR` | Executor type | `inline` |
 | `PIPELINE_REDIS_URL` | Celery broker | `redis://127.0.0.1:6379/0` |
-| `ZHIPU_API_KEY` | Zhipu API key | — |
-| `NVIDIA_API_KEY` | NVIDIA API key | — |
+| `ZHIPU_API_KEY` | Zhipu API key | �?|
+| `NVIDIA_API_KEY` | NVIDIA API key | �?|
 | `LLM_PROVIDER_CONFIG_PATH` | LLM config path | `config/llm_providers.json` |
 | `WEAVIATE_URL` | Weaviate address | `http://127.0.0.1:8090` |
 
@@ -64,7 +63,6 @@ uv run python -m unittest discover -s tests -p "test_*.py" -v
 ## Refactoring Status
 
 - **In progress**: Backend unification into single `src/kn_graph/` FastAPI package. See design doc for details.
-- **Frozen**: `frontend_legacy/` is archived and must not be modified.
 - **Prohibited**: Do not create or modify any `frontend/` directory content.
 
 ## LLM Provider Configuration

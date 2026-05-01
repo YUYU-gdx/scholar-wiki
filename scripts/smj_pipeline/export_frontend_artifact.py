@@ -9,7 +9,6 @@ import re
 import sys
 from typing import Any
 
-SUPPLY_CHAIN_ROOT = Path("outputs/smj_supply_chain_batch").resolve()
 logger = logging.getLogger(__name__)
 
 
@@ -147,26 +146,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export extraction outputs to frontend-friendly graph artifact.")
     parser.add_argument("--raw-output-jsonl", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
-    parser.add_argument("--allow-non-supply-chain", action="store_true")
     return parser.parse_args()
-
-
-def _enforce_supply_chain_path(path: Path, allow_non_supply_chain: bool, flag_name: str) -> None:
-    resolved = path.resolve()
-    if allow_non_supply_chain:
-        return
-    if SUPPLY_CHAIN_ROOT not in resolved.parents and resolved != SUPPLY_CHAIN_ROOT:
-        raise RuntimeError(
-            f"{flag_name} path is outside supply-chain scope: {resolved}\n"
-            f"allowed root: {SUPPLY_CHAIN_ROOT}\n"
-            "use --allow-non-supply-chain to override explicitly"
-        )
 
 
 def run_export(
     input_json: Path,
     output_json: Path | None = None,
-    allow_non_supply_chain: bool = True,
 ) -> Path | None:
     """Export extraction JSON/JSONL to a frontend-friendly graph artifact.
 
@@ -178,17 +163,12 @@ def run_export(
         input_json: Path to the extraction JSON/JSONL file.
         output_json: Destination path for ``frontend_artifact.json``.
             Defaults to ``input_json.parent / "frontend_artifact.json"``.
-        allow_non_supply_chain: When ``False``, paths outside the
-            supply-chain root are rejected.
-
     Returns:
         The output :class:`~pathlib.Path` on success, or ``None`` on failure.
     """
     if output_json is None:
         output_json = input_json.parent / "frontend_artifact.json"
     try:
-        _enforce_supply_chain_path(input_json, allow_non_supply_chain, "input_json")
-        _enforce_supply_chain_path(output_json, allow_non_supply_chain, "output_json")
         extractor = _load_extractor_module()
     except Exception as exc:
         logger.warning("Export setup failed: %s", exc)
@@ -438,12 +418,9 @@ def run_export(
 
 def main() -> None:
     args = parse_args()
-    _enforce_supply_chain_path(args.raw_output_jsonl, args.allow_non_supply_chain, "--raw-output-jsonl")
-    _enforce_supply_chain_path(args.output_json, args.allow_non_supply_chain, "--output-json")
     result = run_export(
         input_json=args.raw_output_jsonl,
         output_json=args.output_json,
-        allow_non_supply_chain=True,
     )
     if result is None:
         sys.exit(1)

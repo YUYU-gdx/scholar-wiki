@@ -67,8 +67,9 @@ class JourneyLiveFullTest(unittest.TestCase):
         root = Path(cls._tmp.name)
         cls.root = root
 
-        # seed minimal graph data
-        views_json = root / "graph_views.json"
+        # seed minimal graph data in library-bound workspace
+        views_json = root / "workspaces" / "supply_chain" / "graph_views.json"
+        views_json.parent.mkdir(parents=True, exist_ok=True)
         views_json.write_text(
             json.dumps(
                 {
@@ -146,9 +147,6 @@ class JourneyLiveFullTest(unittest.TestCase):
                 "127.0.0.1",
                 "--port",
                 str(cls.port),
-                "--views-json",
-                str(views_json),
-                "--allow-non-supply-chain",
             ],
             cwd=str(REPO_ROOT),
             env=cls._env,

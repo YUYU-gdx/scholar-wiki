@@ -39,6 +39,19 @@ def _load_library_registry_module():
     return mod
 
 
+def _load_runtime_conventions_module():
+    module_path = Path(__file__).resolve().parent.parent / "runtime_conventions.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_runtime_conventions_for_literature", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_RUNTIME_CONVENTIONS = _load_runtime_conventions_module()
+
+
 _SENTENCE_END_RE = re.compile(r"[^。！？!?\.]+[。！？!?\.]?")
 
 
@@ -712,6 +725,7 @@ class LiteratureService:
 
         source_pdf_path = ""
         mineru_main_md_path = ""
+        md_library_path = ""
         parser_name = ""
         parser_version = ""
         parser_run_at = ""
@@ -728,6 +742,12 @@ class LiteratureService:
             mineru = self._run_mineru_to_dir(source_pdf, mineru_latest_dir)
             html_text = str(mineru.get("html_text", "") or "")
             mineru_main_md_path = str(mineru.get("main_md_path", "") or "")
+            md_library_path = self._sync_md_library_bundle(
+                workspace_root=workspace_root,
+                paper_key=paper_key,
+                mineru_output_root=mineru_latest_dir,
+                mineru_main_md_path=mineru_main_md_path,
+            )
         elif html_seed:
             html_text = html_seed
             if mineru_latest_dir.exists():
@@ -763,6 +783,7 @@ class LiteratureService:
             "html_path": str(article_html_path.resolve()),
             "mineru_output_path": str(mineru_latest_dir.resolve()) if mineru_latest_dir.exists() else "",
             "mineru_main_md_path": mineru_main_md_path,
+            "md_library_path": md_library_path,
             "content_hash": source_hash,
             "file_size": source_size,
             "parser": {
@@ -784,6 +805,7 @@ class LiteratureService:
                 "html_path": str(article_html_path.resolve()),
                 "mineru_output_path": str(mineru_latest_dir.resolve()) if mineru_latest_dir.exists() else "",
                 "mineru_main_md_path": mineru_main_md_path,
+                "md_library_path": md_library_path,
                 "updated_at": metadata_payload["imported_at"],
             },
         )
@@ -797,9 +819,30 @@ class LiteratureService:
                 "html_path": str(article_html_path.resolve()),
                 "mineru_output_path": str(mineru_latest_dir.resolve()) if mineru_latest_dir.exists() else "",
                 "mineru_main_md_path": mineru_main_md_path,
+                "md_library_path": md_library_path,
                 "meta_path": str(meta_path.resolve()),
             },
         }
+
+    def _sync_md_library_bundle(self, workspace_root: Path, paper_key: str, mineru_output_root: Path, mineru_main_md_path: str) -> str:
+        if not mineru_output_root.exists():
+            return ""
+        md_root = workspace_root / "corpus" / "md_library" / str(paper_key).strip()
+        if md_root.exists():
+            shutil.rmtree(md_root, ignore_errors=True)
+        shutil.copytree(mineru_output_root, md_root)
+        entry_md = ""
+        main_src = Path(str(mineru_main_md_path or "")).resolve() if str(mineru_main_md_path or "").strip() else None
+        if isinstance(main_src, Path) and main_src.exists():
+            for candidate in md_root.rglob("*.md"):
+                if candidate.name == main_src.name:
+                    entry_md = str(candidate.resolve())
+                    break
+        if not entry_md:
+            md_candidates = sorted(md_root.rglob("*.md"))
+            if md_candidates:
+                entry_md = str(md_candidates[0].resolve())
+        return entry_md
 
     @staticmethod
     def _filter_rows_by_paper_ids(rows: list[dict[str, Any]], allowed_paper_ids: set[str]) -> list[dict[str, Any]]:
@@ -814,18 +857,18 @@ class LiteratureService:
         return out
 
     def _build_default_weaviate(self) -> WeaviateRestClient:
-        base_url = os.getenv("WEAVIATE_URL", "").strip()
+        base_url = ""
+        candidates = _RUNTIME_CONVENTIONS.build_weaviate_base_url_candidates()
+        for candidate in candidates:
+            try:
+                resp = requests.get(candidate.rstrip("/") + "/v1/.well-known/ready", timeout=1.2)
+                if resp.status_code < 500:
+                    base_url = candidate
+                    break
+            except Exception:
+                continue
         if not base_url:
-            for candidate in ("http://127.0.0.1:8080", "http://127.0.0.1:8090"):
-                try:
-                    resp = requests.get(candidate.rstrip("/") + "/v1/.well-known/ready", timeout=1.2)
-                    if resp.status_code < 500:
-                        base_url = candidate
-                        break
-                except Exception:
-                    continue
-        if not base_url:
-            base_url = "http://127.0.0.1:8080"
+            base_url = candidates[0]
         api_key = os.getenv("WEAVIATE_API_KEY", "").strip()
         return WeaviateRestClient(base_url=base_url, api_key=api_key)
 

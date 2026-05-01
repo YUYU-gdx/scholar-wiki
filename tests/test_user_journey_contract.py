@@ -440,7 +440,6 @@ class JourneyContractTest(unittest.TestCase):
                 str(frontend_artifact),
                 "--output-json",
                 str(graph_views),
-                "--allow-non-supply-chain",
             ],
             capture_output=True,
             text=True,

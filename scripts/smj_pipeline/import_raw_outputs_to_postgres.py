@@ -7,9 +7,6 @@ from pathlib import Path
 import sys
 from typing import Any
 
-SUPPLY_CHAIN_ROOT = Path("outputs/smj_supply_chain_batch").resolve()
-
-
 def _load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -48,25 +45,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dsn", required=True, help="PostgreSQL DSN, e.g. postgresql://user:pass@127.0.0.1:5432/db")
     p.add_argument("--raw-output-jsonl", type=Path, required=True)
     p.add_argument("--apply-schema", action="store_true")
-    p.add_argument("--allow-non-supply-chain", action="store_true")
     return p.parse_args()
-
-
-def _enforce_supply_chain_path(path: Path, allow_non_supply_chain: bool) -> None:
-    resolved = path.resolve()
-    if allow_non_supply_chain:
-        return
-    if SUPPLY_CHAIN_ROOT not in resolved.parents and resolved != SUPPLY_CHAIN_ROOT:
-        raise RuntimeError(
-            f"input path is outside supply-chain scope: {resolved}\n"
-            f"allowed root: {SUPPLY_CHAIN_ROOT}\n"
-            "use --allow-non-supply-chain to override explicitly"
-        )
 
 
 def main() -> None:
     args = parse_args()
-    _enforce_supply_chain_path(args.raw_output_jsonl, args.allow_non_supply_chain)
     try:
         import psycopg  # type: ignore
     except Exception as exc:  # pragma: no cover

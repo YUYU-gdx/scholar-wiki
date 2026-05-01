@@ -1,7 +1,5 @@
-import json
 import os
 from pathlib import Path
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -16,9 +14,6 @@ def _default_data_dir() -> Path:
 class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8013
-
-    views_json: Optional[Path] = None
-    allow_non_supply_chain: bool = False
 
     data_dir: Path = Field(default_factory=_default_data_dir)
 
@@ -71,26 +66,15 @@ class Settings(BaseSettings):
         return self.data_dir / "chat" / "codex_runner_config.json"
 
     def resolve_graph_views_path(self, library_id: str = "") -> Path | None:
-        if library_id:
-            ws_path = self.workspaces_dir / library_id / "graph_views.json"
-            if ws_path.exists():
-                return ws_path
-            run_path = self.runs_dir / library_id / "graph_views.json"
-            if run_path.exists():
-                return run_path
-        if self.views_json is not None:
-            return Path(self.views_json)
-        runs_root = self.runs_dir
-        active_path = runs_root / "active.json"
-        if active_path.exists():
-            try:
-                payload = json.loads(active_path.read_text(encoding="utf-8"))
-                if isinstance(payload, dict):
-                    graph_views = str(payload.get("graph_views", "")).strip()
-                    if graph_views:
-                        return Path(graph_views)
-            except Exception:
-                pass
+        lib = str(library_id or "").strip()
+        if not lib:
+            return None
+        ws_path = self.workspaces_dir / lib / "graph_views.json"
+        if ws_path.exists():
+            return ws_path
+        run_path = self.runs_dir / lib / "graph_views.json"
+        if run_path.exists():
+            return run_path
         return None
 
 

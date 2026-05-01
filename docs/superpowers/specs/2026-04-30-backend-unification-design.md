@@ -10,8 +10,8 @@
 
 The current backend consists of two independent servers:
 
-1. **serve_graph_api.py** (2088 lines) — stdlib `http.server`, handles graph/chats/literatures/workspace/static files on port 8013
-2. **serve_async_pipeline_api.py** (1293 lines) — FastAPI, handles PDF pipeline job management on port 8021
+1. **serve_graph_api.py** (2088 lines) �?stdlib `http.server`, handles graph/chats/literatures/workspace/static files on port 8013
+2. **serve_async_pipeline_api.py** (1293 lines) �?FastAPI, handles PDF pipeline job management on port 8021
 
 Problems:
 
@@ -38,46 +38,44 @@ Problems:
 
 - All URL paths remain identical (`/graph/*`, `/chat/*`, `/v1/jobs/*`, etc.)
 - Celery worker runs as a separate process when needed
-- MCP server (`kn_mcp_server.py`) unchanged — it's a stdin/stdout process, not HTTP
-- `frontend_legacy/` preserved as backup, not modified
+- MCP server (`kn_mcp_server.py`) unchanged �?it's a stdin/stdout process, not HTTP
 
 ### What gets deleted
 
-- `serve_graph_api.py` — replaced by `kn_graph` package
-- `serve_async_pipeline_api.py` — replaced by `kn_graph` package
+- `serve_graph_api.py` �?replaced by `kn_graph` package
+- `serve_async_pipeline_api.py` �?replaced by `kn_graph` package
 
 ## 3. Project Structure
 
 ```
-src/kn_graph/                   ← New package root
+src/kn_graph/                   �?New package root
 ├── __init__.py
-├── __main__.py                 ← `python -m kn_graph serve` / `python -m kn_graph worker`
-├── app.py                      ← FastAPI app factory, mounts all routers
-├── config.py                   ← Pydantic Settings (ports, DB URLs, API keys)
+├── __main__.py                 �?`python -m kn_graph serve` / `python -m kn_graph worker`
+├── app.py                      �?FastAPI app factory, mounts all routers
+├── config.py                   �?Pydantic Settings (ports, DB URLs, API keys)
 ├── routers/
-│   ├── __init__.py
-│   ├── graph.py                ← /graph/*, /paper/{id}, /variable/{id}
-│   ├── chat.py                 ← /chat/sessions/*, /chat/codex/*, /chat/provider-*
-│   ├── literature.py           ← /literature/*
-│   ├── pipeline.py             ← /v1/pipeline/*, /v1/jobs/*
-│   ├── workspace.py            ← /api/v2/workspace/*
-│   └── static.py               ← /frontend/* static file serving
+�?  ├── __init__.py
+�?  ├── graph.py                �?/graph/*, /paper/{id}, /variable/{id}
+�?  ├── chat.py                 �?/chat/sessions/*, /chat/codex/*, /chat/provider-*
+�?  ├── literature.py           �?/literature/*
+�?  ├── pipeline.py             �?/v1/pipeline/*, /v1/jobs/*
+�?  ├── workspace.py            �?/api/v2/workspace/*
 ├── models/
-│   ├── __init__.py
-│   ├── graph.py                ← Pydantic request/response models
-│   ├── chat.py
-│   ├── literature.py
-│   ├── pipeline.py
-│   └── workspace.py
+�?  ├── __init__.py
+�?  ├── graph.py                �?Pydantic request/response models
+�?  ├── chat.py
+�?  ├── literature.py
+�?  ├── pipeline.py
+�?  └── workspace.py
 ├── services/
-│   ├── __init__.py
-│   ├── graph_service.py        ← Business logic (extracted from handlers)
-│   ├── chat_service.py
-│   ├── literature_service.py
-│   ├── pipeline_service.py
-│   └── workspace_service.py
+�?  ├── __init__.py
+�?  ├── graph_service.py        �?Business logic (extracted from handlers)
+�?  ├── chat_service.py
+�?  ├── literature_service.py
+�?  ├── pipeline_service.py
+�?  └── workspace_service.py
 └── workers/
-    └── celery_app.py           ← Celery configuration + task definitions
+    └── celery_app.py           �?Celery configuration + task definitions
 ```
 
 ### Module responsibilities
@@ -87,7 +85,7 @@ src/kn_graph/                   ← New package root
 | `config.py` | Environment variables, defaults, validation | Pydantic Settings |
 | `app.py` | FastAPI app factory, CORS, routers, lifespan | All routers, config |
 | `routers/*` | HTTP request/response handling only | Services, Models |
-| `models/*` | Pydantic V2 schemas, no business logic | — |
+| `models/*` | Pydantic V2 schemas, no business logic | �?|
 | `services/*` | Business logic, data access, external API calls | Config, Models |
 | `workers/` | Celery task definitions | Services, Models |
 
@@ -108,7 +106,7 @@ uv run python scripts/smj_pipeline/kn_mcp_server.py
 
 All existing URL paths are preserved. Routes are grouped by domain:
 
-### Graph & Paper & Variable (from serve_graph_api.py → `routers/graph.py`)
+### Graph & Paper & Variable (from serve_graph_api.py �?`routers/graph.py`)
 
 | Method | Path | New Handler |
 |--------|------|-------------|
@@ -119,7 +117,7 @@ All existing URL paths are preserved. Routes are grouped by domain:
 | GET | `/paper/{paper_id_or_doi}` | `get_paper` |
 | GET | `/variable/{node_id}` | `get_variable` |
 
-### Chat (from serve_graph_api.py → `routers/chat.py`)
+### Chat (from serve_graph_api.py �?`routers/chat.py`)
 
 | Method | Path | New Handler |
 |--------|------|-------------|
@@ -139,7 +137,7 @@ All existing URL paths are preserved. Routes are grouped by domain:
 | GET/POST | `/chat/provider-config` | `get/save_provider_config` |
 | POST | `/chat/provider-test` | `test_provider` |
 
-### Literature (from serve_graph_api.py → `routers/literature.py`)
+### Literature (from serve_graph_api.py �?`routers/literature.py`)
 
 | Method | Path | New Handler |
 |--------|------|-------------|
@@ -148,7 +146,7 @@ All existing URL paths are preserved. Routes are grouped by domain:
 | POST | `/literature/import` | `import_manifest` |
 | POST | `/literature/answer` | `answer_question` |
 
-### Pipeline (from serve_async_pipeline_api.py → `routers/pipeline.py`)
+### Pipeline (from serve_async_pipeline_api.py �?`routers/pipeline.py`)
 
 | Method | Path | New Handler |
 |--------|------|-------------|
@@ -162,7 +160,7 @@ All existing URL paths are preserved. Routes are grouped by domain:
 | POST | `/v1/jobs/{job_id}/retry` | `retry_job` |
 | GET | `/v1/jobs/{job_id}/events` | `stream_job_events` |
 
-### Workspace (from serve_graph_api.py → `routers/workspace.py`)
+### Workspace (from serve_graph_api.py �?`routers/workspace.py`)
 
 | Method | Path | New Handler |
 |--------|------|-------------|
@@ -180,14 +178,13 @@ All existing URL paths are preserved. Routes are grouped by domain:
 
 | Method | Path | New Handler |
 |--------|------|-------------|
-| GET | `/frontend/*` | FastAPI `StaticFiles` middleware (serves built frontend) |
 
 **Eliminated duplicates**:
 
-- Two health check endpoints → one `/healthz`
-- Two SSE implementations → one `sse-starlette`
-- Two request parsing systems → one Pydantic validation
-- Two CORS configurations → one
+- Two health check endpoints �?one `/healthz`
+- Two SSE implementations �?one `sse-starlette`
+- Two request parsing systems �?one Pydantic validation
+- Two CORS configurations �?one
 
 ## 5. Pydantic Model Strategy
 
@@ -198,7 +195,7 @@ All request/response types use Pydantic V2 models.
 - Request models suffixed `Request`
 - Response models suffixed `Response` or named by domain (e.g., `GraphOverview`, `PipelineJob`)
 - All optional fields use `Optional[T] = None`
-- Models contain no business logic — only validation and serialization
+- Models contain no business logic �?only validation and serialization
 
 ### Example
 
@@ -246,7 +243,6 @@ class CreateSessionResponse(BaseModel):
 
 ## 7. Non-Goals (Out of Scope)
 
-- Frontend development (UI components, pages, frameworks)
 - Authentication / authorization (security audit is separate)
 - Database migration (PostgreSQL schema stays as-is)
 - MCP server changes (it's not HTTP)
@@ -261,3 +257,4 @@ class CreateSessionResponse(BaseModel):
 5. `python -m kn_graph worker` starts Celery worker (when needed)
 6. All existing tests pass
 7. No duplicate code between former services
+

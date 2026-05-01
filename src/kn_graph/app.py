@@ -1,6 +1,4 @@
 import logging
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,7 +11,6 @@ from kn_graph.services.pipeline_service import PipelineService
 from kn_graph.services.workspace_service import WorkspaceService
 
 from kn_graph.routers import graph, chat, literature, pipeline, workspace
-from kn_graph.routers.static_files import create_static_router
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +46,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(literature.create_router(literature_service))
     app.include_router(pipeline.create_router(pipeline_service))
     app.include_router(workspace.create_router(workspace_service))
-
-    frontend_dir = str(Path("frontend_legacy").resolve()) if Path("frontend_legacy").is_dir() else None
-    workbench_dir = str((settings.data_dir / "workbench_spa").resolve()) if (settings.data_dir / "workbench_spa").is_dir() else None
-    fallback_workbench = str((Path("frontend_legacy") / "workbench_spa").resolve()) if (Path("frontend_legacy") / "workbench_spa").is_dir() else None
-    effective_workbench = workbench_dir or fallback_workbench
-    static_router = create_static_router(frontend_dir, workbench_dir=effective_workbench)
-    if static_router.routes:
-        app.include_router(static_router)
 
     @app.get("/healthz")
     async def healthz():

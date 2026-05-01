@@ -7,14 +7,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "dev:electron": "VITE_DEV_SERVER_URL=http://localhost:3000 NODE_ENV=development electron .",
+    "dev:electron": "set VITE_DEV_SERVER_URL=http://localhost:3000&& set NODE_ENV=development&& electron .",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "deploy": "npm run build && node -e \"const fs=require('fs');const p=require('path');const src=p.resolve('dist');const dst=p.resolve('..','frontend_legacy','workbench_spa');if(fs.existsSync(dst)){fs.rmSync(dst,{recursive:true})}fs.cpSync(src,dst,{recursive:true});console.log('Deployed to',dst)\"",
+    "deploy": "npm run build && node -e \"const fs=require('fs');const p=require('path');const src=p.resolve('dist');const dst=p.resolve('..','outputs','workbench_spa');if(fs.existsSync(dst)){fs.rmSync(dst,{recursive:true})}fs.cpSync(src,dst,{recursive:true});console.log('Deployed to',dst)\"",
     "lint": "tsc --noEmit",
     "electron": "electron .",
-    "electron:dev": "npm run build && electron .",
+    "electron:dev": "npm run dev:electron",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
   },
@@ -75,3 +75,4 @@
     "vite": "^6.2.0"
   }
 }
+

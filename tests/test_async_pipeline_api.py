@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import threading
 import time
+import tempfile
 import unittest
 
 from fastapi.testclient import TestClient
@@ -29,9 +31,17 @@ def _noop_dispatch(_ctx, _job_id, _input_path, _options) -> None:
 
 class AsyncPipelineApiTest(unittest.TestCase):
     def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        storage_root = Path(self._tmp.name) / "storage_root"
+        storage_root.mkdir(parents=True, exist_ok=True)
+        os.environ["KN_STORAGE_ROOT"] = str(storage_root)
+        os.environ["LITERATURE_LIBRARY_WORKSPACES_ROOT"] = str(storage_root / "libraries" / "workspaces")
         self.store = InMemoryJobStore()
         app = create_app(job_store=self.store, run_pipeline_fn=_noop_dispatch)
         self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
 
     def test_upload_pdf_returns_202_with_job_links(self) -> None:
         response = self.client.post(
@@ -49,6 +59,13 @@ class AsyncPipelineApiTest(unittest.TestCase):
         self.assertTrue(str(payload.get("sse_url", "")).startswith("/v1/jobs/"))
         self.assertTrue(str(payload.get("result_url", "")).startswith("/v1/jobs/"))
 
+    def test_storage_status_reports_initialized(self) -> None:
+        response = self.client.get("/v1/storage/status")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(bool(payload.get("initialized")))
+        self.assertFalse(bool(payload.get("requires_init")))
+
     def test_invalid_options_returns_400(self) -> None:
         response = self.client.post(
             "/v1/pipeline/parse-extract",
@@ -58,13 +75,22 @@ class AsyncPipelineApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json().get("error"), "invalid_options_json")
 
-    def test_non_pdf_upload_returns_400(self) -> None:
+    def test_txt_upload_returns_202(self) -> None:
         response = self.client.post(
             "/v1/pipeline/parse-extract",
             files={"file": ("sample.txt", b"hello", "text/plain")},
             data={"library_id": "supply_chain"},
         )
+        self.assertEqual(response.status_code, 202)
+
+    def test_unsupported_upload_returns_400(self) -> None:
+        response = self.client.post(
+            "/v1/pipeline/parse-extract",
+            files={"file": ("sample.exe", b"MZ...", "application/octet-stream")},
+            data={"library_id": "supply_chain"},
+        )
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json().get("error"), "unsupported_source_type")
 
     def test_cancel_job_marks_cancel_requested(self) -> None:
         create_resp = self.client.post(

@@ -4,6 +4,7 @@
 
 ## 1. 核心规约文档
 - API 规约：`docs/api.md`
+- 文件存储与端口规约：`docs/storage_and_port_conventions.md`
 - 数据模型规约：`docs/data_model.md`
 - Run 管理：`docs/run_management.md`
 - 可复用抽取/评测流程：`docs/reusable_extract_eval_workflow.md`

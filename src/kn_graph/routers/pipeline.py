@@ -6,12 +6,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import io
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from kn_graph.services.pipeline_service import PipelineService
+from kn_graph.services import pipeline_runtime
 
 
 def _resolve_library_workspace(library_id: str) -> Path:
@@ -133,53 +135,15 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
         }
         pipeline_service.create_job(payload)
 
-        import importlib.util
-        import sys
-
-        scripts_dir = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
-        env_mod_path = scripts_dir / "env_utils.py"
-        spec = importlib.util.spec_from_file_location("smj_pipeline_env_utils_for_router", env_mod_path)
-        if spec and spec.loader:
-            env_mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(env_mod)
-            env_mod.load_repo_env()
-
-        run_mod_path = scripts_dir / "run_extraction_mvp.py"
-        mineru_path = scripts_dir / "mineru_single_pdf_runner.py"
-        has_run = run_mod_path.exists() and mineru_path.exists()
-
-        if has_run and pipeline_service._settings.pipeline_executor.strip().lower() == "inline":
-            import threading
-
+        if pipeline_service._settings.pipeline_executor.strip().lower() == "inline":
             store = pipeline_service._ensure_store()
-
-            async_api_path = scripts_dir / "serve_async_pipeline_api.py"
-            spec2 = importlib.util.spec_from_file_location("smj_pipeline_async_pipeline_exec_for_router", async_api_path)
-            if spec2 and spec2.loader:
-                async_api_mod = importlib.util.module_from_spec(spec2)
-                if spec2.name not in sys.modules:
-                    sys.modules[spec2.name] = async_api_mod
-                spec2.loader.exec_module(async_api_mod)
-
-                def _run_inline():
-                    try:
-                        async_api_mod.execute_pipeline(
-                            store,
-                            job_id,
-                            str(input_path),
-                            dict(parsed_options),
-                            pipeline_service._runs_root,
-                        )
-                    except Exception as exc:
-                        pipeline_service.update_job(job_id, {
-                            "status": "failed",
-                            "error_code": "pipeline_failed",
-                            "error_detail": str(exc),
-                            "last_event": "failed",
-                        })
-
-                t = threading.Thread(target=_run_inline, daemon=True)
-                t.start()
+            pipeline_runtime.dispatch_inline(
+                store,
+                job_id,
+                str(input_path),
+                dict(parsed_options),
+                pipeline_service._runs_root,
+            )
 
         return JSONResponse(status_code=202, content={
             "job_id": job_id,
@@ -281,9 +245,36 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             if row is None:
                 return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
             source_path = Path(str(row.get("input_path", "") or "")).resolve()
-            if not source_path.exists():
+            if not source_path.exists() or not source_path.is_file():
                 return JSONResponse(status_code=404, content={"error": "input_file_missing", "job_id": job_id})
-            return JSONResponse(status_code=409, content={"error": "retry_not_implemented", "job_id": job_id})
+            lib = str(row.get("library_id", "") or "").strip()
+            if not lib:
+                return JSONResponse(status_code=400, content={"error": "library_id_missing", "job_id": job_id})
+            raw_options = str(row.get("options_json", "") or "").strip()
+            parsed_options: dict[str, Any] = {}
+            if raw_options:
+                try:
+                    parsed = json.loads(raw_options)
+                    if isinstance(parsed, dict):
+                        parsed_options = parsed
+                except Exception:
+                    parsed_options = {}
+            parsed_options.pop("_job_root", None)
+            parsed_options.pop("_workspace_path", None)
+            with source_path.open("rb") as fp:
+                retry_upload = UploadFile(
+                    filename=str(row.get("file_name", "") or source_path.name),
+                    file=io.BytesIO(fp.read()),
+                )
+                created = await create_parse_extract_job(file=retry_upload, library_id=lib, options=json.dumps(parsed_options, ensure_ascii=False))
+            payload: dict[str, Any]
+            if isinstance(created.body, (bytes, bytearray)):
+                payload = json.loads(created.body.decode("utf-8"))
+            elif isinstance(created.body, str):
+                payload = json.loads(created.body)
+            else:
+                payload = {}
+            return JSONResponse(status_code=202, content={"source_job_id": job_id, "new_job": payload})
         if isinstance(result, dict) and "error" in result:
             if result.get("error") == "job_not_retryable":
                 return JSONResponse(status_code=400, content=result)

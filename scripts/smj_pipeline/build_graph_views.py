@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-SUPPLY_CHAIN_ROOT = Path("outputs/smj_supply_chain_batch").resolve()
 logger = logging.getLogger(__name__)
 
 
@@ -25,7 +24,6 @@ def parse_args() -> argparse.Namespace:
         default=Path("outputs/smj_supply_chain_batch/supply_chain_merged_20260414_113031/graph_views.json"),
     )
     p.add_argument("--overview-limit", type=int, default=700)
-    p.add_argument("--allow-non-supply-chain", action="store_true")
     return p.parse_args()
 
 
@@ -53,17 +51,6 @@ def _coerce_int(value: object) -> int | None:
     except ValueError:
         return None
 
-
-def _enforce_supply_chain_path(path: Path, allow_non_supply_chain: bool, flag_name: str) -> None:
-    resolved = path.resolve()
-    if allow_non_supply_chain:
-        return
-    if SUPPLY_CHAIN_ROOT not in resolved.parents and resolved != SUPPLY_CHAIN_ROOT:
-        raise RuntimeError(
-            f"{flag_name} path is outside supply-chain scope: {resolved}\n"
-            f"allowed root: {SUPPLY_CHAIN_ROOT}\n"
-            "use --allow-non-supply-chain to override explicitly"
-        )
 
 def _entropy_from_counts(counts: list[int]) -> float:
     total = sum(counts)
@@ -265,8 +252,6 @@ def run_build(artifact_json: Path, output_json: Path | None = None) -> Path | No
 
 def main() -> None:
     args = parse_args()
-    _enforce_supply_chain_path(args.input_json, args.allow_non_supply_chain, "--input-json")
-    _enforce_supply_chain_path(args.output_json, args.allow_non_supply_chain, "--output-json")
     result = run_build(
         artifact_json=args.input_json,
         output_json=args.output_json,

@@ -1,4 +1,4 @@
-ï»¿const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
 const { spawn, execFile } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -20,7 +20,7 @@ let quitInProgress = false;
 let backendStartedByUs = false;
 
 function appUrl() {
-  return `http://${HOST}:${runtimePort}/frontend/workbench/`;
+  return `http://${HOST}:${runtimePort}/healthz`;
 }
 
 function healthUrl(port) {
@@ -158,11 +158,10 @@ async function startBackendServer() {
     }
   }
 
-  // No backend found â€” start one
+  // No backend found ¡ª start one
   runtimePort = await pickRuntimePort(BASE_PORT);
   backendStartedByUs = true;
   const repoRoot = getRepoRoot();
-  const viewsJson = chooseViewsJson(repoRoot);
 
   const args = [
     "run",
@@ -176,14 +175,8 @@ async function startBackendServer() {
     String(runtimePort),
   ];
 
-  if (viewsJson) {
-    args.push("--views-json", viewsJson);
-  }
-  args.push("--allow-non-supply-chain");
-
   console.log(`[desktop] repoRoot=${repoRoot}`);
   console.log(`[desktop] backend_port=${runtimePort}`);
-  console.log(`[desktop] views_json=${viewsJson}`);
   console.log(`[desktop] cmd: uv ${args.join(" ")}`);
 
   backendProc = spawn("uv", args, {
@@ -419,3 +412,4 @@ app.on("activate", () => {
       });
   }
 });
+

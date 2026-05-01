@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,17 @@ import re
 import shutil
 from typing import Any
 
+def _load_runtime_conventions_module():
+    module_path = Path(__file__).resolve().parent / "runtime_conventions.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_runtime_conventions_for_library_registry", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_RUNTIME_CONVENTIONS = _load_runtime_conventions_module()
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -39,10 +51,7 @@ def _default_workspace_root_base() -> Path:
     kn_graph_data = os.getenv("KN_GRAPH_DATA_DIR", "").strip()
     if kn_graph_data:
         return Path(kn_graph_data) / "libraries" / "workspaces"
-    if os.name == "nt":
-        preferred = Path(r"D:\KNGraphApp")
-        return preferred / "libraries" / "workspaces"
-    return Path.home() / ".kn_graph" / "libraries" / "workspaces"
+    return _RUNTIME_CONVENTIONS.resolve_storage_root(require_initialized=False) / "libraries" / "workspaces"
 
 
 def workspace_root_base_from_env() -> Path:

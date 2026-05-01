@@ -12,9 +12,6 @@ from kn_graph.config import Settings
 
 _SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
 
-SUPPLY_CHAIN_ROOT = _SCRIPTS_DIR.parent.parent / "outputs" / "smj_supply_chain_batch"
-
-
 def _load_module(name: str, relative_path: str):
     module_path = _SCRIPTS_DIR / relative_path
     spec = importlib.util.spec_from_file_location(name, module_path)
@@ -188,10 +185,7 @@ class GraphService:
         self._search_items: list[dict[str, Any]] = []
 
     def _resolve_views_json(self, library_id: str = "") -> Path | None:
-        resolved = self._settings.resolve_graph_views_path(library_id)
-        if resolved is not None:
-            return resolved
-        return SUPPLY_CHAIN_ROOT / "supply_chain_merged_20260414_113031" / "graph_views.json"
+        return self._settings.resolve_graph_views_path(library_id)
 
     def _ensure_loaded(self, library_id: str = "") -> None:
         if self._loaded and self._current_library == library_id:

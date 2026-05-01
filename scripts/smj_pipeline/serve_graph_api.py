@@ -15,12 +15,6 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-SUPPLY_CHAIN_ROOT = Path("outputs/smj_supply_chain_batch").resolve()
-SUPPLY_CHAIN_DEFAULT_VIEWS = Path(
-    "outputs/smj_supply_chain_batch/supply_chain_merged_20260414_113031/graph_views.json"
-)
-
-
 def _load_env_utils():
     module_path = Path(__file__).resolve().parent / "env_utils.py"
     spec = importlib.util.spec_from_file_location("smj_pipeline_env_utils_for_serve_graph_api", module_path)
@@ -140,45 +134,31 @@ def _scan_literature_libraries(index_root: Path) -> dict[str, Any]:
         return {"libraries": [], "default_library_id": ""}
 
 
-def _resolve_views_json(cli_views_json: Path | None, runs_root: Path) -> Path:
-    if cli_views_json is not None:
-        return cli_views_json
-    active_path = runs_root / "active.json"
-    if not active_path.exists():
-        return SUPPLY_CHAIN_DEFAULT_VIEWS
-    payload = json.loads(active_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"invalid active json: {active_path}")
-    graph_views = str(payload.get("graph_views", "")).strip()
-    if not graph_views:
-        raise RuntimeError(f"active json missing graph_views: {active_path}")
-    return Path(graph_views)
+def _resolve_views_json() -> Path:
+    reg_mod = _load_library_registry_module()
+    index_root = reg_mod.legacy_index_root_from_env()
+    registry = reg_mod.ensure_registry(legacy_index_root=index_root)
+    default_library_id = str(registry.get("default_library_id", "") or "").strip()
+    if not default_library_id:
+        raise RuntimeError("default_library_id_missing: configure LITERATURE_DEFAULT_LIBRARY_ID or registry default library")
+    workspace_root = reg_mod.resolve_workspace_root(registry, default_library_id)
+    if not workspace_root:
+        raise RuntimeError(f"library_workspace_missing: {default_library_id}")
+    views_json = Path(workspace_root) / "graph_views.json"
+    if not views_json.exists():
+        raise RuntimeError(f"graph_views_missing_for_library: {default_library_id} -> {views_json}")
+    return views_json
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Serve graph API and static frontend.")
-    p.add_argument("--views-json", type=Path, default=None)
-    p.add_argument("--frontend-dir", type=Path, default=Path("frontend_legacy/graph_3d"))
-    p.add_argument("--chat-frontend-dir", type=Path, default=Path("frontend_legacy/chat_embed"))
-    p.add_argument("--workbench-frontend-dir", type=Path, default=Path("frontend_legacy/workbench_spa"))
+    p.add_argument("--frontend-dir", type=Path, default=None)
+    p.add_argument("--chat-frontend-dir", type=Path, default=None)
+    p.add_argument("--workbench-frontend-dir", type=Path, default=None)
     p.add_argument("--workspace-layouts-file", type=Path, default=Path("outputs/workbench/workspace_layouts.json"))
-    p.add_argument("--runs-root", type=Path, default=Path("outputs/runs"))
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8013)
-    p.add_argument("--allow-non-supply-chain", action="store_true")
     return p.parse_args()
-
-
-def _enforce_supply_chain_path(path: Path, allow_non_supply_chain: bool) -> None:
-    resolved = path.resolve()
-    if allow_non_supply_chain:
-        return
-    if SUPPLY_CHAIN_ROOT not in resolved.parents and resolved != SUPPLY_CHAIN_ROOT:
-        raise RuntimeError(
-            f"views path is outside supply-chain scope: {resolved}\n"
-            f"allowed root: {SUPPLY_CHAIN_ROOT}\n"
-            "use --allow-non-supply-chain to override explicitly"
-        )
 
 
 def _json(handler: BaseHTTPRequestHandler, payload: dict[str, Any], status: int = 200) -> None:
@@ -912,7 +892,7 @@ def make_handler(
         if _agent_runner_mod is None:
             payload["code"] = "agent_runner_module_unavailable"
             payload["detail"] = "agent runner module unavailable"
-            payload["suggestion"] = "检查 scripts/smj_pipeline/agent_runner.py 是否存在且可导入"
+            payload["suggestion"] = "检�?scripts/smj_pipeline/agent_runner.py 是否存在且可导入"
             return payload
         try:
             cfg = _agent_runner_mod.load_codex_config(codex_config_path)
@@ -925,12 +905,12 @@ def make_handler(
                 payload["code"] = "ok"
             else:
                 payload["code"] = str(health.get("reason", "codex_unavailable") or "codex_unavailable")
-                payload["suggestion"] = "确认 OpenAI 鉴权环境变量、Codex CLI 安装与网络可达性"
+                payload["suggestion"] = "确认 OpenAI 鉴权环境变量、Codex CLI 安装与网络可达�?
             return payload
         except Exception as exc:
             payload["code"] = "codex_healthcheck_failed"
             payload["detail"] = str(exc)
-            payload["suggestion"] = "检查 codex 配置文件与可执行命令"
+            payload["suggestion"] = "检�?codex 配置文件与可执行命令"
             return payload
 
     def _check_workspace_and_library_config(library_id: str) -> list[dict[str, Any]]:
@@ -1036,7 +1016,7 @@ def make_handler(
         if not probe_script.exists():
             row["code"] = "mcp_probe_script_missing"
             row["detail"] = str(probe_script)
-            row["suggestion"] = "确认 scripts/smj_pipeline/mcp_probe.py 已存在"
+            row["suggestion"] = "确认 scripts/smj_pipeline/mcp_probe.py 已存�?
             return row
         cmd = [
             sys.executable,
@@ -1067,11 +1047,11 @@ def make_handler(
                 row["code"] = "ok"
             else:
                 row["code"] = f"mcp_probe_failed:{int(proc.returncode)}"
-                row["suggestion"] = "检查 kn_mcp_server、文献检索接口与 library_id 是否可用"
+                row["suggestion"] = "检�?kn_mcp_server、文献检索接口与 library_id 是否可用"
         except Exception as exc:
             row["code"] = "mcp_probe_exception"
             row["detail"] = str(exc)
-            row["suggestion"] = "检查 Python 运行环境与 mcp_probe.py 可执行性"
+            row["suggestion"] = "检�?Python 运行环境�?mcp_probe.py 可执行�?
         return row
 
     def _build_preflight_payload(library_id: str, base_url: str) -> dict[str, Any]:
@@ -1488,7 +1468,7 @@ def make_handler(
                         return _json(
                             self,
                             {
-                                "answer": "文献服务暂不可用，当前无法基于文献库给出可靠回答。",
+                                "answer": "文献服务暂不可用，当前无法基于文献库给出可靠回答�?,
                                 "citations": [],
                                 "retrieval": {
                                     "keyword_hits": [],
@@ -1569,7 +1549,7 @@ def make_handler(
                     text = raw.decode("utf-8", errors="ignore")
                     if "id=\"kn-chat-entry\"" not in text:
                         entry = (
-                            "<a id=\"kn-chat-entry\" href=\"/frontend/chat/\" "
+                            "<a id=\"kn-chat-entry\" href=\"/deprecated-frontend/chat/\" "
                             "style=\"position:fixed;right:20px;bottom:20px;z-index:9999;"
                             "background:#0f766e;color:#fff;text-decoration:none;padding:10px 14px;"
                             "border-radius:999px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.2);\">AI \u95ee\u7b54</a>"
@@ -1588,9 +1568,9 @@ def make_handler(
             self.wfile.write(raw)
 
         def _serve_chat_static(self, rel_path: str) -> None:
-            root = (chat_frontend_dir or Path("frontend/chat_embed")).resolve()
+            root = (chat_frontend_dir or Path("__removed__/chat_embed")).resolve()
             if not root.is_dir():
-                legacy_root = Path("frontend_legacy/chat_embed").resolve()
+                legacy_root = Path("__removed_legacy__/chat_embed").resolve()
                 if legacy_root.is_dir():
                     root = legacy_root
             safe = rel_path.lstrip("/")
@@ -1608,9 +1588,9 @@ def make_handler(
             self.wfile.write(raw)
 
         def _serve_workbench_static(self, rel_path: str) -> None:
-            root = (workbench_frontend_dir or Path("frontend/workbench_spa")).resolve()
+            root = (workbench_frontend_dir or Path("__removed__/workbench_spa")).resolve()
             if not root.is_dir():
-                legacy_root = Path("frontend_legacy/workbench_spa").resolve()
+                legacy_root = Path("__removed_legacy__/workbench_spa").resolve()
                 if legacy_root.is_dir():
                     root = legacy_root
             safe = rel_path.lstrip("/")
@@ -1825,18 +1805,18 @@ def make_handler(
                 except Exception as exc:
                     return _json(self, {"error": "workspace_layout_get_failed", "detail": str(exc)}, status=500)
 
-            if path in ("/", "/frontend", "/frontend/"):
+            if path in ("/", "/deprecated-frontend", "/deprecated-frontend/"):
                 return self._serve_static("index.html")
-            if path in ("/frontend/workbench", "/frontend/workbench/"):
+            if path in ("/deprecated-frontend/workbench", "/deprecated-frontend/workbench/"):
                 return self._serve_workbench_static("index.html")
-            if path.startswith("/frontend/workbench/"):
-                return self._serve_workbench_static(path[len("/frontend/workbench/") :])
-            if path in ("/frontend/chat", "/frontend/chat/"):
+            if path.startswith("/deprecated-frontend/workbench/"):
+                return self._serve_workbench_static(path[len("/deprecated-frontend/workbench/") :])
+            if path in ("/deprecated-frontend/chat", "/deprecated-frontend/chat/"):
                 return self._serve_chat_static("index.html")
-            if path.startswith("/frontend/chat/"):
-                return self._serve_chat_static(path[len("/frontend/chat/") :])
-            if path.startswith("/frontend/"):
-                return self._serve_static(path[len("/frontend/") :])
+            if path.startswith("/deprecated-frontend/chat/"):
+                return self._serve_chat_static(path[len("/deprecated-frontend/chat/") :])
+            if path.startswith("/deprecated-frontend/"):
+                return self._serve_static(path[len("/deprecated-frontend/") :])
 
             if path == "/graph/overview":
                 node_ids = overview["node_ids"]
@@ -2061,8 +2041,7 @@ def make_handler(
 def main() -> None:
     _ENV_UTILS.load_repo_env()
     args = parse_args()
-    views_json = _resolve_views_json(args.views_json, args.runs_root)
-    _enforce_supply_chain_path(views_json, args.allow_non_supply_chain)
+    views_json = _resolve_views_json()
     views = json.loads(views_json.read_text(encoding="utf-8"))
     handler = make_handler(
         views,
@@ -2072,13 +2051,15 @@ def main() -> None:
         workspace_layouts_file=args.workspace_layouts_file,
     )
     server = ThreadingHTTPServer((args.host, args.port), handler)
-    print(f"Graph API serving: http://{args.host}:{args.port}/frontend/")
+    print(f"Graph API serving: http://{args.host}:{args.port}/healthz")
     print(f"Using graph views: {views_json}")
     server.serve_forever()
 
 
 if __name__ == "__main__":
     main()
+
+
 
 
 

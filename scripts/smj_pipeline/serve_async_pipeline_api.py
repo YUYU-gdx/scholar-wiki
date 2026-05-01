@@ -18,7 +18,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
-
 RUNS_ROOT_DEFAULT = Path("outputs/runs")
 JOB_EVENTS = {
     "accepted",
@@ -61,6 +60,19 @@ def _load_env_utils():
 
 
 _ENV_UTILS = _load_env_utils()
+
+
+def _load_runtime_conventions():
+    module_path = Path(__file__).resolve().parent / "runtime_conventions.py"
+    spec = importlib.util.spec_from_file_location("smj_pipeline_runtime_conventions_for_async_api", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load module: {module_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_RUNTIME_CONVENTIONS = _load_runtime_conventions()
 
 
 class JobStore(Protocol):
@@ -541,7 +553,8 @@ def _build_job_store() -> JobStore:
         return InMemoryJobStore()
     if dsn:
         return PostgresJobStore(dsn)
-    db_path_raw = str(os.getenv("PIPELINE_SQLITE_PATH", "outputs/workbench/pipeline_jobs.sqlite")).strip() or "outputs/workbench/pipeline_jobs.sqlite"
+    sqlite_default_path = str(getattr(_RUNTIME_CONVENTIONS, "PIPELINE_SQLITE_DEFAULT_PATH", "outputs/workbench/pipeline_jobs.sqlite"))
+    db_path_raw = str(os.getenv("PIPELINE_SQLITE_PATH", sqlite_default_path)).strip() or sqlite_default_path
     return SQLiteJobStore(Path(db_path_raw))
 
 
@@ -599,6 +612,10 @@ def _resolve_library_workspace(library_id: str) -> Path:
     lib = str(library_id or "").strip()
     if not lib:
         raise RuntimeError("library_id_required")
+    try:
+        _RUNTIME_CONVENTIONS.resolve_storage_root(require_initialized=True)
+    except Exception as exc:
+        raise RuntimeError(str(exc))
     lr_mod = _maybe_load_library_registry_module()
     registry = lr_mod.ensure_registry()
     root = str(lr_mod.resolve_workspace_root(registry, lib) or "").strip()
@@ -607,6 +624,11 @@ def _resolve_library_workspace(library_id: str) -> Path:
     path = Path(root).resolve()
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _is_supported_source(filename: str) -> bool:
+    suffix = Path(str(filename or "")).suffix.lower()
+    return suffix in set(getattr(_RUNTIME_CONVENTIONS, "SUPPORTED_SOURCE_SUFFIXES", (".pdf",)))
 
 
 def _save_upload(file: UploadFile, target: Path) -> tuple[str, int]:
@@ -622,6 +644,20 @@ def _save_upload(file: UploadFile, target: Path) -> tuple[str, int]:
             hasher.update(chunk)
             size += len(chunk)
     return hasher.hexdigest(), size
+
+
+def _read_text_source(input_path: Path) -> str:
+    suffix = input_path.suffix.lower()
+    text = input_path.read_text(encoding="utf-8", errors="ignore")
+    if suffix in {".html", ".htm"}:
+        return text
+    if suffix == ".md":
+        import html
+
+        return f"<html><body><pre>{html.escape(text)}</pre></body></html>"
+    import html
+
+    return f"<html><body><pre>{html.escape(text)}</pre></body></html>"
 
 
 def _stage_update(store: JobStore, job_id: str, stage: str, progress: int, event: str, **extra: Any) -> None:
@@ -677,6 +713,30 @@ def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore)
             raise RuntimeError(f"{code}:{getattr(exc, 'detail', str(exc))}")
         raise
     _stage_update(store, job_id, "parse_pdf", 45, "stage_done", status="running")
+    return meta
+
+
+def _run_prepare_readable(job_id: str, input_path: Path, run_dir: Path, store: JobStore) -> dict[str, Any]:
+    _stage_update(store, job_id, "prepare_readable", 25, "stage_started", status="running")
+    if _is_cancel_requested(store, job_id):
+        raise RuntimeError("job_cancelled")
+    parse_dir = run_dir / "parse"
+    parse_dir.mkdir(parents=True, exist_ok=True)
+    parsed_md = parse_dir / "parsed.md"
+    parsed_html = parse_dir / "parsed.html"
+    content = input_path.read_text(encoding="utf-8", errors="ignore")
+    if input_path.suffix.lower() == ".md":
+        parsed_md.write_text(content, encoding="utf-8")
+    else:
+        parsed_md.write_text(content, encoding="utf-8")
+    parsed_html.write_text(_read_text_source(input_path), encoding="utf-8")
+    meta = {
+        "markdown_path": str(parsed_md),
+        "html_path": str(parsed_html),
+        "source_kind": str(input_path.suffix.lower()),
+    }
+    (parse_dir / "parse_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    _stage_update(store, job_id, "prepare_readable", 45, "stage_done", status="running")
     return meta
 
 
@@ -806,7 +866,7 @@ def _run_finalize(
                 _stage_update(store, job_id, "finalize", 98, "graph_rebuild_started", status="running")
                 src_path = raw_llm_path or artifact_path
                 if src_path and src_path.exists():
-                    artifact_result = run_export(input_json=src_path, output_json=artifact_path, allow_non_supply_chain=True)
+                    artifact_result = run_export(input_json=src_path, output_json=artifact_path)
                     if artifact_result and artifact_result.exists():
                         ws_path = Path(workspace_path)
                         graph_output = ws_path / "graph_views.json"
@@ -855,11 +915,14 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
     else:
         run_dir = runs_root / job_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    input_pdf = Path(input_path).resolve()
+    input_file = Path(input_path).resolve()
     try:
-        parse_meta = _run_parse_pdf(job_id, input_pdf, run_dir, job_store)
+        if input_file.suffix.lower() == ".pdf":
+            parse_meta = _run_parse_pdf(job_id, input_file, run_dir, job_store)
+        else:
+            parse_meta = _run_prepare_readable(job_id, input_file, run_dir, job_store)
         extract_result = _run_extract_entities(job_id, parse_meta, run_dir, job_store, options)
-        _run_finalize(job_id, input_pdf, parse_meta, extract_result, run_dir, job_store, options)
+        _run_finalize(job_id, input_file, parse_meta, extract_result, run_dir, job_store, options)
     except Exception as exc:
         if "job_cancelled" in str(exc):
             job_store.update_job(
@@ -921,7 +984,11 @@ def _build_celery_objects():
         options = dict(payload.get("options", {}))
         job_root_raw = str(options.get("_job_root", "") or "").strip()
         run_dir = (Path(job_root_raw).resolve() / "run") if job_root_raw else (runs_root / payload["job_id"])
-        parse_meta = _run_parse_pdf(payload["job_id"], Path(str(payload["input_path"])), run_dir, store)
+        input_file = Path(str(payload["input_path"]))
+        if input_file.suffix.lower() == ".pdf":
+            parse_meta = _run_parse_pdf(payload["job_id"], input_file, run_dir, store)
+        else:
+            parse_meta = _run_prepare_readable(payload["job_id"], input_file, run_dir, store)
         payload["parse_meta"] = parse_meta
         return payload
 
@@ -1047,6 +1114,28 @@ def create_app(
             "executor": executor if executor in {"celery", "inline"} else "inline",
         }
 
+    @app.get("/v1/storage/status")
+    def storage_status() -> dict[str, Any]:
+        suggested = _RUNTIME_CONVENTIONS.detect_default_storage_root()
+        exists = suggested.exists()
+        return {
+            "initialized": bool(exists),
+            "storage_root": str(suggested.resolve()),
+            "requires_init": not bool(exists),
+        }
+
+    @app.post("/v1/storage/init")
+    async def storage_init(storage_root: str | None = Form(default=None)) -> JSONResponse:
+        chosen = str(storage_root or "").strip()
+        path = Path(chosen).resolve() if chosen else _RUNTIME_CONVENTIONS.detect_default_storage_root()
+        try:
+            root = _RUNTIME_CONVENTIONS.ensure_storage_root(path)
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": "storage_init_failed", "detail": str(exc)})
+        os.environ["KN_STORAGE_ROOT"] = str(root)
+        os.environ["LITERATURE_LIBRARY_WORKSPACES_ROOT"] = str((root / "libraries" / "workspaces").resolve())
+        return JSONResponse(status_code=200, content={"initialized": True, "storage_root": str(root.resolve())})
+
     def _parse_options(options_text: str | None) -> dict[str, Any]:
         parsed_options: dict[str, Any] = {}
         if options_text and options_text.strip():
@@ -1062,18 +1151,22 @@ def create_app(
     def _create_one_job(file: UploadFile, lib: str, base_options: dict[str, Any], source_job_id: str = "") -> dict[str, Any]:
         if not file.filename:
             raise HTTPException(status_code=400, detail={"error": "file_required"})
-        if not str(file.filename).lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail={"error": "pdf_only"})
+        if not _is_supported_source(str(file.filename)):
+            raise HTTPException(status_code=400, detail={"error": "unsupported_source_type"})
         workspace_root = _resolve_library_workspace(lib)
         parsed_options = dict(base_options)
         parsed_options["library_id"] = lib
         job_id = f"job_{uuid.uuid4().hex}"
-        run_dir = workspace_root / "imports" / "jobs" / job_id
+        run_dir = _RUNTIME_CONVENTIONS.build_job_root(workspace_root, job_id)
         upload_name = file.filename or "upload.pdf"
-        input_path = run_dir / "input" / upload_name
+        input_path = _RUNTIME_CONVENTIONS.build_job_input_path(workspace_root, job_id, upload_name)
         parsed_options["_job_root"] = str(run_dir.resolve())
         parsed_options["_workspace_path"] = str(workspace_root.resolve())
         file_hash, file_size = _save_upload(file, input_path)
+        source_archive = _RUNTIME_CONVENTIONS.build_source_archive_path(workspace_root, upload_name)
+        source_archive.parent.mkdir(parents=True, exist_ok=True)
+        if not source_archive.exists():
+            source_archive.write_bytes(input_path.read_bytes())
         idempotency_key = hashlib.sha256((file_hash + ":" + _safe_json_dumps(parsed_options)).encode("utf-8")).hexdigest()
         now = _now_iso()
         payload = {
@@ -1126,6 +1219,18 @@ def create_app(
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
             return JSONResponse(status_code=exc.status_code, content=detail)
+        except RuntimeError as exc:
+            text = str(exc)
+            if text.startswith("storage_root_not_initialized:"):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "storage_not_initialized",
+                        "detail": text,
+                        "suggested_root": str(_RUNTIME_CONVENTIONS.detect_default_storage_root()),
+                    },
+                )
+            return JSONResponse(status_code=500, content={"error": "create_job_failed", "detail": text})
 
     @app.post("/v1/pipeline/parse-extract/batch")
     async def create_parse_extract_batch_jobs(
@@ -1145,6 +1250,8 @@ def create_app(
             except HTTPException as exc:
                 detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
                 rejected.append({"file_name": str(getattr(file, "filename", "") or ""), **detail})
+            except RuntimeError as exc:
+                rejected.append({"file_name": str(getattr(file, "filename", "") or ""), "error": str(exc)})
             except Exception as exc:
                 rejected.append({"file_name": str(getattr(file, "filename", "") or ""), "error": str(exc)})
         return JSONResponse(
@@ -1312,6 +1419,10 @@ def main() -> None:
     args = parse_args()
     import uvicorn
 
+    print(
+        "[DEPRECATED] serve_async_pipeline_api.py is kept for compatibility only. "
+        "Use: uv run python -m kn_graph serve --host 127.0.0.1 --port 8013"
+    )
     uvicorn.run(app, host=args.host, port=int(args.port), reload=False)
 
 
