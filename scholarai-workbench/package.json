@@ -66,6 +66,7 @@
     "@codemirror/view": "^6.41.1",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
+    "idb": "^8.0.3",
     "katex": "^0.16.45",
     "lightningcss-win32-x64-msvc": "^1.32.0",
     "lucide-react": "^0.546.0",
