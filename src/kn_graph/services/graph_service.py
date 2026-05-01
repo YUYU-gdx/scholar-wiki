@@ -826,6 +826,80 @@ class GraphService:
             payload["title"] = _pretty_title(pkey)
         return payload
 
+    def get_paper_files(self, paper_id_or_doi: str, library_id: str = "") -> dict[str, Any] | None:
+        """Return available readable files for a paper."""
+        paper = self.get_paper(paper_id_or_doi, library_id=library_id)
+        if paper is None:
+            return None
+
+        source_pdf = str(paper.get("source_pdf_path", "") or "").strip()
+        source_md = str(paper.get("source_md_path", "") or "").strip()
+        offline_html = str(paper.get("offline_html_path", "") or "").strip()
+
+        files: dict[str, dict[str, Any]] = {}
+        default_view = "none"
+
+        if source_pdf:
+            try:
+                p = Path(source_pdf)
+                if p.exists():
+                    files["pdf"] = {
+                        "path": source_pdf,
+                        "name": p.name,
+                        "size_bytes": p.stat().st_size,
+                    }
+                    if default_view == "none":
+                        default_view = "pdf"
+            except OSError:
+                pass
+
+        if source_md:
+            try:
+                p = Path(source_md)
+                if p.exists() and p.is_file():
+                    files["markdown"] = {
+                        "path": str(p),
+                        "name": p.name,
+                        "size_bytes": p.stat().st_size,
+                    }
+                    if default_view == "none":
+                        default_view = "markdown"
+                elif p.exists() and p.is_dir():
+                    for cand_name in ("full.md", "merged.md", "output.md"):
+                        cand = p / cand_name
+                        if cand.exists():
+                            files["markdown"] = {
+                                "path": str(cand),
+                                "name": cand.name,
+                                "size_bytes": cand.stat().st_size,
+                            }
+                            if default_view == "none":
+                                default_view = "markdown"
+                            break
+            except OSError:
+                pass
+
+        if offline_html:
+            try:
+                p = Path(offline_html)
+                if p.exists():
+                    files["html"] = {
+                        "path": offline_html,
+                        "name": p.name,
+                        "size_bytes": p.stat().st_size,
+                    }
+                    if default_view == "none":
+                        default_view = "html"
+            except OSError:
+                pass
+
+        return {
+            "paper_id": paper.get("paper_id", paper_id_or_doi),
+            "library_id": paper.get("library_id", library_id),
+            "files": files,
+            "default_view": default_view,
+        }
+
     def reload(self, library_id: str = "") -> dict[str, Any]:
         self._loaded = False
         self._current_library = ""
