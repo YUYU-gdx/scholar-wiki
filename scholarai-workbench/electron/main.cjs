@@ -320,6 +320,28 @@ ipcMain.handle("open-local-path", async (_evt, targetPath) => {
   }
 });
 
+ipcMain.handle("read-local-file", async (_evt, filePath) => {
+  const p = String(filePath || "").trim();
+  if (!p) return { ok: false, error: "empty_path" };
+  try {
+    const buf = fs.readFileSync(p);
+    return { ok: true, data: buf.toString('base64'), size: buf.length };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
+ipcMain.handle("read-local-text", async (_evt, filePath) => {
+  const p = String(filePath || "").trim();
+  if (!p) return { ok: false, error: "empty_path" };
+  try {
+    const text = fs.readFileSync(p, "utf8");
+    return { ok: true, data: text, size: Buffer.byteLength(text, 'utf8') };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
 app.on("before-quit", () => {
   quitInProgress = true;
   stopBackendServer().catch(() => {});
