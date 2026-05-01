@@ -338,4 +338,21 @@ export interface WorkspaceLayout {
   layout: Record<string, unknown>;
 }
 
+export interface PaperFilesFileInfo {
+  path: string;
+  name: string;
+  size_bytes: number;
+}
+
+export interface PaperFiles {
+  paper_id: string;
+  library_id: string;
+  files: {
+    pdf?: PaperFilesFileInfo;
+    markdown?: PaperFilesFileInfo;
+    html?: PaperFilesFileInfo;
+  };
+  default_view: 'pdf' | 'markdown' | 'html' | 'none';
+}
+
 export type View = 'library' | 'graph' | 'chat' | 'reader' | 'pipeline';
