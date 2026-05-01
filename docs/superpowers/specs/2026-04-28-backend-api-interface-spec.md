@@ -72,6 +72,31 @@ Returns paper detail by `paper_id` or `doi`.
 Errors:
 - `404 {"error":"paper_not_found","paper_id":"..."}`
 
+#### GET /paper/{paper_id_or_doi}/files
+Returns available readable files (PDF, Markdown, HTML) for a paper.
+
+Query params:
+- `library_id` (optional)
+
+Response:
+```json
+{
+  "paper_id": "doi_smith2023",
+  "library_id": "supply_chain",
+  "files": {
+    "pdf": { "path": "...", "name": "smith2023.pdf", "size_bytes": 2345678 },
+    "markdown": { "path": "...", "name": "full.md", "size_bytes": 45678 }
+  },
+  "default_view": "pdf"
+}
+```
+
+File priority: PDF > Markdown > HTML. `default_view` is `"none"` when no files exist.
+Markdown detection: if `source_md_path` is a file, return directly; if it's a directory, search for `full.md`, `merged.md`, or `output.md`.
+
+Errors:
+- `404 {"error":"paper_not_found","paper_id":"..."}`
+
 #### GET /variable/{var_id}
 Returns variable detail and paper aggregation.
 
