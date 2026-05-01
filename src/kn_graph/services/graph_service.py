@@ -156,6 +156,7 @@ def _relation_summary_from_mention(m: dict[str, Any]) -> dict[str, Any]:
 class GraphService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._current_library: str = ""
         self._views_json: Path | None = None
         self._views: dict[str, Any] | None = None
         self._loaded = False
@@ -186,27 +187,30 @@ class GraphService:
 
         self._search_items: list[dict[str, Any]] = []
 
-    def _resolve_views_json(self) -> Path:
-        if self._settings.views_json is not None:
-            return Path(self._settings.views_json)
-        runs_root = Path("outputs/runs")
-        active_path = runs_root / "active.json"
-        if not active_path.exists():
-            return SUPPLY_CHAIN_ROOT / "supply_chain_merged_20260414_113031" / "graph_views.json"
-        payload = json.loads(active_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"invalid active json: {active_path}")
-        graph_views = str(payload.get("graph_views", "")).strip()
-        if not graph_views:
-            raise RuntimeError(f"active json missing graph_views: {active_path}")
-        return Path(graph_views)
+    def _resolve_views_json(self, library_id: str = "") -> Path | None:
+        resolved = self._settings.resolve_graph_views_path(library_id)
+        if resolved is not None:
+            return resolved
+        return SUPPLY_CHAIN_ROOT / "supply_chain_merged_20260414_113031" / "graph_views.json"
 
-    def _ensure_loaded(self) -> None:
-        if self._loaded:
+    def _ensure_loaded(self, library_id: str = "") -> None:
+        if self._loaded and self._current_library == library_id:
             return
-        if self._views_json is None:
-            self._views_json = self._resolve_views_json()
-        self._views = json.loads(self._views_json.read_text(encoding="utf-8"))
+        path = self._resolve_views_json(library_id)
+        if path is None or not path.exists():
+            self._views = {"nodes": {}, "edges": [], "moderation_links": [], "interaction_links": [], "edge_index_by_node": {}, "overview": {"node_ids": [], "edge_indexes": []}, "paper_map": {}, "meta": {"isolated_node_count": 0, "dataset_library_name": ""}}
+            self._views_json = path
+            self._current_library = library_id
+            self._build_indexes()
+            self._loaded = True
+            return
+        try:
+            raw = path.read_text(encoding="utf-8")
+            self._views = json.loads(raw)
+        except (json.JSONDecodeError, OSError):
+            self._views = {"nodes": {}, "edges": [], "moderation_links": [], "interaction_links": [], "edge_index_by_node": {}, "overview": {"node_ids": [], "edge_indexes": []}, "paper_map": {}, "meta": {"isolated_node_count": 0, "dataset_library_name": ""}}
+        self._views_json = path
+        self._current_library = library_id
         self._build_indexes()
         self._loaded = True
 
@@ -528,8 +532,8 @@ class GraphService:
                 "embedding": _hash_embedding(text_blob),
             })
 
-    def get_overview(self) -> dict[str, Any]:
-        self._ensure_loaded()
+    def get_overview(self, library_id: str = "") -> dict[str, Any]:
+        self._ensure_loaded(library_id)
         return {
             "meta": self._meta_public,
             "nodes": [self._nodes_public_by_id[nid] for nid in self._overview["node_ids"] if nid in self._nodes_public_by_id],
@@ -539,8 +543,8 @@ class GraphService:
             "isolated_nodes": self._isolated_nodes,
         }
 
-    def get_full(self) -> dict[str, Any]:
-        self._ensure_loaded()
+    def get_full(self, library_id: str = "") -> dict[str, Any]:
+        self._ensure_loaded(library_id)
         return {
             "meta": self._meta_public,
             "nodes": list(self._nodes_public_by_id.values()),
@@ -559,8 +563,9 @@ class GraphService:
         keyword_weight: float = 0.5,
         vector_weight: float = 0.5,
         vector_backend: str = "hash",
+        library_id: str = "",
     ) -> dict[str, Any]:
-        self._ensure_loaded()
+        self._ensure_loaded(library_id)
         query_text = str(query or "").strip().lower()
         if not query_text:
             return {"results": [], "search_meta": {"vector_backend_requested": vector_backend, "vector_backend_used": "hash"}}
@@ -604,8 +609,9 @@ class GraphService:
         hops: int = 1,
         limit_nodes: int = 350,
         limit_edges: int = 900,
+        library_id: str = "",
     ) -> dict[str, Any] | None:
-        self._ensure_loaded()
+        self._ensure_loaded(library_id)
         if node_id not in self._nodes:
             return None
 
@@ -655,8 +661,8 @@ class GraphService:
             "interaction_links": neighborhood_inters,
         }
 
-    def get_paper(self, paper_id_or_doi: str) -> dict[str, Any] | None:
-        self._ensure_loaded()
+    def get_paper(self, paper_id_or_doi: str, library_id: str = "") -> dict[str, Any] | None:
+        self._ensure_loaded(library_id)
         pid = str(paper_id_or_doi or "").strip()
         if not pid:
             return None
@@ -678,8 +684,17 @@ class GraphService:
             payload["offline_html_path"] = ""
         return payload
 
-    def get_variable(self, node_id: str) -> dict[str, Any] | None:
-        self._ensure_loaded()
+    def reload(self, library_id: str = "") -> dict[str, Any]:
+        self._loaded = False
+        self._current_library = ""
+        try:
+            self._ensure_loaded(library_id)
+            return {"status": "ok", "library_id": library_id, "node_count": len(self._nodes)}
+        except Exception as exc:
+            return {"status": "error", "library_id": library_id, "error": str(exc)}
+
+    def get_variable(self, node_id: str, library_id: str = "") -> dict[str, Any] | None:
+        self._ensure_loaded(library_id)
         nid = str(node_id or "").strip()
         if nid not in self._nodes:
             return None

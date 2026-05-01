@@ -93,8 +93,11 @@ class LiteratureService:
     def list_libraries(self) -> dict[str, Any]:
         try:
             reg_mod = _load_library_registry_module()
-            index_root = Path("outputs/literature_libraries")
-            registry = reg_mod.ensure_registry(legacy_index_root=index_root)
+            index_root = self._settings.indexes_dir
+            registry = reg_mod.ensure_registry(
+                registry_path=self._settings.registry_path,
+                legacy_index_root=index_root,
+            )
             return reg_mod.list_libraries_payload(registry)
         except Exception:
             return {"libraries": [], "default_library_id": ""}

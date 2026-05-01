@@ -36,6 +36,9 @@ def legacy_index_root_from_env() -> Path:
 
 
 def _default_workspace_root_base() -> Path:
+    kn_graph_data = os.getenv("KN_GRAPH_DATA_DIR", "").strip()
+    if kn_graph_data:
+        return Path(kn_graph_data) / "libraries" / "workspaces"
     if os.name == "nt":
         preferred = Path(r"D:\KNGraphApp")
         return preferred / "libraries" / "workspaces"
@@ -47,6 +50,22 @@ def workspace_root_base_from_env() -> Path:
     if raw:
         return Path(raw)
     return _default_workspace_root_base()
+
+
+_configured_paths: dict[str, Path] = {}
+
+
+def configure(*, workspace_root: Path | None = None, registry_path: Path | None = None, index_root: Path | None = None) -> None:
+    if workspace_root is not None:
+        _configured_paths["workspace_root"] = workspace_root
+    if registry_path is not None:
+        _configured_paths["registry_path"] = registry_path
+    if index_root is not None:
+        _configured_paths["index_root"] = index_root
+
+
+def _get_configured_workspace_root() -> Path | None:
+    return _configured_paths.get("workspace_root")
 
 
 def _legacy_workspace_root_default() -> Path:
@@ -96,9 +115,13 @@ def save_registry(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def ensure_registry(registry_path: Path | None = None, legacy_index_root: Path | None = None) -> dict[str, Any]:
-    reg_path = (registry_path or registry_path_from_env()).resolve()
-    idx_root = (legacy_index_root or legacy_index_root_from_env()).resolve()
-    workspace_base = workspace_root_base_from_env().resolve()
+    reg_path = (registry_path or _configured_paths.get("registry_path") or registry_path_from_env()).resolve()
+    idx_root = (legacy_index_root or _configured_paths.get("index_root") or legacy_index_root_from_env()).resolve()
+    configured_ws = _get_configured_workspace_root()
+    if configured_ws:
+        workspace_base = configured_ws.resolve()
+    else:
+        workspace_base = workspace_root_base_from_env().resolve()
     workspace_base.mkdir(parents=True, exist_ok=True)
     migrate_legacy_workspace = not str(os.getenv("LITERATURE_LIBRARY_WORKSPACES_ROOT", "") or "").strip()
     legacy_workspace_root = _legacy_workspace_root_default()

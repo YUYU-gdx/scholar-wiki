@@ -1,202 +1,230 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { Compass, ZoomIn, ZoomOut, Rotate3D, Focus, MessageCircle, X, Search, Share2 } from 'lucide-react';
+import { useApp } from '../App';
+import { api } from '../api';
+import type { GraphNode, GraphEdge, SearchResponse } from '../types';
 
-import { Compass, ZoomIn, ZoomOut, Rotate3D, Focus, X, Verified, FileText, MessageCircle } from 'lucide-react';
-import { motion } from 'motion/react';
+function nodeLabel(n: GraphNode): string {
+  return n.label || n.name || n.id || 'node';
+}
+
+function escapeHtml(t: string): string {
+  return String(t || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] || c));
+}
 
 export default function GraphView() {
-  const nodes = [
-    { id: 1, label: 'NEUROPLASTICITY_INDEX', x: 500, y: 500, size: 12, type: 'variable', active: true },
-    { id: 2, label: 'SYNAPTIC_DENSITY', x: 300, y: 400, size: 8, type: 'variable' },
-    { id: 3, label: 'COGNITIVE_RESERVE', x: 700, y: 450, size: 10, type: 'variable' },
-    { id: 4, label: 'CHEN ET AL. (2023)', x: 190, y: 540, size: 20, type: 'paper' },
-    { id: 5, label: 'KIM ET AL. (2024)', x: 840, y: 340, size: 20, type: 'paper' },
-    { id: 6, label: 'GARCIA (2022)', x: 510, y: 690, size: 20, type: 'paper' },
-  ];
+  const { graphData, setGraphData, selectedNodeId, setSelectedNodeId, setCurrentView, graphLoading } = useApp();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResponse | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [nodeDetail, setNodeDetail] = useState<string[]>([]);
+  const [relationDetail, setRelationDetail] = useState<string[]>([]);
+  const canvasRef = useRef<HTMLDivElement>(null);
 
-  const edges = [
-    { from: 1, to: 2, dashed: true, color: '#14b8a6' },
-    { from: 1, to: 3, color: '#f43f5e' },
-    { from: 1, to: 6, color: '#14b8a6' },
-    { from: 2, to: 4, weight: 0.5, color: '#94a3b8' },
-    { from: 3, to: 5, weight: 1.5, color: '#8b5cf6' },
-  ];
+  const visibleNodes = useMemo(() => {
+    if (!graphData) return [];
+    const validated = graphData.nodes.filter(
+      n => String(n.type || '') === 'variable' && !!n.validated_variable && Number(n.relation_degree || 0) > 0
+    );
+    if (validated.length > 0) return validated;
+    const withEdges = graphData.nodes.filter(n => String(n.type || '') === 'variable' && Number(n.relation_degree || 0) > 0);
+    if (withEdges.length > 0) return withEdges;
+    return graphData.nodes.filter(n => String(n.type || '') === 'variable');
+  }, [graphData]);
+
+  const selectedNode = useMemo(() => {
+    if (!selectedNodeId || !graphData) return null;
+    return visibleNodes.find(n => n.id === selectedNodeId) || null;
+  }, [selectedNodeId, graphData, visibleNodes]);
+
+  const edgesForNode = useMemo(() => {
+    if (!selectedNodeId || !graphData) return [];
+    return graphData.edges.filter(e => {
+      const src = typeof e.source === 'object' ? e.source?.id : e.source;
+      const tgt = typeof e.target === 'object' ? e.target?.id : e.target;
+      return src === selectedNodeId || tgt === selectedNodeId;
+    });
+  }, [selectedNodeId, graphData]);
+
+  const paperIdsForNode = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edgesForNode) {
+      if (e.paper_id) ids.add(String(e.paper_id));
+    }
+    return ids;
+  }, [edgesForNode]);
+
+  const rankedNodes = useMemo(() => {
+    return [...visibleNodes]
+      .map(n => ({
+        node: n,
+        relCount: graphData ? graphData.edges.filter(e => {
+          const src = typeof e.source === 'object' ? e.source?.id : e.source;
+          const tgt = typeof e.target === 'object' ? e.target?.id : e.target;
+          return src === n.id || tgt === n.id;
+        }).length : 0,
+      }))
+      .sort((a, b) => b.relCount - a.relCount || nodeLabel(a.node).localeCompare(nodeLabel(b.node), 'zh-Hans-CN'))
+      .slice(0, 40);
+  }, [visibleNodes, graphData]);
+
+  useEffect(() => {
+    if (!selectedNode) return;
+    const name = nodeLabel(selectedNode);
+    const concept = String(selectedNode.latest_concept || '').trim() || '暂无概念定义';
+    const theories = Array.isArray(selectedNode.latest_theories) ? selectedNode.latest_theories.filter(Boolean) : [];
+    const srcInfo = selectedNode.latest_concept_source || {};
+    setNodeDetail([
+      `<strong>${escapeHtml(name)}</strong>`,
+      `变量概念：${escapeHtml(concept.slice(0, 100))}`,
+      `相关理论：${escapeHtml(theories.slice(0, 3).join('；') || '暂无提取')}`,
+      `来源论文：<code>${escapeHtml(String(srcInfo.paper_id || '-'))}</code>`,
+      `来源年份：<code>${escapeHtml(String(srcInfo.publication_year ?? '-'))}</code>`,
+    ]);
+    const relLines: string[] = [];
+    if (edgesForNode.length === 0) {
+      relLines.push('该变量当前没有可连接关系。');
+    } else {
+      for (const e of edgesForNode.slice(0, 8)) {
+        const s = typeof e.source === 'object' ? nodeLabel(e.source) : String(e.source);
+        const t = typeof e.target === 'object' ? nodeLabel(e.target) : String(e.target);
+        relLines.push(`${escapeHtml(s)} → ${escapeHtml(t)} (${escapeHtml(e.direction || 'unknown')})`);
+      }
+    }
+    relLines.push(`提及论文：<code>${[...paperIdsForNode].slice(0, 8).map(escapeHtml).join('、') || '-'}</code>`);
+    setRelationDetail(relLines);
+  }, [selectedNode, edgesForNode, paperIdsForNode]);
+
+  const doSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    try {
+      const res = await api.graph.search(searchQuery, 'variable', 12);
+      setSearchResults(res);
+    } catch { /* ignore */ }
+    finally { setSearching(false); }
+  };
+
+  const selectAndJump = (node: GraphNode) => {
+    setSelectedNodeId(node.id);
+  };
+
+  const jumpToChat = () => {
+    setCurrentView('chat');
+  };
+
+  if (graphLoading) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-[#020617]">
+        <div className="text-center space-y-4">
+          <div className="w-10 h-10 border-2 border-secondary border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-on-surface-variant font-mono text-sm">Loading knowledge graph...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!graphData) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-[#020617]">
+        <div className="text-center space-y-4">
+          <p className="text-on-surface-variant font-mono text-sm">No graph data available.</p>
+          <p className="text-outline text-xs">Ensure the backend server is running.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 relative flex overflow-hidden bg-[#020617]">
       {/* Search Overlay */}
-      <div className="absolute top-8 left-8 w-80 bg-surface-container-low/60 backdrop-blur-xl border border-outline-variant/30 rounded-2xl p-4 z-10 precision-shadow overflow-hidden">
-        <div className="flex items-center gap-2 mb-4">
-          <Compass className="w-4 h-4 text-secondary" />
-          <span className="font-mono text-[10px] uppercase tracking-widest text-outline">Node Finder</span>
-        </div>
-        <div className="space-y-3">
-          <div className="p-3 bg-secondary/10 border border-secondary/20 rounded-xl cursor-not-allowed hover:bg-secondary/20 transition-all">
-            <div className="text-xs font-bold text-on-secondary-container mb-1">Amyloid Beta Clearance</div>
-            <div className="text-[10px] text-secondary/70 font-mono tracking-tight">8 connected papers • 3 variables</div>
+      <div className={`absolute top-6 left-6 w-80 z-10 precision-shadow overflow-hidden transition-all duration-300 ${showSearch ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none -translate-y-2'}`}>
+        <div className="bg-surface-container-low/60 backdrop-blur-xl border border-outline-variant/30 rounded-2xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Compass className="w-4 h-4 text-secondary" />
+            <span className="font-mono text-[10px] uppercase tracking-widest text-outline">Node Finder</span>
           </div>
-          <div className="p-3 bg-surface-container/10 border border-outline-variant/30 rounded-xl cursor-not-allowed hover:bg-surface-container/20 transition-all">
-            <div className="text-xs font-bold text-on-surface-variant mb-1">Microglial Activation</div>
-            <div className="text-[10px] text-outline font-mono tracking-tight">12 connected papers • 5 variables</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Canvas Context Area */}
-      <div className="flex-1 relative overflow-hidden">
-        {/* SVG Graph Visualization */}
-        <svg className="w-full h-full opacity-80" viewBox="0 0 1000 1000">
-          <defs>
-            <filter id="glow">
-              <feGaussianBlur stdDeviation="3.5" result="coloredBlur"/>
-              <feMerge>
-                <feMergeNode in="coloredBlur"/>
-                <feMergeNode in="SourceGraphic"/>
-              </feMerge>
-            </filter>
-          </defs>
-          
-          {/* Grid lines */}
-          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff05" strokeWidth="1"/>
-          </pattern>
-          <rect width="1000" height="1000" fill="url(#grid)" />
-
-          {/* Edges */}
-          {edges.map((edge, i) => {
-            const fromNode = nodes.find(n => n.id === edge.from)!;
-            const toNode = nodes.find(n => n.id === edge.to)!;
-            return (
-              <line 
-                key={i}
-                x1={fromNode.x} y1={fromNode.y} 
-                x2={toNode.x} y2={toNode.y} 
-                stroke={edge.color} 
-                strokeWidth={edge.weight || 1} 
-                strokeDasharray={edge.dashed ? '4' : '0'} 
-                className="opacity-40"
-              />
-            );
-          })}
-
-          {/* Nodes */}
-          {nodes.map((node) => (
-            <g key={node.id} className="cursor-pointer">
-              {node.type === 'variable' ? (
-                <circle 
-                  cx={node.x} cy={node.y} r={node.size} 
-                  fill={node.active ? '#14b8a6' : '#14b8a688'}
-                  filter={node.active ? 'url(#glow)' : ''}
-                  className="transition-all duration-300"
-                />
-              ) : (
-                <rect 
-                  x={node.x - 10} y={node.y - 10} 
-                  width={20} height={20} 
-                  fill="#475569" 
-                  transform={`rotate(${node.x % 30} ${node.x} ${node.y})`}
-                  className="opacity-60"
-                />
-              )}
-              {/* Tooltip labels */}
-              <text 
-                x={node.x + 15} y={node.y + 5} 
-                fill={node.active ? '#14b8a6' : '#94a3b8'} 
-                fontSize="9" 
-                className="font-mono tracking-widest font-bold uppercase opacity-80 pointer-events-none"
-              >
-                {node.label}
-              </text>
-            </g>
-          ))}
-        </svg>
-
-        {/* Perspective Overlay Grids */}
-        <div className="absolute inset-0 pointer-events-none opacity-10 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:40px_40px]"></div>
-      </div>
-
-      {/* Detail Panel */}
-      <aside className="absolute top-8 right-8 w-96 bottom-24 bg-surface-container-lowest/10 backdrop-blur-2xl border border-outline-variant/30 rounded-2xl flex flex-col z-20 overflow-hidden shadow-2xl">
-        <div className="p-6 border-b border-outline-variant/30">
-          <div className="flex items-center justify-between mb-4">
-            <span className="px-2 py-0.5 bg-secondary-container/20 text-secondary text-[10px] font-mono font-bold rounded-md border border-secondary/40 uppercase tracking-widest">Variable Node</span>
-            <button className="text-outline hover:text-on-surface transition-colors focus:outline-none">
-              <X className="w-4 h-4" />
+          <div className="flex gap-2 mb-3">
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') doSearch(); }}
+              placeholder="Search variables..."
+              className="flex-1 bg-surface-container/10 border border-outline-variant/30 rounded-lg px-3 py-1.5 text-xs text-on-surface placeholder:text-outline focus:ring-1 focus:ring-secondary/30 outline-none"
+            />
+            <button onClick={doSearch} disabled={searching} className="bg-secondary/20 text-secondary px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-secondary/30 transition-all">
+              {searching ? '...' : 'Search'}
             </button>
           </div>
-          <h2 className="text-2xl font-medium text-white mb-1 font-sans">Neuroplasticity Index (NI)</h2>
-          <p className="text-outline text-xs leading-relaxed italic font-serif">"A composite metric representing the brain's structural and functional adaptability across lifelong learning cycles."</p>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
-          <div>
-            <h3 className="font-mono text-[10px] text-outline uppercase tracking-widest border-b border-outline-variant/10 pb-2 mb-4">Key Evidence Snippets</h3>
-            <div className="space-y-4">
-              <div className="p-4 bg-surface-container-low/20 border-l-2 border-secondary rounded-r-xl">
-                <p className="font-serif text-on-primary-fixed-variant text-sm leading-relaxed italic mb-3">"...elevated NI levels were strongly correlated with increased synaptic pruning efficiency in the prefrontal cortex..."</p>
-                <div className="flex items-center gap-2">
-                  <Verified className="w-3.5 h-3.5 text-secondary" />
-                  <span className="text-[10px] font-mono font-semibold text-outline">KIM ET AL. (2024), NATURE NEURO</span>
-                </div>
-              </div>
-              <div className="p-4 bg-surface-container-low/20 border-l-2 border-outline rounded-r-xl">
-                <p className="font-serif text-on-primary-fixed-variant text-sm leading-relaxed italic mb-3">"...suggesting NI as a non-linear predictor for cognitive decline onset in aging populations."</p>
-                <div className="flex items-center gap-2">
-                  <FileText className="w-3.5 h-3.5 text-outline" />
-                  <span className="text-[10px] font-mono font-semibold text-outline">GARCIA (2022), BMJ</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <h3 className="font-mono text-[10px] text-outline uppercase tracking-widest border-b border-outline-variant/10 pb-2 mb-4">Downstream Effects</h3>
-            <div className="flex flex-wrap gap-2">
-              {['Long-term Potentiation', 'BDNF Expression', 'Dendritic Spines'].map((effect) => (
-                <span key={effect} className="px-2.5 py-1.5 bg-surface-container-lowest/5 text-on-primary-fixed-variant text-[10px] font-semibold rounded-lg border border-outline-variant/30 hover:border-secondary transition-colors cursor-pointer capitalize">
-                  {effect}
-                </span>
+          {searchResults && (
+            <div className="space-y-2 max-h-60 overflow-auto custom-scrollbar">
+              {searchResults.results.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => {
+                    const match = visibleNodes.find(n => n.id === r.id);
+                    if (match) { selectAndJump(match); setShowSearch(false); }
+                  }}
+                  className="w-full text-left p-3 bg-surface-container/10 border border-outline-variant/30 rounded-xl hover:border-secondary/30 transition-all"
+                >
+                  <div className="text-xs font-bold text-on-surface-variant mb-1 truncate">{r.title || r.id}</div>
+                  <div className="text-[10px] text-secondary/70 font-mono tracking-tight">Kind: {r.kind} · Score: {r.score?.toFixed(4)}</div>
+                </button>
               ))}
             </div>
+          )}
+        </div>
+      </div>
+
+      {/* Toggle Search Button */}
+      <button
+        onClick={() => setShowSearch(!showSearch)}
+        className="absolute top-6 left-6 z-20 bg-surface-container-low/60 backdrop-blur-xl border border-outline-variant/30 rounded-xl p-2.5 hover:bg-surface-container-low/80 transition-all"
+      >
+        <Search className="w-4 h-4 text-secondary" />
+      </button>
+
+      {/* Main Canvas */}
+      <div className="flex-1 relative overflow-hidden flex flex-col">
+        {/* HUD */}
+        <div className="absolute top-6 left-16 right-[420px] z-10 flex items-center gap-3 pointer-events-none">
+          <div className="flex items-center gap-2 bg-surface-container-low/60 backdrop-blur-xl border border-outline-variant/30 rounded-2xl px-4 py-2 pointer-events-auto">
+            <span className="font-mono text-[10px] text-on-surface-variant">Nodes</span>
+            <span className="font-mono text-sm font-bold text-on-surface">{visibleNodes.length}</span>
+            <span className="w-px h-4 bg-outline-variant/30"></span>
+            <span className="font-mono text-[10px] text-on-surface-variant">Edges</span>
+            <span className="font-mono text-sm font-bold text-on-surface">{graphData.edges.length}</span>
+            <span className="w-px h-4 bg-outline-variant/30"></span>
+            <span className="font-mono text-[10px] text-on-surface-variant">Papers</span>
+            <span className="font-mono text-sm font-bold text-on-surface">{graphData.meta?.paper_count ?? 0}</span>
           </div>
         </div>
 
-        <div className="p-6 bg-primary-container/90 border-t border-outline-variant/20">
-          <button className="w-full bg-secondary hover:bg-secondary/90 text-white py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-secondary/20 active:scale-[0.98]">
-            <MessageCircle className="w-4 h-4" />
-            Jump to Chat
-          </button>
+        {/* Graph area placeholder – relies on 3D or fallback */}
+        <div className="flex-1 flex items-center justify-center" ref={canvasRef}>
+          <div className="text-center p-8 max-w-md">
+            <Share2 className="w-12 h-12 text-secondary/30 mx-auto mb-4" />
+            <p className="text-on-surface-variant text-sm mb-2">3D Graph Engine</p>
+            <p className="text-outline text-xs font-mono">Connect a 3D renderer or use the node index panel to explore the graph.</p>
+          </div>
         </div>
-      </aside>
 
-      {/* Bottom Toolbar (Graph Controls) */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4 p-2 bg-surface-container-low/80 backdrop-blur-xl border border-outline-variant/30 rounded-2xl z-30 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
-        <div className="flex items-center border-r border-outline-variant/30 pr-4 mr-2 gap-1">
-          <button className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-surface-container text-outline hover:text-on-surface transition-all active:scale-95">
-            <ZoomIn className="w-5 h-5" />
-          </button>
-          <button className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-surface-container text-outline hover:text-on-surface transition-all active:scale-95">
-            <ZoomOut className="w-5 h-5" />
-          </button>
-          <button className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-surface-container text-outline hover:text-on-surface transition-all active:scale-95">
-            <Rotate3D className="w-5 h-5" />
-          </button>
-          <button className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-surface-container text-outline hover:text-on-surface transition-all active:scale-95">
-            <Focus className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="flex items-center gap-8 px-4">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[9px] font-mono text-outline uppercase tracking-widest font-bold">Max Hops</label>
-            <input 
-              type="range" 
-              className="w-32 accent-secondary h-1.5 bg-surface-container rounded-full appearance-none cursor-pointer"
-              defaultValue={3} 
-              min={1} 
-              max={10} 
-            />
+        {/* Bottom Toolbar */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-4 p-2 bg-surface-container-low/80 backdrop-blur-xl border border-outline-variant/30 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
+          <div className="flex items-center border-r border-outline-variant/30 pr-4 mr-2 gap-1">
+            <button className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-surface-container text-outline hover:text-on-surface transition-all active:scale-95">
+              <ZoomIn className="w-5 h-5" />
+            </button>
+            <button className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-surface-container text-outline hover:text-on-surface transition-all active:scale-95">
+              <ZoomOut className="w-5 h-5" />
+            </button>
+            <button className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-surface-container text-outline hover:text-on-surface transition-all active:scale-95">
+              <Rotate3D className="w-5 h-5" />
+            </button>
+            <button className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-surface-container text-outline hover:text-on-surface transition-all active:scale-95">
+              <Focus className="w-5 h-5" />
+            </button>
           </div>
           <div className="flex gap-6">
             <div className="flex items-center gap-2">
@@ -213,10 +241,112 @@ export default function GraphView() {
             </div>
           </div>
         </div>
-        <button className="bg-surface-container hover:bg-surface-container-high text-on-surface px-5 py-2.5 rounded-xl font-mono text-[11px] font-bold tracking-widest transition-all border border-outline-variant/30 active:scale-[0.98]">
-          EXPORT_GRAPH
-        </button>
       </div>
+
+      {/* Detail Panel */}
+      <aside className="w-[390px] bg-surface-container-lowest/10 backdrop-blur-2xl border-l border-outline-variant/30 flex flex-col overflow-hidden">
+        <div className="p-5 border-b border-outline-variant/30">
+          <div className="flex items-center justify-between mb-3">
+            <span className="px-2 py-0.5 bg-secondary-container/20 text-secondary text-[10px] font-mono font-bold rounded-md border border-secondary/40 uppercase tracking-widest">
+              {selectedNode ? 'Variable Node' : 'Node Index'}
+            </span>
+            {selectedNode && (
+              <button onClick={() => setSelectedNodeId(null)} className="text-outline hover:text-on-surface transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          {selectedNode ? (
+            <h2 className="text-xl font-medium text-white mb-1">{nodeLabel(selectedNode)}</h2>
+          ) : (
+            <h2 className="text-xl font-medium text-white mb-1">Select a node</h2>
+          )}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-6 custom-scrollbar-dark">
+          {selectedNode ? (
+            <>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="p-3 border border-outline-variant/16 rounded-xl bg-surface-container/10">
+                  <span className="text-[10px] text-outline block">Relations</span>
+                  <strong className="text-sm text-on-surface">{edgesForNode.length}</strong>
+                </div>
+                <div className="p-3 border border-outline-variant/16 rounded-xl bg-surface-container/10">
+                  <span className="text-[10px] text-outline block">Papers</span>
+                  <strong className="text-sm text-on-surface">{paperIdsForNode.size}</strong>
+                </div>
+                <div className="p-3 border border-outline-variant/16 rounded-xl bg-surface-container/10">
+                  <span className="text-[10px] text-outline block">Degree</span>
+                  <strong className="text-sm text-on-surface">{selectedNode.relation_degree ?? '-'}</strong>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="font-mono text-[10px] text-outline uppercase tracking-widest border-b border-outline-variant/10 pb-2 mb-3">Node Details</h3>
+                <ul className="space-y-1.5 text-xs text-on-surface-variant">
+                  {nodeDetail.map((line, i) => <li key={i} dangerouslySetInnerHTML={{ __html: line }} />)}
+                </ul>
+              </div>
+
+              <div>
+                <h3 className="font-mono text-[10px] text-outline uppercase tracking-widest border-b border-outline-variant/10 pb-2 mb-3">Relations</h3>
+                <ul className="space-y-1.5 text-xs text-on-surface-variant">
+                  {relationDetail.map((line, i) => <li key={i} dangerouslySetInnerHTML={{ __html: line }} />)}
+                </ul>
+              </div>
+
+              {(graphData.isolated_nodes || []).filter(n => n.node_id === selectedNode.id).length > 0 && (
+                <div>
+                  <h3 className="font-mono text-[10px] text-outline uppercase tracking-widest border-b border-outline-variant/10 pb-2 mb-3">Isolation Info</h3>
+                  <p className="text-xs text-on-surface-variant">
+                    {graphData.isolated_nodes!.find(n => n.node_id === selectedNode.id)?.reason || 'Unknown'}
+                  </p>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-[10px] font-mono text-outline uppercase tracking-widest mb-3">Top Variables by Degree</p>
+              {rankedNodes.map(({ node, relCount }) => (
+                <button
+                  key={node.id}
+                  onClick={() => selectAndJump(node)}
+                  className="w-full text-left p-3 bg-surface-container/10 border border-outline-variant/16 rounded-xl hover:border-secondary/30 transition-all"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-bold text-on-surface truncate">{nodeLabel(node)}</span>
+                    <span className="text-[10px] text-secondary font-mono">{relCount}</span>
+                  </div>
+                  <p className="text-[10px] text-on-surface-variant truncate">{String(node.latest_concept || '').slice(0, 80) || 'No definition'}</p>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {(graphData.isolated_nodes || []).length > 0 && (
+            <div>
+              <h3 className="font-mono text-[10px] text-outline uppercase tracking-widest border-b border-outline-variant/10 pb-2 mb-3">
+                Isolated Nodes ({graphData.isolated_nodes!.length})
+              </h3>
+              <div className="space-y-1 max-h-48 overflow-auto custom-scrollbar-dark">
+                {graphData.isolated_nodes!.slice(0, 24).map(n => (
+                  <div key={n.node_id} className="text-[11px] text-on-surface-variant py-1 px-2 border border-outline-variant/10 rounded-lg">
+                    <strong className="text-on-surface">{n.label || n.node_id}</strong>
+                    <span className="ml-2 text-outline">{n.reason || 'unknown'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-4 bg-primary-container/90 border-t border-outline-variant/20">
+          <button onClick={jumpToChat} className="w-full bg-secondary hover:bg-secondary/90 text-white py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-secondary/20 active:scale-[0.98]">
+            <MessageCircle className="w-4 h-4" />
+            {selectedNodeId ? `Ask about "${selectedNode ? nodeLabel(selectedNode).slice(0, 20) : ''}"` : 'Jump to Chat'}
+          </button>
+        </div>
+      </aside>
     </div>
   );
 }

@@ -79,16 +79,13 @@ class ChatService:
     def _ensure_chat(self) -> Any:
         if self._chat is not None:
             return self._chat
-        ChatServiceCls, InMemoryChatStoreCls = _load_chat_service_class()
-        dsn = (self._settings.chat_store_dsn or "").strip()
+        ChatServiceCls, _ = _load_chat_service_class()
 
         from kn_graph.services.literature_service import LiteratureService
         literature_svc = LiteratureService(self._settings)
         literature = literature_svc._ensure_service()
 
-        chat_store = InMemoryChatStoreCls()
         self._chat = ChatServiceCls(
-            chat_store=chat_store,
             literature_search_fn=lambda q, k, library_id="": (
                 literature.search(
                     query=q,
@@ -116,7 +113,9 @@ class ChatService:
             return ""
         try:
             reg_mod = _load_library_registry_module()
-            registry = reg_mod.ensure_registry()
+            registry = reg_mod.ensure_registry(
+                registry_path=self._settings.registry_path,
+            )
             return str(reg_mod.resolve_workspace_root(registry, target) or "").strip()
         except Exception:
             return ""
@@ -176,7 +175,7 @@ class ChatService:
     def get_codex_config(self) -> dict[str, Any]:
         try:
             agent_runner_mod = _load_agent_runner_module()
-            config_path = Path("outputs/chat/codex_runner_config.json")
+            config_path = self._settings.codex_config_path
             cfg = agent_runner_mod.load_codex_config(config_path)
             return {
                 "app_server_command": str(cfg.app_server_command or ""),
@@ -197,7 +196,7 @@ class ChatService:
 
     def save_codex_config(self, body: dict[str, Any]) -> dict[str, Any]:
         agent_runner_mod = _load_agent_runner_module()
-        config_path = Path("outputs/chat/codex_runner_config.json")
+        config_path = self._settings.codex_config_path
         existing = self.get_codex_config()
         next_payload = dict(existing)
         for key in (
@@ -223,7 +222,7 @@ class ChatService:
     def check_codex_health(self) -> dict[str, Any]:
         try:
             agent_runner_mod = _load_agent_runner_module()
-            config_path = Path("outputs/chat/codex_runner_config.json")
+            config_path = self._settings.codex_config_path
             cfg = agent_runner_mod.load_codex_config(config_path)
             runner = agent_runner_mod.CodexRunner(cfg)
             health = runner.health()

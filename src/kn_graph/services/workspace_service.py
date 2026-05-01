@@ -33,7 +33,7 @@ class WorkspaceService:
             return self._store
         try:
             cls = _load_workspace_layout_store_class()
-            storage_path = Path("outputs/workbench/workspace_layouts.json")
+            storage_path = self._settings.workspace_layouts_path
             self._store = cls(storage_path=storage_path)
         except Exception as exc:
             self._store = _InMemoryWorkspaceLayoutStore()

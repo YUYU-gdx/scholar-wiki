@@ -2,11 +2,14 @@
 
 import argparse
 import json
+import logging
 import math
+import sys
 from pathlib import Path
 from typing import Any
 
 SUPPLY_CHAIN_ROOT = Path("outputs/smj_supply_chain_batch").resolve()
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,11 +79,30 @@ def _entropy_from_counts(counts: list[int]) -> float:
     return round(h / h_max, 6)
 
 
-def main() -> None:
-    args = parse_args()
-    _enforce_supply_chain_path(args.input_json, args.allow_non_supply_chain, "--input-json")
-    _enforce_supply_chain_path(args.output_json, args.allow_non_supply_chain, "--output-json")
-    data = json.loads(args.input_json.read_text(encoding="utf-8"))
+def run_build(artifact_json: Path, output_json: Path | None = None) -> Path | None:
+    """Build optimized graph views from a frontend artifact JSON file.
+
+    Loads ``frontend_artifact.json`` from *artifact_json*, computes overview
+    subsets, paper profiles, and precomputed node positions, and writes the
+    result to *output_json*.
+
+    Args:
+        artifact_json: Path to the ``frontend_artifact.json`` file.
+        output_json: Destination path for ``graph_views.json``.
+            Defaults to ``artifact_json.parent / "graph_views.json"``.
+
+    Returns:
+        The output :class:`~pathlib.Path` on success, or ``None`` on failure.
+    """
+    if output_json is None:
+        output_json = artifact_json.parent / "graph_views.json"
+    try:
+        data = json.loads(artifact_json.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Failed to read artifact JSON %s: %s", artifact_json, exc)
+        return None
+
+    overview_limit = 700
 
     nodes = data.get("nodes", [])
     edges = data.get("edges", [])
@@ -107,7 +129,6 @@ def main() -> None:
         degree[s] = degree.get(s, 0) + 1
         degree[t] = degree.get(t, 0) + 1
 
-    # Node-level paper profile for paper-cluster layout.
     node_paper_counts: dict[str, dict[str, int]] = {}
     for edge in edges:
         pid = str(edge.get("paper_id", "")).strip()
@@ -156,7 +177,6 @@ def main() -> None:
         node["dominant_paper_id"] = top_items[0][0] if top_items else ""
         node["paper_entropy"] = _entropy_from_counts([v for _, v in top_items])
 
-    # Backfill first_year for old artifacts that don't carry it yet.
     year_by_node: dict[str, list[int]] = {}
     for edge in edges:
         year = _coerce_int(edge.get("paper_year"))
@@ -174,7 +194,7 @@ def main() -> None:
 
     variable_nodes = [n for n in node_map.values() if n.get("type") == "variable"]
     variable_nodes.sort(key=lambda n: degree.get(str(n.get("id", "")), 0), reverse=True)
-    overview_nodes = variable_nodes[: args.overview_limit]
+    overview_nodes = variable_nodes[:overview_limit]
     overview_ids = {str(n["id"]) for n in overview_nodes}
 
     overview_edges: list[int] = []
@@ -184,7 +204,6 @@ def main() -> None:
         if s in overview_ids and t in overview_ids:
             overview_edges.append(idx)
 
-    # Attach stable precomputed positions for overview.
     for i, node in enumerate(overview_nodes):
         x, y, z = _build_position(i, len(overview_nodes))
         node["x"] = x
@@ -201,7 +220,7 @@ def main() -> None:
             paper_map[doi] = p
 
     meta = dict(data.get("meta", {}))
-    meta["dataset_source"] = str(args.input_json)
+    meta["dataset_source"] = str(artifact_json)
     meta["dataset_scope"] = "supply_chain"
     if "year_range" not in meta:
         years = [int(v["first_year"]) for v in node_map.values() if _coerce_int(v.get("first_year")) is not None]
@@ -221,12 +240,17 @@ def main() -> None:
         "paper_map": paper_map,
     }
 
-    args.output_json.parent.mkdir(parents=True, exist_ok=True)
-    args.output_json.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    try:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to write output to %s: %s", output_json, exc)
+        return None
+
     print(
         json.dumps(
             {
-                "output": str(args.output_json),
+                "output": str(output_json),
                 "overview_nodes": len(result["overview"]["node_ids"]),
                 "overview_edges": len(result["overview"]["edge_indexes"]),
                 "all_nodes": len(node_map),
@@ -236,8 +260,20 @@ def main() -> None:
             indent=2,
         )
     )
+    return output_json
+
+
+def main() -> None:
+    args = parse_args()
+    _enforce_supply_chain_path(args.input_json, args.allow_non_supply_chain, "--input-json")
+    _enforce_supply_chain_path(args.output_json, args.allow_non_supply_chain, "--output-json")
+    result = run_build(
+        artifact_json=args.input_json,
+        output_json=args.output_json,
+    )
+    if result is None:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
-

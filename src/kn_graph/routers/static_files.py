@@ -28,14 +28,17 @@ def _inject_chat_entry(html: str) -> str:
     return html + _CHAT_ENTRY_SNIPPET
 
 
-def create_static_router(frontend_dir: str | None = None) -> APIRouter:
+def create_static_router(frontend_dir: str | None = None, workbench_dir: str | None = None) -> APIRouter:
     router = APIRouter()
 
     root = Path(frontend_dir).resolve() if frontend_dir else Path("frontend_legacy").resolve()
 
     frontend_mounts: dict[str, Path] = {}
     for prefix, subdir in _THREE_FRONTENDS:
-        candidate = root / subdir
+        if prefix == "workbench" and workbench_dir:
+            candidate = Path(workbench_dir).resolve()
+        else:
+            candidate = root / subdir
         if candidate.is_dir():
             frontend_mounts[prefix] = candidate
 

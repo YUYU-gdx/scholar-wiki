@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.28.4
+    container_name: kn-graph-weaviate
+    ports:
+      - "8090:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: 100
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    restart: unless-stopped
+volumes:
+  weaviate_data:

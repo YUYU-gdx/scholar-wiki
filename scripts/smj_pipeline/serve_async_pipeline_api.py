@@ -780,10 +780,45 @@ def _run_finalize(
                 "source_path": str(input_pdf.resolve()),
             }
             manifest_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-            import_result = literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id})
+import_result = literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id})
             workspace_path = str(import_result.get("workspace_path", "") or workspace_path)
         except Exception as exc:
             import_warning = str(exc)
+
+    # --- Auto-rebuild graph views ---
+    graph_warning = ""
+    if library_id and workspace_path:
+        try:
+            try:
+                    from export_frontend_artifact import run_export
+                except ImportError:
+                    from .export_frontend_artifact import run_export
+                try:
+                    from build_graph_views import run_build
+                except ImportError:
+                    from .build_graph_views import run_build
+
+            extract_dir = run_dir / "extract"
+            artifact_path = extract_dir / "frontend_artifact.json" if extract_dir.is_dir() else None
+            raw_llm_path = extract_dir / "raw_llm_outputs.jsonl" if extract_dir.is_dir() else None
+
+            if artifact_path is not None or raw_llm_path is not None:
+                _stage_update(store, job_id, "finalize", 98, "graph_rebuild_started", status="running")
+                src_path = raw_llm_path or artifact_path
+                if src_path and src_path.exists():
+                    artifact_result = run_export(input_json=src_path, output_json=artifact_path, allow_non_supply_chain=True)
+                    if artifact_result and artifact_result.exists():
+                        ws_path = Path(workspace_path)
+                        graph_output = ws_path / "graph_views.json"
+                        build_result = run_build(artifact_json=artifact_result, output_json=graph_output)
+                        if build_result:
+                            _stage_update(store, job_id, "finalize", 99, "graph_rebuilt", status="running")
+                        else:
+                            graph_warning = "build_graph_views failed"
+                    else:
+                        graph_warning = "export_frontend_artifact failed"
+        except Exception as exc:
+            graph_warning = f"graph_rebuild_error: {exc}"
 
     result = {
         "job_id": job_id,
@@ -793,7 +828,8 @@ def _run_finalize(
         "parse": parse_meta,
         "extract": extract_result,
         "import_result": import_result,
-        "import_warning": import_warning,
+"import_warning": import_warning,
+        "graph_warning": graph_warning,
         "finished_at": _now_iso(),
     }
     out_path = run_dir / "result.json"

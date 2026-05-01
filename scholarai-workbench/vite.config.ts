@@ -5,6 +5,8 @@ import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
+  const backendPort = env.KN_GRAPH_PORT || '8013';
+  const backendTarget = `http://127.0.0.1:${backendPort}`;
   return {
     plugins: [react(), tailwindcss()],
     define: {
@@ -16,9 +18,17 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
+      proxy: {
+        '/graph': { target: backendTarget, changeOrigin: true },
+        '/paper': { target: backendTarget, changeOrigin: true },
+        '/variable': { target: backendTarget, changeOrigin: true },
+        '/chat': { target: backendTarget, changeOrigin: true },
+        '/literature': { target: backendTarget, changeOrigin: true },
+        '/v1': { target: backendTarget, changeOrigin: true },
+        '/api': { target: backendTarget, changeOrigin: true },
+        '/healthz': { target: backendTarget, changeOrigin: true },
+      },
     },
   };
 });

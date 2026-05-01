@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import logging
 from pathlib import Path
 import re
 import sys
 from typing import Any
 
 SUPPLY_CHAIN_ROOT = Path("outputs/smj_supply_chain_batch").resolve()
+logger = logging.getLogger(__name__)
 
 
 def _load_extractor_module():
@@ -161,11 +163,36 @@ def _enforce_supply_chain_path(path: Path, allow_non_supply_chain: bool, flag_na
         )
 
 
-def main() -> None:
-    args = parse_args()
-    _enforce_supply_chain_path(args.raw_output_jsonl, args.allow_non_supply_chain, "--raw-output-jsonl")
-    _enforce_supply_chain_path(args.output_json, args.allow_non_supply_chain, "--output-json")
-    extractor = _load_extractor_module()
+def run_export(
+    input_json: Path,
+    output_json: Path | None = None,
+    allow_non_supply_chain: bool = True,
+) -> Path | None:
+    """Export extraction JSON/JSONL to a frontend-friendly graph artifact.
+
+    Loads the extraction JSON/JSONL from *input_json*, processes every row
+    through the extractor module, builds variable nodes, edges, moderation
+    and interaction links, and writes the result to *output_json*.
+
+    Args:
+        input_json: Path to the extraction JSON/JSONL file.
+        output_json: Destination path for ``frontend_artifact.json``.
+            Defaults to ``input_json.parent / "frontend_artifact.json"``.
+        allow_non_supply_chain: When ``False``, paths outside the
+            supply-chain root are rejected.
+
+    Returns:
+        The output :class:`~pathlib.Path` on success, or ``None`` on failure.
+    """
+    if output_json is None:
+        output_json = input_json.parent / "frontend_artifact.json"
+    try:
+        _enforce_supply_chain_path(input_json, allow_non_supply_chain, "input_json")
+        _enforce_supply_chain_path(output_json, allow_non_supply_chain, "output_json")
+        extractor = _load_extractor_module()
+    except Exception as exc:
+        logger.warning("Export setup failed: %s", exc)
+        return None
 
     variable_nodes: dict[str, dict[str, Any]] = {}
     node_aliases: dict[str, set[str]] = {}
@@ -179,7 +206,7 @@ def main() -> None:
     success = 0
     failed = 0
 
-    for row in _iter_jsonl(args.raw_output_jsonl):
+    for row in _iter_jsonl(input_json):
         total += 1
         if str(row.get("status", "")).strip() != "ok":
             failed += 1
@@ -398,9 +425,28 @@ def main() -> None:
         "papers": papers,
     }
 
-    args.output_json.parent.mkdir(parents=True, exist_ok=True)
-    args.output_json.write_text(json.dumps(out_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(json.dumps(out_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to write output to %s: %s", output_json, exc)
+        return None
+
     print(json.dumps(out_payload["meta"], ensure_ascii=False, indent=2))
+    return output_json
+
+
+def main() -> None:
+    args = parse_args()
+    _enforce_supply_chain_path(args.raw_output_jsonl, args.allow_non_supply_chain, "--raw-output-jsonl")
+    _enforce_supply_chain_path(args.output_json, args.allow_non_supply_chain, "--output-json")
+    result = run_export(
+        input_json=args.raw_output_jsonl,
+        output_json=args.output_json,
+        allow_non_supply_chain=True,
+    )
+    if result is None:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

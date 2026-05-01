@@ -298,7 +298,7 @@ class PipelineService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._store: _InMemoryJobStore | _SQLiteJobStore | None = None
-        self._runs_root = Path("outputs/runs").resolve()
+        self._runs_root = self._settings.data_dir / "runs"
 
     def _ensure_store(self) -> _InMemoryJobStore | _SQLiteJobStore:
         if self._store is not None:
@@ -310,8 +310,7 @@ class PipelineService:
         elif dsn and dsn.startswith("postgres"):
             self._store = _InMemoryJobStore()
         else:
-            default_path = Path("outputs/workbench/pipeline_jobs.sqlite")
-            self._store = _SQLiteJobStore(default_path)
+            self._store = _SQLiteJobStore(self._settings.pipeline_db_path)
         return self._store
 
     def health(self) -> dict[str, Any]:
