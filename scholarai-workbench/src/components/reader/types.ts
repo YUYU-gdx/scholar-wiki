@@ -45,25 +45,10 @@ export interface AnnotationCreate {
 
 export type ViewerMode = 'edit' | 'live-preview' | 'read';
 
-export interface FileInfo {
-  path: string;
-  name: string;
-  size_bytes: number;
-}
-
-export interface PaperFiles {
-  paper_id: string;
-  library_id: string;
-  files: {
-    pdf?: FileInfo;
-    markdown?: FileInfo;
-    html?: FileInfo;
-  };
-  default_view: 'pdf' | 'markdown' | 'html' | 'none';
-}
+export { type PaperFilesFileInfo, type PaperFiles } from '../../types';
 
 export interface DocumentLoadResult {
   type: 'pdf' | 'markdown' | 'html' | 'none';
   data: Uint8Array | string | null;
-  fileName: string;
+  file_name: string;
 }
