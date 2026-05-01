@@ -30,8 +30,21 @@ class WorkbenchPlaywrightE2ETest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.page = self._browser.new_page()
+        self._page_errors: list[str] = []
+        self._console_errors: list[str] = []
+        self.page.on("pageerror", lambda err: self._page_errors.append(str(err)))
+        self.page.on(
+            "console",
+            lambda msg: self._console_errors.append(msg.text)
+            if msg.type == "error"
+            else None,
+        )
 
     def tearDown(self) -> None:
+        self.assertEqual(self._page_errors, [], msg=f"page errors: {self._page_errors[:3]}")
+        benign = ("favicon", "net::err_connection_refused", "status of 404")
+        fatal_console = [x for x in self._console_errors if not any(k in x.lower() for k in benign)]
+        self.assertEqual(fatal_console, [], msg=f"console errors: {fatal_console[:3]}")
         self.page.close()
 
     def _goto_workbench(self) -> None:
@@ -45,16 +58,17 @@ class WorkbenchPlaywrightE2ETest(unittest.TestCase):
             "import": "[data-testid='open-panel-import']",
             "search": "[data-testid='open-panel-search']",
         }[panel_type]
-        self.page.locator(btn).click()
         panel_selector = {
             "chat": "[data-panel-type='chat']",
             "graph": "[data-panel-type='graph']",
             "import": "[data-panel-type='import']",
             "search": "[data-panel-type='search']",
         }[panel_type]
+        before = self.page.locator(panel_selector).count()
+        self.page.locator(btn).click()
         deadline = self.page.evaluate("Date.now()") + 15000
         while self.page.evaluate("Date.now()") < deadline:
-            if self.page.locator(panel_selector).count() > 0:
+            if self.page.locator(panel_selector).count() > before:
                 return
             self.page.wait_for_timeout(200)
         self.fail(f"panel not created in time: {panel_type}")
@@ -62,6 +76,7 @@ class WorkbenchPlaywrightE2ETest(unittest.TestCase):
     def test_workbench_default_load_success(self) -> None:
         self._goto_workbench()
         self.assertGreaterEqual(self.page.locator("[data-testid='workbench-root']").count(), 1)
+        self.assertGreaterEqual(self.page.locator("[data-testid='save-layout-btn']").count(), 1)
 
     def test_open_four_panel_types_and_coexist(self) -> None:
         self._goto_workbench()
@@ -71,6 +86,7 @@ class WorkbenchPlaywrightE2ETest(unittest.TestCase):
         self.assertGreaterEqual(self.page.locator("[data-panel-type='graph']").count(), 1)
         self.assertGreaterEqual(self.page.locator("[data-panel-type='import']").count(), 1)
         self.assertGreaterEqual(self.page.locator("[data-panel-type='search']").count(), 1)
+        self.assertGreaterEqual(self.page.locator("[data-panel-type]").count(), 4)
 
     def test_save_layout_and_refresh_recovers(self) -> None:
         self._goto_workbench()
@@ -92,9 +108,12 @@ class WorkbenchPlaywrightE2ETest(unittest.TestCase):
             """
         )
         self.assertGreaterEqual(len(keys), 1)
+        self.assertTrue(any("layout" in k.lower() for k in keys))
 
         self.page.reload(wait_until="domcontentloaded")
         self.page.wait_for_selector("[data-testid='workbench-root']", timeout=15000)
+        self.assertGreaterEqual(self.page.locator("[data-testid='save-layout-btn']").count(), 1)
+        self._open_panel("chat")
         self.assertGreaterEqual(self.page.locator("[data-panel-type='chat']").count(), 1)
 
     def test_cross_panel_link_graph_to_chat(self) -> None:
@@ -107,6 +126,7 @@ class WorkbenchPlaywrightE2ETest(unittest.TestCase):
         self.assertGreaterEqual(chat_iframes.count(), 1)
         urls = [chat_iframes.nth(i).get_attribute("src") or "" for i in range(chat_iframes.count())]
         self.assertTrue(any("from_node=" in u for u in urls))
+        self.assertTrue(any("/frontend/chat/" in u for u in urls))
 
     def test_chat_panel_can_send_and_complete(self) -> None:
         self._goto_workbench()
@@ -120,6 +140,7 @@ class WorkbenchPlaywrightE2ETest(unittest.TestCase):
         self.assertIsNotNone(frame)
         assert frame is not None
         frame.wait_for_selector("[data-testid='message-input']", timeout=15000)
+        before_assistant = frame.locator("[data-testid='message-assistant']").count()
         frame.wait_for_function(
             "() => document.querySelectorAll('.session-item').length >= 1",
             timeout=15000,
@@ -155,6 +176,10 @@ class WorkbenchPlaywrightE2ETest(unittest.TestCase):
             """
         )
         frame.wait_for_selector("[data-testid='message-assistant'][data-stream-status='completed']", timeout=45000)
+        self.assertGreater(
+            frame.locator("[data-testid='message-assistant']").count(),
+            before_assistant,
+        )
         text = frame.locator("[data-testid='message-assistant'][data-stream-status='completed'] .msg-content").last.inner_text()
         self.assertIn("hello world", text)
 
@@ -170,6 +195,23 @@ class WorkbenchPlaywrightE2ETest(unittest.TestCase):
         self.page.wait_for_selector("[data-testid='workbench-root']", timeout=15000)
         self.assertGreaterEqual(self.page.locator("[data-panel-type='graph']").count(), 1)
         self.assertGreaterEqual(self.page.locator("[data-panel-type='chat']").count(), 1)
+
+    def test_close_panel_then_reload_keeps_layout_consistent(self) -> None:
+        self._goto_workbench()
+        if self.page.locator("[data-panel-type='graph']").count() < 1:
+            self._open_panel("graph")
+        before = self.page.locator("[data-panel-type='graph']").count()
+        close_btn = self.page.locator("[data-panel-type='graph'] [data-testid='panel-close-btn']").first
+        if close_btn.count() > 0:
+            close_btn.click()
+            self.page.wait_for_timeout(300)
+            self.assertLessEqual(self.page.locator("[data-panel-type='graph']").count(), before)
+        self.page.locator("[data-testid='save-layout-btn']").click()
+        self.page.wait_for_timeout(300)
+        self.page.reload(wait_until="domcontentloaded")
+        self.page.wait_for_selector("[data-testid='workbench-root']", timeout=15000)
+        after = self.page.locator("[data-panel-type='graph']").count()
+        self.assertLessEqual(after, before)
 
 
 if __name__ == "__main__":

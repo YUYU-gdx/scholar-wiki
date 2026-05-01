@@ -29,6 +29,13 @@ def load_graph_api_module() -> Any:
     return module
 
 
+def _pick_existing_dir(*candidates: Path) -> Path:
+    for p in candidates:
+        if p.is_dir():
+            return p
+    return candidates[0]
+
+
 class FakeChatService:
     def __init__(self) -> None:
         self.sessions: dict[str, dict[str, Any]] = {}
@@ -338,8 +345,9 @@ class GraphChatE2EHarness:
         mod = load_graph_api_module()
         make_handler = mod.make_handler
         thread_server = mod.ThreadingHTTPServer
-        frontend_dir = Path(__file__).resolve().parent.parent / "frontend" / "graph_3d"
-        chat_frontend = Path(__file__).resolve().parent.parent / "frontend" / "chat_embed"
+        root = Path(__file__).resolve().parent.parent
+        frontend_dir = _pick_existing_dir(root / "frontend_legacy" / "graph_3d", root / "frontend" / "graph_3d")
+        chat_frontend = _pick_existing_dir(root / "frontend_legacy" / "chat_embed", root / "frontend" / "chat_embed")
 
         handler = make_handler(
             _base_views(),
@@ -378,9 +386,10 @@ class WorkbenchE2EHarness:
         mod = load_graph_api_module()
         make_handler = mod.make_handler
         thread_server = mod.ThreadingHTTPServer
-        frontend_dir = Path(__file__).resolve().parent.parent / "frontend" / "graph_3d"
-        workbench_frontend = Path(__file__).resolve().parent.parent / "frontend" / "workbench_spa"
-        chat_frontend = Path(__file__).resolve().parent.parent / "frontend" / "chat_embed"
+        root = Path(__file__).resolve().parent.parent
+        frontend_dir = _pick_existing_dir(root / "frontend_legacy" / "graph_3d", root / "frontend" / "graph_3d")
+        workbench_frontend = _pick_existing_dir(root / "frontend_legacy" / "workbench_spa", root / "frontend" / "workbench_spa")
+        chat_frontend = _pick_existing_dir(root / "frontend_legacy" / "chat_embed", root / "frontend" / "chat_embed")
 
         handler = make_handler(
             _base_views(),

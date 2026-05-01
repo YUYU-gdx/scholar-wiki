@@ -151,35 +151,25 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
         if has_run and pipeline_service._settings.pipeline_executor.strip().lower() == "inline":
             import threading
 
-            from kn_graph.services.pipeline_service import _public_job_payload
-
             store = pipeline_service._ensure_store()
 
-            spec2 = importlib.util.spec_from_file_location("smj_pipeline_run_extraction_for_router", run_mod_path)
+            async_api_path = scripts_dir / "serve_async_pipeline_api.py"
+            spec2 = importlib.util.spec_from_file_location("smj_pipeline_async_pipeline_exec_for_router", async_api_path)
             if spec2 and spec2.loader:
-                run_mod = importlib.util.module_from_spec(spec2)
-                spec2.loader.exec_module(run_mod)
+                async_api_mod = importlib.util.module_from_spec(spec2)
+                if spec2.name not in sys.modules:
+                    sys.modules[spec2.name] = async_api_mod
+                spec2.loader.exec_module(async_api_mod)
 
                 def _run_inline():
                     try:
-                        pipeline_service.update_job(job_id, {"status": "running", "stage": "parse_pdf", "progress": 5, "last_event": "stage_started"})
-                        input_pdf = input_path.resolve()
-                        from kn_graph.services.pipeline_service import _InMemoryJobStore, _SQLiteJobStore
-
-                        result = {
-                            "job_id": job_id,
-                            "output_path": str(run_dir / "result.json"),
-                            "status": "completed",
-                            "progress": 100,
-                        }
-                        pipeline_service.update_job(job_id, {
-                            "status": "completed",
-                            "stage": "finalize",
-                            "progress": 100,
-                            "last_event": "completed",
-                            "result_json": _safe_json_dumps(result),
-                            "output_path": str(run_dir / "result.json"),
-                        })
+                        async_api_mod.execute_pipeline(
+                            store,
+                            job_id,
+                            str(input_path),
+                            dict(parsed_options),
+                            pipeline_service._runs_root,
+                        )
                     except Exception as exc:
                         pipeline_service.update_job(job_id, {
                             "status": "failed",
@@ -219,6 +209,10 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
                 body = result.body if hasattr(result, "body") else {}
                 if isinstance(body, dict):
                     accepted.append(body)
+                elif isinstance(body, (bytes, bytearray)):
+                    accepted.append(json.loads(body.decode("utf-8")))
+                elif isinstance(body, str):
+                    accepted.append(json.loads(body))
                 else:
                     accepted.append({"file_name": str(getattr(f, "filename", "") or "")})
             except Exception as exc:
@@ -283,10 +277,13 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
     async def retry_job(job_id: str):
         result = pipeline_service.retry_job(job_id)
         if result is None:
-            source_path = Path(str(pipeline_service.get_job(job_id).get("input_path", "") or "")).resolve()
+            row = pipeline_service.get_job(job_id)
+            if row is None:
+                return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
+            source_path = Path(str(row.get("input_path", "") or "")).resolve()
             if not source_path.exists():
                 return JSONResponse(status_code=404, content={"error": "input_file_missing", "job_id": job_id})
-            return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
+            return JSONResponse(status_code=409, content={"error": "retry_not_implemented", "job_id": job_id})
         if isinstance(result, dict) and "error" in result:
             if result.get("error") == "job_not_retryable":
                 return JSONResponse(status_code=400, content=result)

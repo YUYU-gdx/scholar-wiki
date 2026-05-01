@@ -158,9 +158,9 @@ def _resolve_views_json(cli_views_json: Path | None, runs_root: Path) -> Path:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Serve graph API and static frontend.")
     p.add_argument("--views-json", type=Path, default=None)
-    p.add_argument("--frontend-dir", type=Path, default=Path("frontend/graph_3d"))
-    p.add_argument("--chat-frontend-dir", type=Path, default=Path("frontend/chat_embed"))
-    p.add_argument("--workbench-frontend-dir", type=Path, default=Path("frontend/workbench_spa"))
+    p.add_argument("--frontend-dir", type=Path, default=Path("frontend_legacy/graph_3d"))
+    p.add_argument("--chat-frontend-dir", type=Path, default=Path("frontend_legacy/chat_embed"))
+    p.add_argument("--workbench-frontend-dir", type=Path, default=Path("frontend_legacy/workbench_spa"))
     p.add_argument("--workspace-layouts-file", type=Path, default=Path("outputs/workbench/workspace_layouts.json"))
     p.add_argument("--runs-root", type=Path, default=Path("outputs/runs"))
     p.add_argument("--host", default="127.0.0.1")
@@ -1589,6 +1589,10 @@ def make_handler(
 
         def _serve_chat_static(self, rel_path: str) -> None:
             root = (chat_frontend_dir or Path("frontend/chat_embed")).resolve()
+            if not root.is_dir():
+                legacy_root = Path("frontend_legacy/chat_embed").resolve()
+                if legacy_root.is_dir():
+                    root = legacy_root
             safe = rel_path.lstrip("/")
             if not safe:
                 safe = "index.html"
@@ -1605,6 +1609,10 @@ def make_handler(
 
         def _serve_workbench_static(self, rel_path: str) -> None:
             root = (workbench_frontend_dir or Path("frontend/workbench_spa")).resolve()
+            if not root.is_dir():
+                legacy_root = Path("frontend_legacy/workbench_spa").resolve()
+                if legacy_root.is_dir():
+                    root = legacy_root
             safe = rel_path.lstrip("/")
             if not safe:
                 safe = "index.html"

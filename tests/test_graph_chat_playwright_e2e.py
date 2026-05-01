@@ -35,8 +35,21 @@ class GraphChatPlaywrightE2ETest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.page = self._browser.new_page()
+        self._page_errors: list[str] = []
+        self._console_errors: list[str] = []
+        self.page.on("pageerror", lambda err: self._page_errors.append(str(err)))
+        self.page.on(
+            "console",
+            lambda msg: self._console_errors.append(msg.text)
+            if msg.type == "error"
+            else None,
+        )
 
     def tearDown(self) -> None:
+        self.assertEqual(self._page_errors, [], msg=f"page errors: {self._page_errors[:3]}")
+        benign = ("favicon", "status of 400", "bad request")
+        fatal_console = [x for x in self._console_errors if not any(k in x.lower() for k in benign)]
+        self.assertEqual(fatal_console, [], msg=f"console errors: {fatal_console[:3]}")
         self.page.close()
 
     def _goto_graph(self) -> None:
@@ -56,18 +69,25 @@ class GraphChatPlaywrightE2ETest(unittest.TestCase):
     def test_graph_page_load_and_click_jump_to_chat(self) -> None:
         self._goto_graph()
         self.assertIn("3D知识图谱", self.page.locator("[data-testid='graph-3d-title']").inner_text())
+        node_count = self.page.locator("[data-testid='graph-node']").count()
+        self.assertGreaterEqual(node_count, 1)
         self.page.locator("[data-testid='graph-node']").first.click()
         self.page.wait_for_selector("text=文献库：供应链")
         self.page.locator("[data-testid='jump-chat-btn']").click()
         self.page.wait_for_url("**/frontend/chat/**")
         self.assertIn("from_node=", self.page.url)
         self.page.wait_for_selector("[data-testid='message-input']")
+        self.assertEqual(
+            self.page.locator("[data-testid='library-select']").input_value(),
+            "supply_chain",
+        )
 
     def test_graph_page_hover_and_drag_interaction(self) -> None:
         self._goto_graph()
         first = self.page.locator("[data-testid='graph-node']").first
         first.click()
         selected_node_id = first.get_attribute("data-node-id")
+        self.assertTrue(bool(selected_node_id))
         first.hover()
         self.page.wait_for_selector("text=文献库：供应链")
         active = self.page.locator("[data-testid='graph-node'].active").first
@@ -82,15 +102,24 @@ class GraphChatPlaywrightE2ETest(unittest.TestCase):
         self.page.mouse.move(box["x"] + box["width"] - 10, box["y"] + box["height"] - 10)
         self.page.mouse.up()
         self.page.wait_for_selector("text=drag-end")
+        self.assertGreaterEqual(self.page.locator("[data-testid='graph-node']").count(), 1)
 
     def test_chat_send_message_sse_completed_and_citations_tool_trace(self) -> None:
         self._goto_chat()
         self._select_library()
+        before_user = self.page.locator("[data-testid='message-user']").count()
+        before_assistant = self.page.locator("[data-testid='message-assistant']").count()
         self.page.locator("[data-testid='message-input']").fill("hello e2e")
         self.page.locator("[data-testid='send-btn']").click()
 
         terminal = wait_for_stream_terminal(self.page)
         self.assertEqual(terminal, "completed")
+        self.assertGreater(
+            self.page.locator("[data-testid='message-user']").count(), before_user
+        )
+        self.assertGreater(
+            self.page.locator("[data-testid='message-assistant']").count(), before_assistant
+        )
 
         assistant_content = self.page.locator(
             "[data-testid='message-assistant'][data-stream-status='completed'] .msg-content"
@@ -105,6 +134,10 @@ class GraphChatPlaywrightE2ETest(unittest.TestCase):
         self.page.wait_for_function(
             "() => { const m = document.querySelector('[data-testid=\"citation-modal\"]'); return !!m && !m.classList.contains('hidden'); }",
             timeout=10000,
+        )
+        self.assertIn(
+            "paragraph evidence",
+            self.page.locator("[data-testid='citation-modal']").inner_text(),
         )
         self.page.locator("#citation-modal-close").click()
 
@@ -159,6 +192,7 @@ class GraphChatPlaywrightE2ETest(unittest.TestCase):
         self.page.wait_for_timeout(300)
         after_new = self.page.locator(".session-item").count()
         self.assertGreaterEqual(after_new, before)
+        self.assertTrue(self.page.locator(".session-item").first.is_visible())
 
         if self.page.locator(".session-delete-btn").count() > 0:
             before_delete = self.page.locator(".session-item").count()
@@ -212,6 +246,32 @@ class GraphChatPlaywrightE2ETest(unittest.TestCase):
         )
         self.assertEqual(result["status"], 400)
         self.assertEqual(result["payload"]["error"], "library_id_required")
+
+    def test_chat_library_switch_propagates_library_id(self) -> None:
+        self._goto_chat()
+        self._select_library()
+        result = self.page.evaluate(
+            """
+            async () => {
+              const listResp = await fetch('/chat/sessions?library_id=supply_chain');
+              const listed = await listResp.json();
+              const sessionId = listed.sessions?.[0]?.session_id || '';
+              const resp = await fetch(`/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  content: 'library switch check',
+                  stream: true,
+                  library_id: 'supply_chain'
+                })
+              });
+              const payload = await resp.json();
+              return { status: resp.status, payload };
+            }
+            """
+        )
+        self.assertEqual(result["status"], 202)
+        self.assertTrue(bool(result["payload"].get("stream_url", "")))
 
 
 if __name__ == "__main__":

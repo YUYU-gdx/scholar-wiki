@@ -780,7 +780,7 @@ def _run_finalize(
                 "source_path": str(input_pdf.resolve()),
             }
             manifest_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-import_result = literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id})
+            import_result = literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id})
             workspace_path = str(import_result.get("workspace_path", "") or workspace_path)
         except Exception as exc:
             import_warning = str(exc)
@@ -790,13 +790,13 @@ import_result = literature.import_manifest(manifest_path=manifest_path, options=
     if library_id and workspace_path:
         try:
             try:
-                    from export_frontend_artifact import run_export
-                except ImportError:
-                    from .export_frontend_artifact import run_export
-                try:
-                    from build_graph_views import run_build
-                except ImportError:
-                    from .build_graph_views import run_build
+                from export_frontend_artifact import run_export
+            except ImportError:
+                from .export_frontend_artifact import run_export
+            try:
+                from build_graph_views import run_build
+            except ImportError:
+                from .build_graph_views import run_build
 
             extract_dir = run_dir / "extract"
             artifact_path = extract_dir / "frontend_artifact.json" if extract_dir.is_dir() else None
@@ -828,7 +828,7 @@ import_result = literature.import_manifest(manifest_path=manifest_path, options=
         "parse": parse_meta,
         "extract": extract_result,
         "import_result": import_result,
-"import_warning": import_warning,
+        "import_warning": import_warning,
         "graph_warning": graph_warning,
         "finished_at": _now_iso(),
     }

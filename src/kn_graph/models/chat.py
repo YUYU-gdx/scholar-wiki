@@ -54,6 +54,8 @@ class SendMessageRequest(BaseModel):
     content: str = ""
     stream: bool = True
     library_id: str = ""
+    provider: str = "codex"
+    model: str = "codex-local"
 
 
 class SendMessageResponse(BaseModel):

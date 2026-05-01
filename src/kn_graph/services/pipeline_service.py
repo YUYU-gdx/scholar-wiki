@@ -308,7 +308,7 @@ class PipelineService:
             db_path = Path(dsn[len("sqlite:///"):])
             self._store = _SQLiteJobStore(db_path)
         elif dsn and dsn.startswith("postgres"):
-            self._store = _InMemoryJobStore()
+            raise RuntimeError("postgres_job_store_not_supported_in_kn_graph_pipeline_service")
         else:
             self._store = _SQLiteJobStore(self._settings.pipeline_db_path)
         return self._store
