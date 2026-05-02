@@ -188,6 +188,16 @@ class AgentRunner:
         _ = thread_id, workdir, runtime_overrides
         raise RuntimeError(f"agent_backend_unavailable:{self.backend}")
 
+    def thread_set_name(
+        self,
+        thread_id: str,
+        name: str,
+        workdir: str,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _ = thread_id, name, workdir, runtime_overrides
+        raise RuntimeError(f"agent_backend_unavailable:{self.backend}")
+
 
 class HermesRunner(AgentRunner):
     backend = "hermes"
@@ -802,6 +812,24 @@ class CodexRunner(AgentRunner):
         transport, req_id = self._with_transport(workdir=workdir, runtime_overrides=runtime_overrides)
         try:
             res = transport.request("thread/unarchive", {"threadId": str(thread_id or "").strip()}, req_id)
+            return res if isinstance(res, dict) else {}
+        finally:
+            transport.close()
+
+    def thread_set_name(
+        self,
+        thread_id: str,
+        name: str,
+        workdir: str,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        transport, req_id = self._with_transport(workdir=workdir, runtime_overrides=runtime_overrides)
+        try:
+            res = transport.request(
+                "thread/name_set",
+                {"threadId": str(thread_id or "").strip(), "name": str(name or "").strip()},
+                req_id,
+            )
             return res if isinstance(res, dict) else {}
         finally:
             transport.close()

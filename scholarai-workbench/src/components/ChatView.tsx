@@ -53,11 +53,70 @@ function extractToolName(toolCall: Record<string, unknown>): string {
   const normalized = raw.split('.').pop() || raw;
   const key = normalized.toLowerCase();
   if (key.includes('rag_search') || key.includes('rag')) return 'RAG';
-  if (key.includes('grep') || key.includes('rg')) return 'grep';
+  if (key.includes('grep') || key.includes('rg')) return 'Local File Search';
   if (key.includes('graph_search')) return 'Graph Search';
   if (key.includes('weaviate_query')) return 'Weaviate Query';
   if (key.includes('weaviate_fetch_object')) return 'Fetch Object';
   return normalized || 'tool';
+}
+
+function toolNameZh(toolName: string): string {
+  const key = String(toolName || '').toLowerCase();
+  if (key.includes('rag')) return 'RAG';
+  if (key.includes('local file search') || key.includes('grep')) return '本地文件搜索';
+  if (key.includes('graph search')) return '图谱检索';
+  if (key.includes('weaviate query')) return 'Weaviate 检索';
+  if (key.includes('fetch object')) return '对象读取';
+  return toolName || '未知工具';
+}
+
+function normalizeToolArgs(args: unknown): Array<{ label: string; value: string }> {
+  if (!isPlainObject(args)) return [{ label: '参数', value: renderScalar(args) }];
+  const q = args.query ?? args.search_query ?? args.keyword ?? args.text ?? args.pattern;
+  const topK = args.top_k ?? args.k ?? args.limit;
+  const rows: Array<{ label: string; value: string }> = [];
+  rows.push({ label: '工具名称', value: renderScalar(args.tool ?? args.name ?? args.type ?? '') });
+  if (q !== undefined) rows.push({ label: '检索字符串', value: renderScalar(q) });
+  if (topK !== undefined) rows.push({ label: '返回条数', value: renderScalar(topK) });
+  const labelMap: Record<string, string> = {
+    library_id: '文献库',
+    workspace_path: '工作区路径',
+    file_path: '文件路径',
+    paper_id: '文献ID',
+    section_id: '章节ID',
+    sentence_id: '句子ID',
+    route: '检索路由',
+    query_rewritten: '重写查询',
+    keyword_weight: '关键词权重',
+    rag_weight: 'RAG 权重',
+  };
+  Object.entries(args).forEach(([k, v]) => {
+    if (['tool', 'name', 'type', 'query', 'search_query', 'keyword', 'text', 'pattern', 'top_k', 'k', 'limit'].includes(k)) return;
+    rows.push({ label: labelMap[k] || k, value: renderScalar(v) });
+  });
+  return rows;
+}
+
+function normalizeToolResult(result: unknown): string[] {
+  if (!isPlainObject(result)) return [renderScalar(result)];
+  const structured = isPlainObject(result.structuredContent) ? result.structuredContent as Record<string, unknown> : result;
+  const candidates = [
+    structured.paragraph_hits,
+    structured.hits,
+    structured.results,
+    structured.merged_hits,
+  ];
+  for (const c of candidates) {
+    if (!Array.isArray(c)) continue;
+    const lines = c.slice(0, 8).map((item, idx) => {
+      const row = isPlainObject(item) ? item : {};
+      const title = String(row.title || row.paper_title || row.name || row.id || `结果${idx + 1}`);
+      const pid = String(row.paper_id || row.paperId || '').trim();
+      return `[${idx + 1}] ${title}${pid ? `（${pid}）` : ''}`;
+    });
+    if (lines.length > 0) return lines;
+  }
+  return [stringifyToolPayload(result)];
 }
 
 function extractToolArgs(toolCall: Record<string, unknown>): unknown {
@@ -354,7 +413,7 @@ export default function ChatView() {
                           <div className="space-y-1 mt-2">
                             {m.tool_trace.map((t, idx) => (
                               <div key={idx} className="text-[10px] font-mono text-on-surface-variant bg-surface-container-low px-2 py-1 rounded border border-outline-variant/50">
-                                <span className="text-secondary font-bold">{t.name || 'tool'}</span>
+                                <span className="text-secondary font-bold">{`工具调用：${toolNameZh(extractToolName((t && typeof t === 'object') ? (t as Record<string, unknown>) : {}))}`}</span>
                                 {t.arguments && <span className="ml-2 text-outline truncate">{typeof t.arguments === 'string' ? t.arguments.slice(0, 80) : JSON.stringify(t.arguments).slice(0, 80)}</span>}
                               </div>
                             ))}
@@ -483,40 +542,31 @@ export default function ChatView() {
                     onClick={() => setExpandedToolItems(prev => ({ ...prev, [itemKey]: !itemExpanded }))}
                     className="w-full text-left p-2.5 flex items-center justify-between hover:bg-surface-container-low transition-colors"
                   >
-                    <span className="text-secondary font-bold truncate">Tool call: {toolName}</span>
+                    <span className="text-secondary font-bold truncate">{`工具调用：${toolNameZh(toolName)}`}</span>
                     <ChevronDown className={`w-3.5 h-3.5 text-outline transition-transform ${itemExpanded ? 'rotate-180' : ''}`} />
                   </button>
                   {itemExpanded && (
                     <div className="px-2.5 pb-2.5 space-y-2">
                       <div>
-                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">Arguments</div>
-                        {isPlainObject(extractToolArgs(toolCall)) ? (
-                          <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
-                            {Object.entries(extractToolArgs(toolCall) as Record<string, unknown>).map(([k, v]) => (
-                              <div key={k} className="flex items-start gap-2">
-                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary-container/20 text-secondary uppercase tracking-wide">{k}</span>
-                                <span className="text-[11px] text-on-surface-variant break-words">{renderScalar(v)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <pre className="whitespace-pre-wrap break-words text-on-surface-variant bg-surface-container-low p-2 rounded border border-outline-variant/30">{argsText || '(empty)'}</pre>
-                        )}
+                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">参数</div>
+                        <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
+                          {normalizeToolArgs(extractToolArgs(toolCall)).map((row, i) => (
+                            <div key={`${row.label}-${i}`} className="flex items-start gap-2">
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary-container/20 text-secondary tracking-wide">{row.label}</span>
+                              <span className="text-[11px] text-on-surface-variant break-words">{row.value}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                       <div>
-                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">Result</div>
-                        {isPlainObject(extractToolResult(toolCall)) ? (
-                          <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
-                            {Object.entries(extractToolResult(toolCall) as Record<string, unknown>).map(([k, v]) => (
-                              <div key={k} className="flex items-start gap-2">
-                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface-container text-outline uppercase tracking-wide">{k}</span>
-                                <span className="text-[11px] text-on-surface-variant break-words">{renderScalar(v)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <pre className="whitespace-pre-wrap break-words text-on-surface-variant bg-surface-container-low p-2 rounded border border-outline-variant/30">{resultText || '(empty)'}</pre>
-                        )}
+                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">调用结果</div>
+                        <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
+                          {normalizeToolResult(extractToolResult(toolCall)).map((line, i) => (
+                            <div key={`res-${i}`} className="text-[11px] text-on-surface-variant break-words">
+                              {line}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   )}

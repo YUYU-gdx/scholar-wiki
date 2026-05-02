@@ -654,10 +654,21 @@ class ChatService:
             thread_id = str(thread.get("id", "") or "").strip()
             if not thread_id:
                 raise RuntimeError("codex_thread_start_failed")
+            title_text = str(title or "").strip()
+            if title_text:
+                try:
+                    runner.thread_set_name(
+                        thread_id=thread_id,
+                        name=title_text,
+                        workdir=workspace,
+                        runtime_overrides=self._build_codex_runtime_overrides(workspace, lib),
+                    )
+                except Exception:
+                    pass
             now = _now_iso()
             return {
                 "session_id": thread_id,
-                "title": str(title or thread.get("name", "") or "New chat"),
+                "title": str(title_text or thread.get("name", "") or f"Session {thread_id[:8]}"),
                 "default_mode": "agent",
                 "library_id": lib,
                 "created_at": now,
@@ -683,16 +694,34 @@ class ChatService:
             )
             rows = list_res.get("data") if isinstance(list_res.get("data"), list) else []
             out: list[dict[str, Any]] = []
+            seen_session_ids: set[str] = set()
             for row in rows:
                 if not isinstance(row, dict):
                     continue
                 sid = str(row.get("id", "") or "").strip()
                 if not sid:
                     continue
+                if sid in seen_session_ids:
+                    continue
+                seen_session_ids.add(sid)
+                goal_obj = row.get("goal")
+                goal_text = ""
+                if isinstance(goal_obj, dict):
+                    goal_text = str(goal_obj.get("text", "") or goal_obj.get("goal", "") or "").strip()
+                elif isinstance(goal_obj, str):
+                    goal_text = goal_obj.strip()
+                title_text = str(row.get("name", "") or "").strip() or goal_text
+                if not title_text:
+                    msg_rows = self._store.list_messages(sid)
+                    first_user = next((m for m in msg_rows if str(m.get("role", "")) == "user"), None)
+                    if isinstance(first_user, dict):
+                        title_text = str(first_user.get("content", "") or "").strip()
+                if not title_text:
+                    title_text = f"Session {sid[:8]}"
                 out.append(
                     {
                         "session_id": sid,
-                        "title": str(row.get("name", "") or row.get("goal", "") or "New chat"),
+                        "title": title_text,
                         "default_mode": "agent",
                         "library_id": lib,
                         "created_at": str(row.get("createdAt", "") or row.get("created_at", "") or ""),
