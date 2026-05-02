@@ -642,6 +642,29 @@ class ChatService:
         lib = str(library_id or "").strip()
         if not lib:
             raise ValueError("library_id_required")
+        if self._agent_backend == "codex":
+            workspace = self._resolve_workspace_path(lib)
+            runner = self._runner_factory.build("codex")
+            thread_res = runner.thread_start(
+                workdir=workspace,
+                library_id=lib,
+                runtime_overrides=self._build_codex_runtime_overrides(workspace, lib),
+            )
+            thread = thread_res.get("thread") if isinstance(thread_res.get("thread"), dict) else {}
+            thread_id = str(thread.get("id", "") or "").strip()
+            if not thread_id:
+                raise RuntimeError("codex_thread_start_failed")
+            now = _now_iso()
+            return {
+                "session_id": thread_id,
+                "title": str(title or thread.get("name", "") or "New chat"),
+                "default_mode": "agent",
+                "library_id": lib,
+                "created_at": now,
+                "updated_at": now,
+                "deleted_at": None,
+                "source": "codex",
+            }
         return self._store.create_session(title=title, default_mode="agent", library_id=lib)
 
     def list_sessions(self, library_id: str = "") -> list[dict[str, Any]]:
@@ -649,12 +672,59 @@ class ChatService:
         lib = str(library_id or "").strip()
         if not lib:
             raise ValueError("library_id_required")
+        if self._agent_backend == "codex":
+            workspace = self._resolve_workspace_path(lib)
+            runner = self._runner_factory.build("codex")
+            list_res = runner.thread_list(
+                workdir=workspace,
+                archived=False,
+                limit=200,
+                runtime_overrides=self._build_codex_runtime_overrides(workspace, lib),
+            )
+            rows = list_res.get("data") if isinstance(list_res.get("data"), list) else []
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                sid = str(row.get("id", "") or "").strip()
+                if not sid:
+                    continue
+                out.append(
+                    {
+                        "session_id": sid,
+                        "title": str(row.get("name", "") or row.get("goal", "") or "New chat"),
+                        "default_mode": "agent",
+                        "library_id": lib,
+                        "created_at": str(row.get("createdAt", "") or row.get("created_at", "") or ""),
+                        "updated_at": str(row.get("updatedAt", "") or row.get("updated_at", "") or ""),
+                        "deleted_at": None,
+                        "source": "codex",
+                    }
+                )
+            return out
         return self._store.list_sessions(library_id=lib)
 
     def delete_session(self, session_id: str, undo_window_seconds: int = 5, library_id: str = "") -> dict[str, Any]:
         lib = str(library_id or "").strip()
         if not lib:
             raise ValueError("library_id_required")
+        if self._agent_backend == "codex":
+            workspace = self._resolve_workspace_path(lib)
+            runner = self._runner_factory.build("codex")
+            runner.thread_archive(
+                thread_id=str(session_id),
+                workdir=workspace,
+                runtime_overrides=self._build_codex_runtime_overrides(workspace, lib),
+            )
+            now = datetime.now(timezone.utc)
+            return {
+                "session_id": str(session_id),
+                "library_id": lib,
+                "deleted_at": now.isoformat(),
+                "undo_window_seconds": int(max(1, undo_window_seconds)),
+                "undo_deadline": (now + timedelta(seconds=max(1, int(undo_window_seconds)))).isoformat(),
+                "source": "codex",
+            }
         sess = self._store.get_session(session_id, library_id=lib)
         if sess is None:
             raise KeyError("session_not_found")
@@ -677,6 +747,15 @@ class ChatService:
         lib = str(library_id or "").strip()
         if not lib:
             raise ValueError("library_id_required")
+        if self._agent_backend == "codex":
+            workspace = self._resolve_workspace_path(lib)
+            runner = self._runner_factory.build("codex")
+            runner.thread_unarchive(
+                thread_id=str(session_id),
+                workdir=workspace,
+                runtime_overrides=self._build_codex_runtime_overrides(workspace, lib),
+            )
+            return {"session_id": str(session_id), "library_id": lib, "restored": True, "source": "codex"}
         self._cleanup_restore_deadlines()
         restore_key = f"{lib}:{str(session_id)}"
         deadline_ts = self._restore_deadline_by_session.get(restore_key)
@@ -701,11 +780,51 @@ class ChatService:
         lib = str(library_id or "").strip()
         if not lib:
             raise ValueError("library_id_required")
+        if self._agent_backend == "codex":
+            workspace = self._resolve_workspace_path(lib)
+            runner = self._runner_factory.build("codex")
+            read_res = runner.thread_read(
+                thread_id=str(session_id),
+                workdir=workspace,
+                include_turns=True,
+                runtime_overrides=self._build_codex_runtime_overrides(workspace, lib),
+            )
+            thread = read_res.get("thread") if isinstance(read_res.get("thread"), dict) else {}
+            sid = str(thread.get("id", "") or "").strip()
+            if not sid:
+                return None
+            session = {
+                "session_id": sid,
+                "title": str(thread.get("name", "") or thread.get("goal", "") or "New chat"),
+                "default_mode": "agent",
+                "library_id": lib,
+                "created_at": str(thread.get("createdAt", "") or thread.get("created_at", "") or ""),
+                "updated_at": str(thread.get("updatedAt", "") or thread.get("updated_at", "") or ""),
+                "deleted_at": None,
+                "source": "codex",
+            }
+            local_messages = [self._hydrate_message(m) for m in self._store.list_messages(str(session_id))]
+            return {"session": session, "messages": local_messages}
         sess = self._store.get_session(session_id, library_id=lib)
         if sess is None:
             return None
         messages = [self._hydrate_message(m) for m in self._store.list_messages(session_id)]
         return {"session": sess, "messages": messages}
+
+    def _build_codex_runtime_overrides(self, workspace: str, library_id: str) -> dict[str, Any]:
+        runtime_overrides: dict[str, Any] = {}
+        if callable(self._library_codex_config_resolver):
+            try:
+                lib_cfg = self._library_codex_config_resolver(workspace, str(library_id or "").strip())
+            except Exception:
+                lib_cfg = {}
+            if isinstance(lib_cfg, dict):
+                runtime_overrides = {
+                    "codex_home": str(lib_cfg.get("codex_home", "") or "").strip(),
+                    "mcp_servers": lib_cfg.get("mcp_servers", []),
+                    "project_skills": lib_cfg.get("project_skills", []),
+                }
+        return runtime_overrides
 
     def submit_message(
         self,
@@ -717,11 +836,25 @@ class ChatService:
         stream: bool,
         library_id: str = "",
     ) -> dict[str, Any]:
-        session = self._store.get_session(session_id, library_id=str(library_id or "").strip())
-        if session is None:
-            raise KeyError("session_not_found")
-        if not str(library_id or "").strip():
+        lib = str(library_id or "").strip()
+        if not lib:
             raise ValueError("library_id_required")
+        session = self._store.get_session(session_id, library_id=lib)
+        if session is None and self._agent_backend != "codex":
+            raise KeyError("session_not_found")
+        if session is None:
+            workspace = self._resolve_workspace_path(lib)
+            runner = self._runner_factory.build("codex")
+            thread_payload = runner.thread_read(
+                thread_id=str(session_id),
+                workdir=workspace,
+                include_turns=False,
+                runtime_overrides=self._build_codex_runtime_overrides(workspace, lib),
+            )
+            thread = thread_payload.get("thread") if isinstance(thread_payload.get("thread"), dict) else {}
+            if str(thread.get("id", "") or "").strip() != str(session_id):
+                raise KeyError("session_not_found")
+            session = {"session_id": session_id, "default_mode": "agent", "library_id": lib}
         now = _now_iso()
         normalized_mode = str(mode or session.get("default_mode", "agent") or "agent").strip().lower()
         if normalized_mode not in {"agent", "fast"}:
@@ -765,7 +898,7 @@ class ChatService:
 
         t = threading.Thread(
             target=self._run_assistant_message,
-            args=(assistant_id, content, normalized_mode, provider, model, stream, str(library_id or "").strip()),
+            args=(assistant_id, content, normalized_mode, provider, model, stream, lib, session_id),
             daemon=True,
         )
         t.start()
@@ -793,6 +926,7 @@ class ChatService:
         model: str,
         stream: bool,
         library_id: str = "",
+        session_id: str = "",
     ) -> None:
         normalized_mode = str(mode or "agent").strip().lower()
         if normalized_mode not in {"agent", "fast"}:
@@ -803,7 +937,7 @@ class ChatService:
             if normalized_mode == "fast":
                 result = self._run_fast(message_id, query, provider, model, stream, library_id=library_id)
             else:
-                result = self._run_agent(message_id, query, provider, model, stream, library_id=library_id)
+                result = self._run_agent(message_id, query, provider, model, stream, library_id=library_id, thread_id=session_id)
             self._store.update_message(
                 message_id,
                 {
@@ -1152,6 +1286,7 @@ class ChatService:
         model: str,
         stream: bool,
         library_id: str = "",
+        thread_id: str = "",
     ) -> dict[str, Any]:
         _ = provider, model
         if not str(library_id or "").strip():
@@ -1177,18 +1312,7 @@ class ChatService:
         rag_error_reason = ""
         rag_tool_called = False
 
-        runtime_overrides: dict[str, Any] = {}
-        if callable(self._library_codex_config_resolver):
-            try:
-                lib_cfg = self._library_codex_config_resolver(workspace, str(library_id or "").strip())
-            except Exception:
-                lib_cfg = {}
-            if isinstance(lib_cfg, dict):
-                runtime_overrides = {
-                    "codex_home": str(lib_cfg.get("codex_home", "") or "").strip(),
-                    "mcp_servers": lib_cfg.get("mcp_servers", []),
-                    "project_skills": lib_cfg.get("project_skills", []),
-                }
+        runtime_overrides = self._build_codex_runtime_overrides(workspace, str(library_id or "").strip())
 
         def _item_id(item: dict[str, Any], fallback_prefix: str = "item") -> str:
             raw = str(item.get("id", "") or "").strip()
@@ -1439,6 +1563,7 @@ class ChatService:
                     query=query,
                     workdir=workspace,
                     library_id=library_id,
+                    thread_id=str(thread_id or "").strip(),
                     runtime_overrides=runtime_overrides,
                     on_event=_on_app_event,
                 )

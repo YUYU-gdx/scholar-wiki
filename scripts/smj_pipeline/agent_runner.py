@@ -141,6 +141,53 @@ class AgentRunner:
     def health(self) -> dict[str, Any]:
         return {"backend": self.backend, "available": False}
 
+    def thread_start(
+        self,
+        workdir: str,
+        library_id: str = "",
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _ = workdir, library_id, runtime_overrides
+        raise RuntimeError(f"agent_backend_unavailable:{self.backend}")
+
+    def thread_list(
+        self,
+        workdir: str,
+        archived: bool = False,
+        limit: int = 100,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _ = workdir, archived, limit, runtime_overrides
+        raise RuntimeError(f"agent_backend_unavailable:{self.backend}")
+
+    def thread_read(
+        self,
+        thread_id: str,
+        workdir: str,
+        include_turns: bool = True,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _ = thread_id, workdir, include_turns, runtime_overrides
+        raise RuntimeError(f"agent_backend_unavailable:{self.backend}")
+
+    def thread_archive(
+        self,
+        thread_id: str,
+        workdir: str,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _ = thread_id, workdir, runtime_overrides
+        raise RuntimeError(f"agent_backend_unavailable:{self.backend}")
+
+    def thread_unarchive(
+        self,
+        thread_id: str,
+        workdir: str,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _ = thread_id, workdir, runtime_overrides
+        raise RuntimeError(f"agent_backend_unavailable:{self.backend}")
+
 
 class HermesRunner(AgentRunner):
     backend = "hermes"
@@ -388,6 +435,7 @@ class CodexRunner(AgentRunner):
         query: str,
         workdir: str,
         library_id: str = "",
+        thread_id: str = "",
         runtime_overrides: dict[str, Any] | None = None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
@@ -450,18 +498,34 @@ class CodexRunner(AgentRunner):
             req_id += 1
             transport.notify("initialized", {})
 
-            thread_res = transport.request(
-                "thread/start",
-                {
-                    "model": self._config.model,
-                    "cwd": workdir,
-                    "approvalPolicy": self._config.approval_policy,
-                    "sandbox": str(self._config.sandbox_mode or "workspace-write"),
-                    "personality": self._config.personality,
-                },
-                req_id,
-                on_notification=_notify,
-            )
+            existing_thread_id = str(thread_id or "").strip()
+            if existing_thread_id:
+                thread_res = transport.request(
+                    "thread/resume",
+                    {
+                        "threadId": existing_thread_id,
+                        "model": self._config.model,
+                        "cwd": workdir,
+                        "approvalPolicy": self._config.approval_policy,
+                        "sandbox": str(self._config.sandbox_mode or "workspace-write"),
+                        "personality": self._config.personality,
+                    },
+                    req_id,
+                    on_notification=_notify,
+                )
+            else:
+                thread_res = transport.request(
+                    "thread/start",
+                    {
+                        "model": self._config.model,
+                        "cwd": workdir,
+                        "approvalPolicy": self._config.approval_policy,
+                        "sandbox": str(self._config.sandbox_mode or "workspace-write"),
+                        "personality": self._config.personality,
+                    },
+                    req_id,
+                    on_notification=_notify,
+                )
             req_id += 1
             thread = thread_res.get("thread") if isinstance(thread_res.get("thread"), dict) else {}
             thread_id = str(thread.get("id", "")).strip()
@@ -608,6 +672,137 @@ class CodexRunner(AgentRunner):
             if stderr:
                 detail = f"{detail}; stderr={stderr}"
             raise RuntimeError(f"agent_backend_unavailable:codex:{detail}")
+        finally:
+            transport.close()
+
+    def _with_transport(
+        self,
+        workdir: str,
+        library_id: str = "",
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> tuple[_JsonRpcStdio, int]:
+        command = self._resolve_command()
+        overrides = runtime_overrides if isinstance(runtime_overrides, dict) else {}
+        mcp_cfg = self._build_mcp_config(workdir, library_id=library_id, runtime_overrides=overrides)
+        argv = [command, *self._config.app_server_args, "-c", f"mcp_servers_file=\"{str(mcp_cfg)}\""]
+        env = {**os.environ, **self._config.extra_env}
+        codex_home = str(overrides.get("codex_home", "") or "").strip()
+        if codex_home:
+            env["CODEX_HOME"] = codex_home
+            codex_home_path = Path(codex_home).resolve()
+            codex_home_path.mkdir(parents=True, exist_ok=True)
+            self._bootstrap_auth_into_codex_home(codex_home_path, env={**os.environ, **self._config.extra_env})
+        transport = _JsonRpcStdio(argv, env=env, cwd=workdir, timeout_seconds=self._config.timeout_seconds)
+        req_id = 1
+        transport.request(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "kn_graph_chat",
+                    "title": "KN Graph Chat",
+                    "version": "0.1.0",
+                },
+                "capabilities": {
+                    "experimentalApi": True,
+                },
+            },
+            req_id,
+        )
+        req_id += 1
+        transport.notify("initialized", {})
+        return transport, req_id
+
+    def thread_start(
+        self,
+        workdir: str,
+        library_id: str = "",
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        transport, req_id = self._with_transport(workdir=workdir, library_id=library_id, runtime_overrides=runtime_overrides)
+        try:
+            res = transport.request(
+                "thread/start",
+                {
+                    "model": self._config.model,
+                    "cwd": workdir,
+                    "approvalPolicy": self._config.approval_policy,
+                    "sandbox": str(self._config.sandbox_mode or "workspace-write"),
+                    "personality": self._config.personality,
+                },
+                req_id,
+            )
+            return res if isinstance(res, dict) else {}
+        finally:
+            transport.close()
+
+    def thread_list(
+        self,
+        workdir: str,
+        archived: bool = False,
+        limit: int = 100,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        transport, req_id = self._with_transport(workdir=workdir, runtime_overrides=runtime_overrides)
+        try:
+            res = transport.request(
+                "thread/list",
+                {
+                    "cwd": workdir,
+                    "archived": bool(archived),
+                    "limit": max(1, min(200, int(limit))),
+                    "sortDirection": "desc",
+                    "sortKey": "updatedAt",
+                },
+                req_id,
+            )
+            return res if isinstance(res, dict) else {}
+        finally:
+            transport.close()
+
+    def thread_read(
+        self,
+        thread_id: str,
+        workdir: str,
+        include_turns: bool = True,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        transport, req_id = self._with_transport(workdir=workdir, runtime_overrides=runtime_overrides)
+        try:
+            res = transport.request(
+                "thread/read",
+                {
+                    "threadId": str(thread_id or "").strip(),
+                    "includeTurns": bool(include_turns),
+                },
+                req_id,
+            )
+            return res if isinstance(res, dict) else {}
+        finally:
+            transport.close()
+
+    def thread_archive(
+        self,
+        thread_id: str,
+        workdir: str,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        transport, req_id = self._with_transport(workdir=workdir, runtime_overrides=runtime_overrides)
+        try:
+            res = transport.request("thread/archive", {"threadId": str(thread_id or "").strip()}, req_id)
+            return res if isinstance(res, dict) else {}
+        finally:
+            transport.close()
+
+    def thread_unarchive(
+        self,
+        thread_id: str,
+        workdir: str,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        transport, req_id = self._with_transport(workdir=workdir, runtime_overrides=runtime_overrides)
+        try:
+            res = transport.request("thread/unarchive", {"threadId": str(thread_id or "").strip()}, req_id)
+            return res if isinstance(res, dict) else {}
         finally:
             transport.close()
 
