@@ -28,6 +28,10 @@
     .scene { position:absolute; inset:0; background:#dbe6f5; }
     .scene canvas { background:#dbe6f5 !important; }
     .tooltip { position:absolute; z-index:30; display:none; max-width:min(380px,78vw); padding:10px 12px; border-radius:12px; border:1px solid var(--line); background:rgba(255,255,255,.98); color:#111827; font-size:12px; line-height:1.5; pointer-events:none; box-shadow:var(--shadow); }
+    .legend { position:absolute; left:16px; bottom:16px; z-index:22; border:1px solid rgba(198,198,205,.75); border-radius:12px; background:rgba(255,255,255,.95); box-shadow:var(--shadow); padding:8px 10px; min-width:200px; }
+    .legend-title { font-size:11px; color:#334155; margin-bottom:6px; font-weight:600; }
+    .legend-row { display:flex; align-items:center; gap:8px; font-size:11px; color:#475569; margin:4px 0; }
+    .legend-dot { width:10px; height:10px; border-radius:999px; border:1px solid rgba(15,23,42,.12); }
     .fallback { position:absolute; inset:95px 14px 14px 14px; z-index:25; display:grid; place-items:center; border-radius:16px; border:1px dashed rgba(148,163,184,.4); background:rgba(255,255,255,.9); color:#334155; text-align:center; padding:20px; }
     .side { min-width:0; min-height:0; padding:12px; background:linear-gradient(180deg,rgba(246,243,245,.94),rgba(240,237,239,.92)); overflow:hidden; }
     .side-scroll { height:100%; overflow:auto; display:grid; gap:10px; padding-right:4px; }
@@ -58,6 +62,12 @@
         </div>
       </div>
       <div id="graphWrap" class="graph-wrap"><div id="scene" class="scene"></div></div>
+      <div class="legend">
+        <div class="legend-title">关系颜色图例</div>
+        <div class="legend-row"><span class="legend-dot" style="background:#53d39a"></span><span>正向关系（positive）</span></div>
+        <div class="legend-row"><span class="legend-dot" style="background:#f07178"></span><span>负向关系（negative）</span></div>
+        <div class="legend-row"><span class="legend-dot" style="background:#f6c95b"></span><span>其他/不确定/非线性/调节</span></div>
+      </div>
       <div id="tooltip" class="tooltip"></div>
       <div id="fallback" class="fallback hidden">图谱加载中...</div>
     </main>
@@ -71,7 +81,7 @@
       const initialLibraryIds = String(params.get("library_ids") || activeLibraryId).split(",").map(v => v.trim()).filter(Boolean);
       const state = { graph:null, pointerDown:false, allNodes:[], allLinks:[], moderationLinks:[], visibleNodes:[], visibleLinks:[], paperMap:{}, libraries:[], selectedLibraryIds:[...new Set(initialLibraryIds)], expandedRelations:false };
       const els = { libraryToggle:document.getElementById("libraryToggle"), libraryMenu:document.getElementById("libraryMenu"), searchInput:document.getElementById("searchInput"), searchResults:document.getElementById("searchResults"), detailScroll:document.getElementById("detailScroll"), tooltip:document.getElementById("tooltip"), fallback:document.getElementById("fallback"), scene:document.getElementById("scene"), graphWrap:document.getElementById("graphWrap") };
-      const theme = { node:"#7bd8f6", pos:"#53d39a", neg:"#f07178", neu:"#f6c95b", mod:"#cbd5e1" };
+      const theme = { node:"#7bd8f6", pos:"#53d39a", neg:"#f07178", neu:"#f6c95b", mod:"#4f46e5", modHint:"#94a3b8" };
       const esc = t => String(t || "").replace(/[&<>]/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[ch]));
       const nodeName = n => n?.label || n?.name || n?.id || "node";
       const edgeKey = l => { const s = typeof l.source === "object" ? l.source?.id : l.source; const t = typeof l.target === "object" ? l.target?.id : l.target; return `${s}=>${t}::${l.paper_id||""}::${l.direction||""}::${l.is_moderation?"m":"e"}`; };
@@ -85,9 +95,9 @@
       const paperFromEdge = l => { const pid = String(l.paper_id || ""); if(!pid) return null; return Object.values(state.paperMap).find(p => String(p.paper_id || "") === pid) || { paper_id: pid }; };
       const setEmpty = t => { els.detailScroll.innerHTML = `<section class="card"><h3>详情</h3><div class="muted">${esc(t)}</div></section>`; };
       const visibleNodesFrom = nodes => { let n = nodes.filter(x => String(x.type||"")==="variable" && !!x.validated_variable && Number(x.relation_degree||0)>0); if(!n.length) n = nodes.filter(x => String(x.type||"")==="variable" && Number(x.relation_degree||0)>0); if(!n.length) n = nodes.filter(x => String(x.type||"")==="variable"); return n; };
-      const edgeColor = l => l.is_moderation ? theme.mod : ((String(l.display_effect_class||l.direction||"").toLowerCase()==="negative") ? theme.neg : (String(l.display_effect_class||l.direction||"").toLowerCase()==="positive") ? theme.pos : theme.neu);
+      const edgeColor = l => ((String(l.display_effect_class||l.direction||"").toLowerCase()==="negative") ? theme.neg : (String(l.display_effect_class||l.direction||"").toLowerCase()==="positive") ? theme.pos : theme.neu);
       const findByName = (name,nodes) => { const norm = String(name||"").trim().toLowerCase(); if(!norm) return null; return nodes.find(n => [n.label,n.name,n.id].some(v => String(v||"").trim().toLowerCase()===norm)) || null; };
-      function augmentModeration(nodes,links,mods){ const nodeById=new Map(nodes.map(n=>[n.id,n])); const outN=[...nodes]; const outL=[...links]; const visibleIds=new Set(nodes.map(n=>n.id)); (Array.isArray(mods)?mods:[]).forEach((m,i)=>{ const r=(m&&typeof m.moderated_relation==="object")?m.moderated_relation:{}; let mid=String(m.moderator_node_id||m.moderator_id||"").trim(), sid=String(r.source_node_id||r.source_id||r.source||m.source_node_id||"").trim(), tid=String(r.target_node_id||r.target_id||r.target||m.target_node_id||"").trim(); if(!mid){ const g=findByName(m.moderator_var||m.moderator_name||m.moderator,nodes); mid=g?String(g.id):""; } if(!sid){ const g=findByName(r.source_var||r.source_name||m.source_var,nodes); sid=g?String(g.id):""; } if(!tid){ const g=findByName(r.target_var||r.target_name||m.target_var,nodes); tid=g?String(g.id):""; } if(!mid||!sid||!tid||!visibleIds.has(mid)||!visibleIds.has(sid)||!visibleIds.has(tid)) return; const s=nodeById.get(sid), t=nodeById.get(tid); if(!s||!t) return; const aid=`mod_anchor::${mid}::${sid}::${tid}::${i}`; outN.push({id:aid,label:"",type:"mod_anchor",__is_mod_anchor:true,x:(Number(s.x)+Number(t.x))/2||0,y:(Number(s.y)+Number(t.y))/2||0,z:(Number(s.z)+Number(t.z))/2||0}); outL.push({source:mid,target:aid,is_moderation:true,direction:"moderation",relation_form:"moderation",relation_type_std:"moderation",display_effect_class:"moderation",paper_id:m.paper_id||m.paper_id_raw||"",doi:m.doi||"",verification:m.verification||"",evidence_anchor:m.evidence_anchor||"",evidence_snippet:m.evidence_snippet||"",hypothesis_label:m.hypothesis_label||"",moderated_source:sid,moderated_target:tid}); }); return {nodes:outN,links:outL}; }
+      function augmentModeration(nodes,links,mods){ const nodeById=new Map(nodes.map(n=>[n.id,n])); const outN=[...nodes]; const outL=[...links]; const visibleIds=new Set(nodes.map(n=>n.id)); (Array.isArray(mods)?mods:[]).forEach((m,i)=>{ const r=(m&&typeof m.moderated_relation==="object")?m.moderated_relation:{}; let mid=String(m.moderator_node_id||m.moderator_id||"").trim(), sid=String(r.source_node_id||r.source_id||r.source||m.source_node_id||"").trim(), tid=String(r.target_node_id||r.target_id||r.target||m.target_node_id||"").trim(); if(!mid){ const g=findByName(m.moderator_var||m.moderator_name||m.moderator,nodes); mid=g?String(g.id):""; } if(!sid){ const g=findByName(r.source_var||r.source_name||m.source_var,nodes); sid=g?String(g.id):""; } if(!tid){ const g=findByName(r.target_var||r.target_name||m.target_var,nodes); tid=g?String(g.id):""; } if(!mid||!sid||!tid||!visibleIds.has(mid)||!visibleIds.has(sid)||!visibleIds.has(tid)) return; const s=nodeById.get(sid), t=nodeById.get(tid); if(!s||!t) return; const aid=`mod_anchor::${mid}::${sid}::${tid}::${i}`; outN.push({id:aid,label:"",type:"mod_anchor",__is_mod_anchor:true,moderated_source:sid,moderated_target:tid,x:(Number(s.x)+Number(t.x))/2||0,y:(Number(s.y)+Number(t.y))/2||0,z:(Number(s.z)+Number(t.z))/2||0}); outL.push({source:mid,target:aid,is_moderation:true,direction:"moderation",relation_form:"moderation",relation_type_std:"moderation",display_effect_class:"moderation",paper_id:m.paper_id||m.paper_id_raw||"",doi:m.doi||"",verification:m.verification||"",evidence_anchor:m.evidence_anchor||"",evidence_snippet:m.evidence_snippet||"",hypothesis_label:m.hypothesis_label||"",moderated_source:sid,moderated_target:tid}); }); return {nodes:outN,links:outL}; }
       function renderNodeDetails(node){
         const rels=relationEdgesFor(node.id), show=state.expandedRelations?rels:rels.slice(0,3), srcInfo=node.latest_concept_source||{}, srcPid=String(srcInfo.paper_id||""), srcPaper=srcPid?Object.values(state.paperMap).find(p=>String(p.paper_id||"")===srcPid):null;
         const rows=show.map(l=>{ if(l.is_moderation){ const s=findNodeById(String(l.moderated_source||"")), t=findNodeById(String(l.moderated_target||"")); return `<div class="rel-item"><div class="text">调节：${esc(nodeName(l.source))} 调节 ${esc(nodeName(s))} -> ${esc(nodeName(t))}</div><button class="link-btn" data-edge="${esc(edgeKey(l))}">查看关系详情</button></div>`; } const s=typeof l.source==="object"?l.source:findNodeById(String(l.source||"")); const t=typeof l.target==="object"?l.target:findNodeById(String(l.target||"")); return `<div class="rel-item"><div class="text">${esc(nodeName(s))} -> ${esc(nodeName(t))}</div><button class="link-btn" data-edge="${esc(edgeKey(l))}">查看关系详情</button></div>`; }).join("");
@@ -119,22 +129,41 @@
         if(typeof window.ForceGraph3D!=="function"){ els.fallback.classList.remove("hidden"); els.fallback.textContent="3D 引擎未加载。"; setEmpty("3D 引擎未加载。"); return; }
         els.fallback.classList.add("hidden"); els.scene.innerHTML="";
         const forceNodes=graphNodes.map(n=>{const c=Object.assign({},n);delete c.x;delete c.y;delete c.z;delete c.fx;delete c.fy;delete c.fz;return c;});
+        const simNodeById = new Map(forceNodes.map(n => [String(n.id||""), n]));
         const g=window.ForceGraph3D({rendererConfig:{alpha:false,antialias:true}})(els.scene)
           .backgroundColor("#dbe6f5")
           .showNavInfo(false)
-          .nodeVal(n=>n&&n.__is_mod_anchor?0.001:4.5)
-          .nodeColor(n=>n&&n.__is_mod_anchor?"rgba(0,0,0,0)":theme.node)
+          .nodeVal(n=>n&&n.__is_mod_anchor?1.1:4.5)
+          // Hide moderation anchors from rendering completely to avoid depth-buffer occlusion.
+          .nodeVisibility(n=>!(n&&n.__is_mod_anchor))
+          .nodeColor(()=>theme.node)
           .nodeRelSize(5)
           .linkColor(edgeColor)
           .linkOpacity(.86)
-          .linkWidth(l=>l.is_moderation?1.4:1.1)
-          .linkDirectionalArrowLength(l=>l.is_moderation?6:4)
-          .linkDirectionalArrowRelPos(1)
+          .linkWidth(l=>l.is_moderation?2.8:1.1)
+          .linkDirectionalArrowLength(l=>l.is_moderation?9:4)
+          .linkDirectionalArrowRelPos(l=>l.is_moderation?0.93:1)
           .linkDirectionalArrowColor(edgeColor)
           .onNodeHover(n=>{if(!n||n.__is_mod_anchor)return hideTip();showTip([`<b>${esc(nodeName(n))}</b>`,`关系数：<code>${relationEdgesFor(n.id).length}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);})
           .onLinkHover(l=>{if(!l)return hideTip();if(l.is_moderation){const ms=findNodeById(String(l.moderated_source||"")),mt=findNodeById(String(l.moderated_target||""));showTip([`<b>调节关系</b>`,`${esc(nodeName(l.source))} 调节 ${esc(nodeName(ms))} -> ${esc(nodeName(mt))}`,`论文：<code>${esc(l.paper_id||"-")}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);return;}const s=typeof l.source==="object"?l.source:findNodeById(String(l.source||""));const t=typeof l.target==="object"?l.target:findNodeById(String(l.target||""));showTip([`<b>关系</b>`,`${esc(nodeName(s))} -> ${esc(nodeName(t))}`,`方向：<code>${esc(l.direction||"-")}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);})
           .onNodeClick(n=>{if(!n||n.__is_mod_anchor)return;renderNodeDetails(n);})
-          .onLinkClick(l=>{if(!l)return;renderLinkDetails(l);});
+          .onLinkClick(l=>{if(!l)return;renderLinkDetails(l);})
+          .onEngineTick(()=>{
+            // Keep moderation anchors exactly at the midpoint of moderated source/target.
+            for(const n of forceNodes){
+              if(!n || !n.__is_mod_anchor) continue;
+              const sid=String(n.moderated_source||"");
+              const tid=String(n.moderated_target||"");
+              const s=simNodeById.get(sid), t=simNodeById.get(tid);
+              if(!s||!t) continue;
+              const x=((Number(s.x)||0)+(Number(t.x)||0))/2;
+              const y=((Number(s.y)||0)+(Number(t.y)||0))/2;
+              const z=((Number(s.z)||0)+(Number(t.z)||0))/2;
+              n.x=x; n.y=y; n.z=z;
+              n.fx=x; n.fy=y; n.fz=z;
+              n.vx=0; n.vy=0; n.vz=0;
+            }
+          });
         state.graph=g; g.graphData({nodes:forceNodes,links:state.visibleLinks});
         const syncGraphSize = () => {
           const rect = els.graphWrap.getBoundingClientRect();
