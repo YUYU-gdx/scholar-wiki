@@ -833,17 +833,24 @@ class ChatService:
 
     def _build_codex_runtime_overrides(self, workspace: str, library_id: str) -> dict[str, Any]:
         runtime_overrides: dict[str, Any] = {}
+        # Default to global Codex login state under user home.
+        # Set CHAT_CODEX_FORCE_LIBRARY_HOME=1 to force per-library isolated CODEX_HOME.
+        force_library_home = str(os.getenv("CHAT_CODEX_FORCE_LIBRARY_HOME", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
+        global_home_override = str(os.getenv("CHAT_CODEX_HOME", "") or "").strip()
+        if global_home_override:
+            runtime_overrides["codex_home"] = global_home_override
+        elif not force_library_home:
+            runtime_overrides["codex_home"] = str((Path.home() / ".codex").resolve())
         if callable(self._library_codex_config_resolver):
             try:
                 lib_cfg = self._library_codex_config_resolver(workspace, str(library_id or "").strip())
             except Exception:
                 lib_cfg = {}
             if isinstance(lib_cfg, dict):
-                runtime_overrides = {
-                    "codex_home": str(lib_cfg.get("codex_home", "") or "").strip(),
-                    "mcp_servers": lib_cfg.get("mcp_servers", []),
-                    "project_skills": lib_cfg.get("project_skills", []),
-                }
+                if force_library_home:
+                    runtime_overrides["codex_home"] = str(lib_cfg.get("codex_home", "") or "").strip()
+                runtime_overrides["mcp_servers"] = lib_cfg.get("mcp_servers", [])
+                runtime_overrides["project_skills"] = lib_cfg.get("project_skills", [])
         return runtime_overrides
 
     def submit_message(
@@ -1578,15 +1585,6 @@ class ChatService:
                 )
                 result = fut.result(timeout=agent_timeout_seconds)
         except Exception as exc:
-            self._emit(message_id, "citation", {"phase": "agent_degraded", "reason": str(exc)})
-            degraded = self._run_fast(
-                message_id=message_id,
-                query=query,
-                provider=provider,
-                model=model,
-                stream=stream,
-                library_id=library_id,
-            )
             out_trace = list(tool_trace)
             out_trace.append(
                 {
@@ -1599,6 +1597,19 @@ class ChatService:
                     "summary": "codex.run_turn timeout/failure",
                     "result": {"error": str(exc)},
                 }
+            )
+            fallback_flag = str(os.getenv("CHAT_AGENT_FALLBACK_TO_FAST", "0") or "0").strip().lower()
+            allow_fallback = fallback_flag in {"1", "true", "yes", "on"}
+            if not allow_fallback:
+                raise RuntimeError(f"agent_backend_unavailable:codex:{exc}")
+            self._emit(message_id, "citation", {"phase": "agent_degraded", "reason": str(exc)})
+            degraded = self._run_fast(
+                message_id=message_id,
+                query=query,
+                provider=provider,
+                model=model,
+                stream=stream,
+                library_id=library_id,
             )
             out_trace.extend(list(degraded.get("tool_trace", [])))
             retrieval_trace = degraded.get("retrieval_trace", {}) if isinstance(degraded.get("retrieval_trace"), dict) else {}

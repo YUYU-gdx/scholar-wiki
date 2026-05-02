@@ -410,13 +410,49 @@ export default function ChatView() {
                           </div>
                         )}
                         {Array.isArray(m.tool_trace) && m.tool_trace.length > 0 && (
-                          <div className="space-y-1 mt-2">
-                            {m.tool_trace.map((t, idx) => (
-                              <div key={idx} className="text-[10px] font-mono text-on-surface-variant bg-surface-container-low px-2 py-1 rounded border border-outline-variant/50">
-                                <span className="text-secondary font-bold">{`工具调用：${toolNameZh(extractToolName((t && typeof t === 'object') ? (t as Record<string, unknown>) : {}))}`}</span>
-                                {t.arguments && <span className="ml-2 text-outline truncate">{typeof t.arguments === 'string' ? t.arguments.slice(0, 80) : JSON.stringify(t.arguments).slice(0, 80)}</span>}
-                              </div>
-                            ))}
+                          <div className="space-y-2 mt-2">
+                            {m.tool_trace.map((t, idx) => {
+                              const toolCall = (t && typeof t === 'object') ? (t as Record<string, unknown>) : {};
+                              const itemKey = `${m.message_id}-inline-${idx}`;
+                              const itemExpanded = !!expandedToolItems[itemKey];
+                              const toolName = extractToolName(toolCall);
+                              return (
+                                <div key={idx} className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-[10px] font-mono overflow-hidden">
+                                  <button
+                                    onClick={() => setExpandedToolItems(prev => ({ ...prev, [itemKey]: !itemExpanded }))}
+                                    className="w-full text-left p-2.5 flex items-center justify-between hover:bg-surface-container-low transition-colors"
+                                  >
+                                    <span className="text-secondary font-bold truncate">{`工具调用：${toolNameZh(toolName)}`}</span>
+                                    <ChevronDown className={`w-3.5 h-3.5 text-outline transition-transform ${itemExpanded ? 'rotate-180' : ''}`} />
+                                  </button>
+                                  {itemExpanded && (
+                                    <div className="px-2.5 pb-2.5 space-y-2">
+                                      <div>
+                                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">参数</div>
+                                        <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
+                                          {normalizeToolArgs(extractToolArgs(toolCall)).map((row, i) => (
+                                            <div key={`${row.label}-${i}`} className="flex items-start gap-2">
+                                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary-container/20 text-secondary tracking-wide">{row.label}</span>
+                                              <span className="text-[11px] text-on-surface-variant break-words">{row.value}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">调用结果</div>
+                                        <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
+                                          {normalizeToolResult(extractToolResult(toolCall)).map((line, i) => (
+                                            <div key={`inline-res-${i}`} className="text-[11px] text-on-surface-variant break-words">
+                                              {line}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </>

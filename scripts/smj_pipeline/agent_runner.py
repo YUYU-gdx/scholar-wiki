@@ -510,19 +510,36 @@ class CodexRunner(AgentRunner):
 
             existing_thread_id = str(thread_id or "").strip()
             if existing_thread_id:
-                thread_res = transport.request(
-                    "thread/resume",
-                    {
-                        "threadId": existing_thread_id,
-                        "model": self._config.model,
-                        "cwd": workdir,
-                        "approvalPolicy": self._config.approval_policy,
-                        "sandbox": str(self._config.sandbox_mode or "workspace-write"),
-                        "personality": self._config.personality,
-                    },
-                    req_id,
-                    on_notification=_notify,
-                )
+                try:
+                    thread_res = transport.request(
+                        "thread/resume",
+                        {
+                            "threadId": existing_thread_id,
+                            "model": self._config.model,
+                            "cwd": workdir,
+                            "approvalPolicy": self._config.approval_policy,
+                            "sandbox": str(self._config.sandbox_mode or "workspace-write"),
+                            "personality": self._config.personality,
+                        },
+                        req_id,
+                        on_notification=_notify,
+                    )
+                except RuntimeError as resume_exc:
+                    # Freshly created threads may not have persisted rollout yet.
+                    if "no rollout found for thread id" not in str(resume_exc).lower():
+                        raise
+                    thread_res = transport.request(
+                        "thread/start",
+                        {
+                            "model": self._config.model,
+                            "cwd": workdir,
+                            "approvalPolicy": self._config.approval_policy,
+                            "sandbox": str(self._config.sandbox_mode or "workspace-write"),
+                            "personality": self._config.personality,
+                        },
+                        req_id,
+                        on_notification=_notify,
+                    )
             else:
                 thread_res = transport.request(
                     "thread/start",
