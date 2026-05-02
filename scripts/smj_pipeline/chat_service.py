@@ -585,6 +585,10 @@ class ModelRouter:
         )
         yield from client.stream_messages(messages=messages, timeout_seconds=int(timeout_seconds))
 
+    def default_provider(self) -> str:
+        self._registry.reload()
+        return str(self._registry.default_provider or "").strip()
+
 
 class ChatService:
     def __init__(
@@ -719,7 +723,9 @@ class ChatService:
         if not str(library_id or "").strip():
             raise ValueError("library_id_required")
         now = _now_iso()
-        normalized_mode = "agent"
+        normalized_mode = str(mode or session.get("default_mode", "agent") or "agent").strip().lower()
+        if normalized_mode not in {"agent", "fast"}:
+            normalized_mode = "agent"
         user_msg = {
             "message_id": f"msg_{uuid.uuid4().hex}",
             "session_id": session_id,
@@ -788,11 +794,16 @@ class ChatService:
         stream: bool,
         library_id: str = "",
     ) -> None:
-        _ = mode
-        self._emit(message_id, "started", {"message_id": message_id, "mode": "agent"})
+        normalized_mode = str(mode or "agent").strip().lower()
+        if normalized_mode not in {"agent", "fast"}:
+            normalized_mode = "agent"
+        self._emit(message_id, "started", {"message_id": message_id, "mode": normalized_mode})
         self._emit(message_id, "status", {"stage": "retrieve", "label": "正在规划工具调用"})
         try:
-            result = self._run_agent(message_id, query, provider, model, stream, library_id=library_id)
+            if normalized_mode == "fast":
+                result = self._run_fast(message_id, query, provider, model, stream, library_id=library_id)
+            else:
+                result = self._run_agent(message_id, query, provider, model, stream, library_id=library_id)
             self._store.update_message(
                 message_id,
                 {
@@ -989,7 +1000,24 @@ class ChatService:
     ) -> dict[str, Any]:
         if not str(library_id or "").strip():
             raise RuntimeError("library_id_required")
-        rewritten = self._rewrite_query(query=query, provider=provider, model=model)
+        effective_provider = str(provider or "").strip()
+        effective_model = str(model or "").strip()
+        if effective_provider.lower() == "codex":
+            fallback_provider = self._models.default_provider()
+            if fallback_provider:
+                effective_provider = fallback_provider
+                effective_model = ""
+                self._emit(
+                    message_id,
+                    "citation",
+                    {
+                        "phase": "provider_fallback",
+                        "from": str(provider or "").strip(),
+                        "to": effective_provider,
+                    },
+                )
+
+        rewritten = self._rewrite_query(query=query, provider=effective_provider, model=effective_model)
         self._emit(message_id, "citation", {"phase": "query_rewrite", "query": rewritten})
         self._emit(message_id, "status", {"stage": "retrieve", "label": "正在召回相关片段"})
         library = str(library_id or "").strip()
@@ -1027,6 +1055,39 @@ class ChatService:
                 graph_hits = []
                 errors.append(f"graph_failed:{exc}")
 
+        tool_trace: list[dict[str, Any]] = [
+            {
+                "backend": "builtin",
+                "step": 1,
+                "state": "completed",
+                "kind": "tool",
+                "tool": "rag_search.keyword",
+                "args": {"query": rewritten, "top_k": 8, "library_id": library, "route": "keyword"},
+                "summary": "rag_search.keyword",
+                "result": {"hit_count": len(kw_hits), "sample_ids": [str(x.get("id", "") or x.get("paper_id", "")) for x in kw_hits[:3]]},
+            },
+            {
+                "backend": "builtin",
+                "step": 2,
+                "state": "completed",
+                "kind": "tool",
+                "tool": "rag_search.vector",
+                "args": {"query": rewritten, "top_k": 8, "library_id": library, "route": "vector"},
+                "summary": "rag_search.vector",
+                "result": {"hit_count": len(vec_hits), "sample_ids": [str(x.get("id", "") or x.get("paper_id", "")) for x in vec_hits[:3]]},
+            },
+            {
+                "backend": "builtin",
+                "step": 3,
+                "state": "completed",
+                "kind": "tool",
+                "tool": "graph_search",
+                "args": {"query": rewritten, "limit": 8, "library_id": library},
+                "summary": "graph_search",
+                "result": {"hit_count": len(graph_hits), "sample_ids": [str(x.get("id", "") or x.get("paper_id", "")) for x in graph_hits[:3]]},
+            },
+        ]
+
         merged: list[dict[str, Any]] = []
         seen: set[str] = set()
         for route, rows in (("keyword", kw_hits), ("vector", vec_hits), ("graph", graph_hits)):
@@ -1061,13 +1122,13 @@ class ChatService:
         self._emit(message_id, "status", {"stage": "generate", "label": "正在生成回答"})
         try:
             if stream:
-                for chunk in self._models.stream(provider=provider, model=model, messages=answer_prompt, timeout_seconds=90):
+                for chunk in self._models.stream(provider=effective_provider, model=effective_model, messages=answer_prompt, timeout_seconds=90):
                     if not chunk:
                         continue
                     answer += chunk
                     self._emit(message_id, "delta", {"text": chunk})
             else:
-                answer = self._models.complete(provider=provider, model=model, messages=answer_prompt, timeout_seconds=90)
+                answer = self._models.complete(provider=effective_provider, model=effective_model, messages=answer_prompt, timeout_seconds=90)
                 if answer:
                     self._emit(message_id, "delta", {"text": answer})
         except Exception as exc:
@@ -1080,7 +1141,7 @@ class ChatService:
             "answer": answer.strip(),
             "citations": citations,
             "retrieval_trace": retrieval_trace,
-            "tool_trace": [],
+            "tool_trace": tool_trace,
         }
 
     def _run_agent(
@@ -1368,13 +1429,53 @@ class ChatService:
                 )
                 return
 
-        result = runner.run_turn(
-            query=query,
-            workdir=workspace,
-            library_id=library_id,
-            runtime_overrides=runtime_overrides,
-            on_event=_on_app_event,
-        )
+        try:
+            agent_timeout_seconds = int(os.getenv("CHAT_AGENT_TURN_TIMEOUT_SECONDS", "180") or "180")
+            if agent_timeout_seconds < 30:
+                agent_timeout_seconds = 30
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(
+                    runner.run_turn,
+                    query=query,
+                    workdir=workspace,
+                    library_id=library_id,
+                    runtime_overrides=runtime_overrides,
+                    on_event=_on_app_event,
+                )
+                result = fut.result(timeout=agent_timeout_seconds)
+        except Exception as exc:
+            self._emit(message_id, "citation", {"phase": "agent_degraded", "reason": str(exc)})
+            degraded = self._run_fast(
+                message_id=message_id,
+                query=query,
+                provider=provider,
+                model=model,
+                stream=stream,
+                library_id=library_id,
+            )
+            out_trace = list(tool_trace)
+            out_trace.append(
+                {
+                    "backend": "codex",
+                    "step": len(out_trace) + 1,
+                    "state": "failed",
+                    "kind": "tool",
+                    "tool": "codex.run_turn",
+                    "args": {"library_id": library_id},
+                    "summary": "codex.run_turn timeout/failure",
+                    "result": {"error": str(exc)},
+                }
+            )
+            out_trace.extend(list(degraded.get("tool_trace", [])))
+            retrieval_trace = degraded.get("retrieval_trace", {}) if isinstance(degraded.get("retrieval_trace"), dict) else {}
+            retrieval_trace["backend"] = "codex_degraded_to_fast"
+            retrieval_trace["degraded_reason"] = str(exc)
+            return {
+                "answer": str(degraded.get("answer", "") or "").strip(),
+                "citations": list(degraded.get("citations", []) or []),
+                "retrieval_trace": retrieval_trace,
+                "tool_trace": out_trace,
+            }
         self._emit(message_id, "status", {"stage": "generate", "label": "正在由 Codex 生成回答"})
 
         answer = str(result.get("answer", "") or "").strip()

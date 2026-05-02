@@ -52,6 +52,7 @@ class SendMessageRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     content: str = ""
+    mode: str = "agent"
     stream: bool = True
     library_id: str = ""
     provider: str = "codex"

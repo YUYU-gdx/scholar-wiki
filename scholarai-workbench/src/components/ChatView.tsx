@@ -4,8 +4,88 @@ import { useApp } from '../App';
 import { api } from '../api';
 import type { ChatSession, ChatMessage, Citation as CitationType } from '../types';
 
+function stringifyToolPayload(payload: unknown): string {
+  if (payload == null) return '';
+  if (typeof payload === 'string') return payload;
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch {
+    return String(payload);
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function renderScalar(value: unknown): string {
+  if (value === null || value === undefined) return '(empty)';
+  if (typeof value === 'string') return value || '(empty)';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return stringifyToolPayload(value);
+}
+
+function normalizeCitationText(c: CitationType): { sentence: string; paragraph: string } {
+  const ctx = isPlainObject(c.context) ? c.context : {};
+  const paragraphCtx = isPlainObject(ctx.paragraph) ? ctx.paragraph : {};
+  const sentenceCtx = isPlainObject(ctx.sentence) ? ctx.sentence : {};
+  const sentence = String(c.sentence || sentenceCtx.text || c.text || '').trim();
+  const paragraph = String(c.paragraph || paragraphCtx.text || c.text || '').trim();
+  return { sentence, paragraph };
+}
+
+function ensureCitationMarkers(answer: string, citations: CitationType[]): string {
+  const text = String(answer || '');
+  if (!citations.length) return text;
+  if (/\[\d+\]/.test(text)) return text;
+  const refs = citations.map((_, idx) => `[${idx + 1}]`).join('');
+  return `${text}\n\n${refs}`;
+}
+
+function extractToolName(toolCall: Record<string, unknown>): string {
+  const raw = String(
+    toolCall.name ||
+    toolCall.tool ||
+    toolCall.summary ||
+    toolCall.kind ||
+    'tool',
+  ).trim();
+  const normalized = raw.split('.').pop() || raw;
+  const key = normalized.toLowerCase();
+  if (key.includes('rag_search') || key.includes('rag')) return 'RAG';
+  if (key.includes('grep') || key.includes('rg')) return 'grep';
+  if (key.includes('graph_search')) return 'Graph Search';
+  if (key.includes('weaviate_query')) return 'Weaviate Query';
+  if (key.includes('weaviate_fetch_object')) return 'Fetch Object';
+  return normalized || 'tool';
+}
+
+function extractToolArgs(toolCall: Record<string, unknown>): unknown {
+  return toolCall.arguments ?? toolCall.args ?? (toolCall.raw && typeof toolCall.raw === 'object' ? (toolCall.raw as Record<string, unknown>).arguments : undefined);
+}
+
+function extractToolResult(toolCall: Record<string, unknown>): unknown {
+  if (toolCall.result !== undefined) return toolCall.result;
+  if (toolCall.output !== undefined) return toolCall.output;
+  if (toolCall.raw && typeof toolCall.raw === 'object') {
+    const raw = toolCall.raw as Record<string, unknown>;
+    if (raw.result !== undefined) return raw.result;
+    if (raw.output !== undefined) return raw.output;
+  }
+  return undefined;
+}
+
 export default function ChatView() {
-  const { sessions, setSessions, activeSessionId, setActiveSessionId, activeLibraryId } = useApp();
+  const {
+    sessions,
+    setSessions,
+    activeSessionId,
+    setActiveSessionId,
+    activeLibraryId,
+    setSelectedPaperId,
+    setSelectedPaperLibraryId,
+    setCurrentView,
+  } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [mode, setMode] = useState<'fast' | 'agent'>('agent');
@@ -15,10 +95,22 @@ export default function ChatView() {
   const [loadingSession, setLoadingSession] = useState(false);
   const [showModeSwitcher, setShowModeSwitcher] = useState(false);
   const [citationModal, setCitationModal] = useState<CitationType | null>(null);
+  const [processTraceExpanded, setProcessTraceExpanded] = useState(false);
+  const [expandedToolItems, setExpandedToolItems] = useState<Record<string, boolean>>({});
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
 
   const activeSession = sessions.find(s => s.session_id === activeSessionId);
+  const openCitationInReader = useCallback((c: CitationType) => {
+    const paperId = String(c.paper_id || '').trim();
+    if (!paperId) {
+      setCitationModal(c);
+      return;
+    }
+    setSelectedPaperId(paperId);
+    setSelectedPaperLibraryId(activeLibraryId);
+    setCurrentView('reader');
+  }, [activeLibraryId, setCurrentView, setSelectedPaperId, setSelectedPaperLibraryId]);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -168,6 +260,7 @@ export default function ChatView() {
   }, [messages]);
 
   const runningAssistant = messages.find(m => m.role === 'assistant' && m.status === 'running');
+  const latestAssistantWithTrace = messages.filter(m => m.role === 'assistant' && m.tool_trace && m.tool_trace.length > 0).slice(-1)[0];
 
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -229,7 +322,7 @@ export default function ChatView() {
                     {m.role === 'assistant' ? (
                       <>
                         <div className="font-serif text-[15px] text-on-surface leading-relaxed antialiased whitespace-pre-wrap">
-                          {m.content || (m.status === 'running' ? 'Thinking...' : '')}
+                          {ensureCitationMarkers(m.content || '', Array.isArray(m.citations) ? m.citations : []) || (m.status === 'running' ? 'Thinking...' : '')}
                           {m.status === 'running' && <span className="animate-pulse-soft"> ▌</span>}
                         </div>
                         {m.status === 'failed' && m.error_detail && (
@@ -238,16 +331,20 @@ export default function ChatView() {
                           </div>
                         )}
                         {Array.isArray(m.citations) && m.citations.length > 0 && (
-                          <div className="grid grid-cols-1 gap-2 mt-3">
+                          <div className="mt-4 rounded-xl border border-outline-variant bg-surface-container-low p-3 space-y-2">
+                            <div className="text-[10px] font-mono uppercase tracking-widest text-outline">References</div>
                             {m.citations.map((c, idx) => (
                               <button
                                 key={`${m.message_id}-c-${idx}`}
-                                onClick={() => setCitationModal(c)}
-                                className="text-left bg-surface-container-low border border-outline-variant rounded-xl px-3 py-2 hover:border-secondary transition-all group"
+                                onClick={() => openCitationInReader(c)}
+                                className="w-full text-left bg-surface-container-lowest border border-outline-variant rounded-xl px-3 py-2 hover:border-secondary transition-all group"
                               >
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 mb-1">
                                   <span className="text-[9px] font-mono font-bold bg-secondary-container/20 text-secondary px-1.5 py-0.5 rounded border border-secondary/20">[{idx + 1}]</span>
                                   <span className="text-xs text-on-surface-variant group-hover:text-secondary transition-colors truncate">{c.title || c.paper_id || c.id || 'Citation'}</span>
+                                </div>
+                                <div className="text-[11px] text-outline line-clamp-2">
+                                  {String(c.text || normalizeCitationText(c).paragraph || normalizeCitationText(c).sentence || '').trim()}
                                 </div>
                               </button>
                             ))}
@@ -358,20 +455,76 @@ export default function ChatView() {
             <Activity className="w-4 h-4 text-secondary" />
             <h2 className="text-[10px] font-bold text-on-surface uppercase tracking-widest font-mono">Process Trace</h2>
           </div>
+          <button
+            onClick={() => setProcessTraceExpanded(prev => !prev)}
+            className="text-outline hover:text-on-surface transition-colors p-1 rounded"
+            aria-label={processTraceExpanded ? 'Collapse tool calls' : 'Expand tool calls'}
+          >
+            <ChevronDown className={`w-4 h-4 transition-transform ${processTraceExpanded ? 'rotate-180' : ''}`} />
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-          {messages.filter(m => m.role === 'assistant' && m.tool_trace && m.tool_trace.length > 0).slice(-1).map(m => (
-            <div key={m.message_id} className="space-y-3">
+          {!processTraceExpanded && (
+            <div className="text-[11px] text-outline font-mono">Tool calls are collapsed.</div>
+          )}
+          {processTraceExpanded && latestAssistantWithTrace && (
+            <div key={latestAssistantWithTrace.message_id} className="space-y-3">
               <div className="text-[10px] font-mono text-outline uppercase tracking-widest font-bold mb-2">Tool Calls</div>
-              {(m.tool_trace || []).map((t, idx) => (
-                <div key={idx} className="p-2.5 rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-[10px] font-mono">
-                  <span className="text-secondary font-bold">{t.name || 'tool'}</span>
-                  <div className="text-on-surface-variant mt-1">{typeof t.arguments === 'string' ? t.arguments.slice(0, 100) : JSON.stringify(t.arguments).slice(0, 100)}</div>
+              {(latestAssistantWithTrace.tool_trace || []).map((t, idx) => {
+                const toolCall = (t && typeof t === 'object') ? (t as Record<string, unknown>) : {};
+                const itemKey = `${latestAssistantWithTrace.message_id}-${idx}`;
+                const itemExpanded = !!expandedToolItems[itemKey];
+                const argsText = stringifyToolPayload(extractToolArgs(toolCall));
+                const resultText = stringifyToolPayload(extractToolResult(toolCall));
+                const toolName = extractToolName(toolCall);
+                return (
+                <div key={idx} className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-[10px] font-mono overflow-hidden">
+                  <button
+                    onClick={() => setExpandedToolItems(prev => ({ ...prev, [itemKey]: !itemExpanded }))}
+                    className="w-full text-left p-2.5 flex items-center justify-between hover:bg-surface-container-low transition-colors"
+                  >
+                    <span className="text-secondary font-bold truncate">Tool call: {toolName}</span>
+                    <ChevronDown className={`w-3.5 h-3.5 text-outline transition-transform ${itemExpanded ? 'rotate-180' : ''}`} />
+                  </button>
+                  {itemExpanded && (
+                    <div className="px-2.5 pb-2.5 space-y-2">
+                      <div>
+                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">Arguments</div>
+                        {isPlainObject(extractToolArgs(toolCall)) ? (
+                          <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
+                            {Object.entries(extractToolArgs(toolCall) as Record<string, unknown>).map(([k, v]) => (
+                              <div key={k} className="flex items-start gap-2">
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary-container/20 text-secondary uppercase tracking-wide">{k}</span>
+                                <span className="text-[11px] text-on-surface-variant break-words">{renderScalar(v)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <pre className="whitespace-pre-wrap break-words text-on-surface-variant bg-surface-container-low p-2 rounded border border-outline-variant/30">{argsText || '(empty)'}</pre>
+                        )}
+                      </div>
+                      <div>
+                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">Result</div>
+                        {isPlainObject(extractToolResult(toolCall)) ? (
+                          <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
+                            {Object.entries(extractToolResult(toolCall) as Record<string, unknown>).map(([k, v]) => (
+                              <div key={k} className="flex items-start gap-2">
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface-container text-outline uppercase tracking-wide">{k}</span>
+                                <span className="text-[11px] text-on-surface-variant break-words">{renderScalar(v)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <pre className="whitespace-pre-wrap break-words text-on-surface-variant bg-surface-container-low p-2 rounded border border-outline-variant/30">{resultText || '(empty)'}</pre>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ))}
+              );})}
             </div>
-          ))}
-          {messages.length === 0 && (
+          )}
+          {processTraceExpanded && !latestAssistantWithTrace && (
             <div className="text-center text-outline text-[11px] font-mono mt-8">
               Send a message to see process trace.
             </div>

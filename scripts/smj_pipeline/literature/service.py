@@ -1139,6 +1139,7 @@ class LiteratureService:
         query_vec = query_vecs[0] if query_vecs else []
         keyword_hits: list[dict[str, Any]] = []
         rag_hits: list[dict[str, Any]] = []
+        degraded_routes: list[str] = []
         lib = str(library_id or "").strip()
         supports_native_filter = self.weaviate.supports_library_id()
         allowed_paper_ids = self._load_library_paper_ids(lib) if lib and not supports_native_filter else set()
@@ -1149,10 +1150,28 @@ class LiteratureService:
         fetch_limit = top_k if (not lib or supports_native_filter) else min(max(top_k * 8, 50), 500)
         for level in levels:
             class_name = _level_to_class(level)
-            kw_rows = self.weaviate.bm25_search(class_name, query=query, limit=fetch_limit, library_id=lib if supports_native_filter else "")
+            try:
+                kw_rows = self.weaviate.bm25_search(
+                    class_name,
+                    query=query,
+                    limit=fetch_limit,
+                    library_id=lib if supports_native_filter else "",
+                )
+            except Exception as exc:  # noqa: BLE001
+                kw_rows = []
+                degraded_routes.append(f"{level}:keyword:{exc}")
             vg_rows: list[dict[str, Any]] = []
             if isinstance(query_vec, list) and len(query_vec) > 0:
-                vg_rows = self.weaviate.vector_search(class_name, vector=query_vec, limit=fetch_limit, library_id=lib if supports_native_filter else "")
+                try:
+                    vg_rows = self.weaviate.vector_search(
+                        class_name,
+                        vector=query_vec,
+                        limit=fetch_limit,
+                        library_id=lib if supports_native_filter else "",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    vg_rows = []
+                    degraded_routes.append(f"{level}:vector:{exc}")
             if lib and not supports_native_filter:
                 kw_rows = self._filter_rows_by_paper_ids(kw_rows, allowed_paper_ids)
                 vg_rows = self._filter_rows_by_paper_ids(vg_rows, allowed_paper_ids)
@@ -1175,6 +1194,8 @@ class LiteratureService:
                 "library_filter_applied": filter_applied,
                 "library_filter_mode": filter_mode,
                 "library_registry_paper_count": len(allowed_paper_ids),
+                "degraded": bool(degraded_routes),
+                "degraded_routes": degraded_routes,
             },
         }
 

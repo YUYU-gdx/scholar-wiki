@@ -56,12 +56,15 @@ def create_router(chat_service: ChatService) -> APIRouter:
         if not content:
             return JSONResponse(status_code=400, content={"error": "content_required"})
         try:
+            mode = str(body.mode or "agent").strip().lower() or "agent"
+            if mode not in {"agent", "fast"}:
+                mode = "agent"
             provider = str(body.provider or "codex").strip() or "codex"
             model = str(body.model or "").strip() or ("codex-local" if provider == "codex" else "")
             payload = chat_service.send_message(
                 session_id=session_id,
                 content=content,
-                mode="agent",
+                mode=mode,
                 provider=provider,
                 model=model,
                 stream=body.stream,

@@ -237,15 +237,17 @@ export interface Citation {
   id?: string;
   paper_id?: string;
   title?: string;
+  text?: string;
   sentence?: string;
   paragraph?: string;
+  context?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
 export interface ToolCall {
   name?: string;
-  arguments?: string;
-  result?: string;
+  arguments?: unknown;
+  result?: unknown;
   [key: string]: unknown;
 }
 
