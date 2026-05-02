@@ -201,6 +201,97 @@ class GraphService:
     def _resolve_views_json(self, library_id: str = "") -> Path | None:
         return self._settings.resolve_graph_views_path(library_id)
 
+    @staticmethod
+    def _normalize_edge(row: dict[str, Any], paper_key_by_pid: dict[str, str] | None = None) -> dict[str, Any]:
+        out = dict(row or {})
+        source = str(out.get("source", "") or "").strip()
+        target = str(out.get("target", "") or "").strip()
+        out["source"] = source
+        out["target"] = target
+
+        rel_type_std = str(out.get("relation_type_std", "") or out.get("relation_type", "") or "").strip()
+        out["relation_type_std"] = rel_type_std
+        out["relation_type"] = str(out.get("relation_type", "") or rel_type_std).strip()
+        out["relation_type_raw"] = str(out.get("relation_type_raw", "") or out.get("relation_type", "") or "").strip()
+        out["direction"] = str(out.get("direction", "") or "").strip()
+        out["relation_form"] = str(out.get("relation_form", "") or "").strip()
+        out["evidence_section"] = str(out.get("evidence_section", "") or "").strip()
+        out["evidence_snippet"] = str(out.get("evidence_snippet", "") or "").strip()
+        out["evidence_anchor"] = str(out.get("evidence_anchor", "") or "").strip()
+        out["verification"] = str(out.get("verification", "") or "").strip()
+        out["hypothesis_label"] = str(out.get("hypothesis_label", "") or "").strip()
+        out["display_effect_class"] = str(out.get("display_effect_class", "") or "").strip()
+
+        pid_raw = str(out.get("paper_id_raw", "") or out.get("paper_id", "") or "").strip()
+        out["paper_id_raw"] = pid_raw
+        if pid_raw and paper_key_by_pid:
+            out["paper_id"] = paper_key_by_pid.get(pid_raw, pid_raw)
+        else:
+            out["paper_id"] = pid_raw
+        out["doi"] = str(out.get("doi", "") or "").strip()
+        return out
+
+    @staticmethod
+    def _normalize_moderation_link(row: dict[str, Any], paper_key_by_pid: dict[str, str] | None = None) -> dict[str, Any]:
+        out = dict(row or {})
+        mod_rel = out.get("moderated_relation") if isinstance(out.get("moderated_relation"), dict) else {}
+        source_node_id = str(mod_rel.get("source_node_id", "") or mod_rel.get("source", "") or "").strip()
+        target_node_id = str(mod_rel.get("target_node_id", "") or mod_rel.get("target", "") or "").strip()
+        source_var = str(mod_rel.get("source_var", "") or "").strip()
+        target_var = str(mod_rel.get("target_var", "") or "").strip()
+        out["moderated_relation"] = {
+            "source": source_node_id,
+            "target": target_node_id,
+            "source_node_id": source_node_id,
+            "target_node_id": target_node_id,
+            "source_var": source_var,
+            "target_var": target_var,
+        }
+        out["moderator_node_id"] = str(out.get("moderator_node_id", "") or "").strip()
+        out["moderator_var"] = str(out.get("moderator_var", "") or "").strip()
+        out["direction"] = str(out.get("direction", "") or "").strip()
+        out["verification"] = str(out.get("verification", "") or "").strip()
+        out["hypothesis_label"] = str(out.get("hypothesis_label", "") or "").strip()
+        out["evidence_section"] = str(out.get("evidence_section", "") or "").strip()
+        out["evidence_snippet"] = str(out.get("evidence_snippet", "") or "").strip()
+        out["evidence_anchor"] = str(out.get("evidence_anchor", "") or "").strip()
+
+        pid_raw = str(out.get("paper_id_raw", "") or out.get("paper_id", "") or "").strip()
+        out["paper_id_raw"] = pid_raw
+        if pid_raw and paper_key_by_pid:
+            out["paper_id"] = paper_key_by_pid.get(pid_raw, pid_raw)
+        else:
+            out["paper_id"] = pid_raw
+        out["doi"] = str(out.get("doi", "") or "").strip()
+        return out
+
+    @staticmethod
+    def _normalize_interaction_link(row: dict[str, Any], paper_key_by_pid: dict[str, str] | None = None) -> dict[str, Any]:
+        out = dict(row or {})
+        input_node_ids = [str(v or "").strip() for v in (out.get("input_node_ids", []) or []) if str(v or "").strip()]
+        out["input_node_ids"] = input_node_ids
+        out["inputs"] = [str(v or "").strip() for v in (out.get("inputs", []) or []) if str(v or "").strip()]
+        out["output_node_id"] = str(out.get("output_node_id", "") or "").strip()
+        out["output"] = str(out.get("output", "") or "").strip()
+        out["interaction_type"] = str(out.get("interaction_type", "") or "").strip()
+        out["effect"] = str(out.get("effect", "") or "").strip()
+        out["verification"] = str(out.get("verification", "") or "").strip()
+        out["hypothesis_label"] = str(out.get("hypothesis_label", "") or "").strip()
+        out["evidence_section"] = str(out.get("evidence_section", "") or "").strip()
+        out["evidence_snippet"] = str(out.get("evidence_snippet", "") or "").strip()
+        out["description"] = str(out.get("description", "") or "").strip()
+        out["moderator"] = str(out.get("moderator", "") or "").strip()
+        out["moderator_node_id"] = str(out.get("moderator_node_id", "") or "").strip()
+
+        pid_raw = str(out.get("paper_id_raw", "") or out.get("paper_id", "") or "").strip()
+        out["paper_id_raw"] = pid_raw
+        if pid_raw and paper_key_by_pid:
+            out["paper_id"] = paper_key_by_pid.get(pid_raw, pid_raw)
+        else:
+            out["paper_id"] = pid_raw
+        out["doi"] = str(out.get("doi", "") or "").strip()
+        return out
+
     def _ensure_loaded(self, library_id: str = "") -> None:
         if self._loaded and self._current_library == library_id:
             return
@@ -285,8 +376,8 @@ class GraphService:
                 continue
             mr = mod.get("moderated_relation") if isinstance(mod.get("moderated_relation"), dict) else {}
             moderator_node_id = str(mod.get("moderator_node_id", "")).strip()
-            src_node_id = str(mr.get("source_node_id", "")).strip()
-            tgt_node_id = str(mr.get("target_node_id", "")).strip()
+            src_node_id = str(mr.get("source_node_id", "") or mr.get("source", "")).strip()
+            tgt_node_id = str(mr.get("target_node_id", "") or mr.get("target", "")).strip()
             moderator_name = str(mod.get("moderator_var", "") or self._node_id_to_name.get(moderator_node_id, moderator_node_id))
             src_name = str(mr.get("source_var", "") or self._node_id_to_name.get(src_node_id, src_node_id))
             tgt_name = str(mr.get("target_var", "") or self._node_id_to_name.get(tgt_node_id, tgt_node_id))
@@ -614,12 +705,15 @@ class GraphService:
 
     def get_overview(self, library_id: str = "") -> dict[str, Any]:
         self._ensure_loaded(library_id)
+        edges_normalized = [self._normalize_edge(self._edges[i]) for i in self._overview["edge_indexes"] if 0 <= i < len(self._edges)]
+        moderation_normalized = [self._normalize_moderation_link(m) for m in self._moderation_links]
+        interaction_normalized = [self._normalize_interaction_link(it) for it in self._interaction_links]
         return {
             "meta": self._meta_public,
             "nodes": [self._nodes_public_by_id[nid] for nid in self._overview["node_ids"] if nid in self._nodes_public_by_id],
-            "edges": [self._edges[i] for i in self._overview["edge_indexes"] if 0 <= i < len(self._edges)],
-            "moderation_links": self._moderation_links,
-            "interaction_links": self._interaction_links,
+            "edges": edges_normalized,
+            "moderation_links": moderation_normalized,
+            "interaction_links": interaction_normalized,
             "isolated_nodes": self._isolated_nodes,
         }
 
@@ -642,30 +736,9 @@ class GraphService:
             base["title"] = title_from_key
             base["source_pdf_name"] = str(meta.get("source_pdf_name", "") or "")
             paper_map_with_display[pkey] = base
-        edges_mapped: list[dict[str, Any]] = []
-        for edge in self._edges:
-            row = dict(edge)
-            pid_raw = str(row.get("paper_id", "") or "").strip()
-            if pid_raw:
-                row["paper_id_raw"] = pid_raw
-                row["paper_id"] = self._paper_key_by_pid.get(pid_raw, pid_raw)
-            edges_mapped.append(row)
-        moderation_mapped: list[dict[str, Any]] = []
-        for mod in self._moderation_links:
-            row = dict(mod)
-            pid_raw = str(row.get("paper_id", "") or "").strip()
-            if pid_raw:
-                row["paper_id_raw"] = pid_raw
-                row["paper_id"] = self._paper_key_by_pid.get(pid_raw, pid_raw)
-            moderation_mapped.append(row)
-        interaction_mapped: list[dict[str, Any]] = []
-        for inter in self._interaction_links:
-            row = dict(inter)
-            pid_raw = str(row.get("paper_id", "") or "").strip()
-            if pid_raw:
-                row["paper_id_raw"] = pid_raw
-                row["paper_id"] = self._paper_key_by_pid.get(pid_raw, pid_raw)
-            interaction_mapped.append(row)
+        edges_mapped = [self._normalize_edge(edge, self._paper_key_by_pid) for edge in self._edges]
+        moderation_mapped = [self._normalize_moderation_link(mod, self._paper_key_by_pid) for mod in self._moderation_links]
+        interaction_mapped = [self._normalize_interaction_link(inter, self._paper_key_by_pid) for inter in self._interaction_links]
         return {
             "meta": {**self._meta_public, "library_id": library_id},
             "nodes": [{**n, "library_id": library_id} for n in self._nodes_public_by_id.values()],
@@ -762,22 +835,22 @@ class GraphService:
         for mod in self._moderation_links:
             mr = mod.get("moderated_relation") if isinstance(mod.get("moderated_relation"), dict) else {}
             moderator_node_id = str(mod.get("moderator_node_id", "")).strip()
-            src_node_id = str(mr.get("source_node_id", "")).strip()
-            tgt_node_id = str(mr.get("target_node_id", "")).strip()
+            src_node_id = str(mr.get("source_node_id", "") or mr.get("source", "")).strip()
+            tgt_node_id = str(mr.get("target_node_id", "") or mr.get("target", "")).strip()
             if moderator_node_id in seen_node_set or src_node_id in seen_node_set or tgt_node_id in seen_node_set:
-                neighborhood_mods.append(mod)
+                neighborhood_mods.append(self._normalize_moderation_link(mod))
 
         neighborhood_inters: list[dict[str, Any]] = []
         for inter in self._interaction_links:
             input_node_ids = [str(v or "").strip() for v in (inter.get("input_node_ids", []) or []) if str(v or "").strip()]
             output_node_id = str(inter.get("output_node_id", "")).strip()
             if output_node_id in seen_node_set or any(nid in seen_node_set for nid in input_node_ids):
-                neighborhood_inters.append(inter)
+                neighborhood_inters.append(self._normalize_interaction_link(inter))
 
         return {
             "node_id": node_id,
             "nodes": [self._nodes_public_by_id[nid] for nid in seen_nodes if nid in self._nodes_public_by_id],
-            "edges": [self._edges[i] for i in seen_edges if 0 <= i < len(self._edges)],
+            "edges": [self._normalize_edge(self._edges[i]) for i in seen_edges if 0 <= i < len(self._edges)],
             "moderation_links": neighborhood_mods,
             "interaction_links": neighborhood_inters,
         }

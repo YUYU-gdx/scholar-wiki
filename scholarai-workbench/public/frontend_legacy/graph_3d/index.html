@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D知识图谱</title>
+  <style>
+    :root { --line:#c6c6cd; --ink:#111827; --muted:#4b5563; --accent:#006a61; --shadow:0 8px 24px rgba(15,23,42,.14); }
+    * { box-sizing: border-box; }
+    html, body { margin:0; width:100%; height:100%; overflow:hidden; font-family:"Inter","PingFang SC","Microsoft YaHei",sans-serif; background:linear-gradient(160deg,#111827,#0f172a 65%,#0b1220); color:var(--ink); }
+    .layout { width:100%; height:100%; display:grid; grid-template-columns:minmax(0,1fr) minmax(360px,460px); }
+    .stage { position:relative; min-width:0; min-height:0; overflow:hidden; border-right:1px solid rgba(198,198,205,.45); background:linear-gradient(180deg,#111827,#0f172a); }
+    .topbar { position:absolute; top:12px; left:12px; right:12px; z-index:20; display:grid; grid-template-columns:minmax(220px,360px) minmax(260px,1fr); gap:10px; padding:10px; border:1px solid rgba(198,198,205,.45); border-radius:14px; background:rgba(255,255,255,.95); box-shadow:var(--shadow); }
+    .ctrl { position:relative; }
+    .ctrl-label { display:block; margin-bottom:4px; font-size:11px; color:var(--muted); }
+    .field { width:100%; min-height:34px; border:1px solid var(--line); border-radius:10px; background:#fff; color:#1b1b1d; padding:7px 10px; font-size:13px; }
+    .field-btn { text-align:left; cursor:pointer; }
+    .menu, .search-results { position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:60; border:1px solid var(--line); border-radius:10px; background:#fff; box-shadow:var(--shadow); max-height:260px; overflow:auto; }
+    .menu { padding:6px; }
+    .menu-row { display:flex; align-items:center; gap:8px; padding:6px; border-radius:8px; font-size:12px; }
+    .menu-row:hover { background:#f3f4f6; }
+    .result-item { padding:8px 10px; cursor:pointer; border-bottom:1px solid #eef1f4; }
+    .result-item:last-child { border-bottom:none; }
+    .result-item:hover { background:#f8fafc; }
+    .result-name { font-size:13px; font-weight:600; color:#111827; }
+    .result-meta { font-size:11px; color:#4b5563; margin-top:2px; }
+    .graph-wrap { position:absolute; inset:82px 12px 12px 12px; z-index:8; border-radius:18px; overflow:hidden; outline:1px solid rgba(148,163,184,.32); background:radial-gradient(circle at 18% 16%,rgba(15,118,110,.2),transparent 30%),radial-gradient(circle at 84% 14%,rgba(56,189,248,.16),transparent 30%),linear-gradient(180deg,#111827,#0f172a); }
+    .scene { position:absolute; inset:0; }
+    .scene canvas { background:transparent !important; }
+    .badge { position:absolute; left:12px; bottom:12px; z-index:12; font-size:12px; color:#d1d5db; background:rgba(15,23,42,.72); border:1px solid rgba(148,163,184,.32); border-radius:999px; padding:6px 10px; pointer-events:none; }
+    .tooltip { position:absolute; z-index:30; display:none; max-width:min(380px,78vw); padding:10px 12px; border-radius:12px; border:1px solid var(--line); background:rgba(255,255,255,.98); color:#111827; font-size:12px; line-height:1.5; pointer-events:none; box-shadow:var(--shadow); }
+    .fallback { position:absolute; inset:95px 14px 14px 14px; z-index:25; display:grid; place-items:center; border-radius:16px; border:1px dashed rgba(148,163,184,.4); background:rgba(255,255,255,.9); color:#334155; text-align:center; padding:20px; }
+    .side { min-width:0; min-height:0; padding:12px; background:linear-gradient(180deg,rgba(246,243,245,.94),rgba(240,237,239,.92)); overflow:hidden; }
+    .side-scroll { height:100%; overflow:auto; display:grid; gap:10px; padding-right:4px; }
+    .card { border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:0 2px 10px rgba(15,23,42,.06); padding:12px; }
+    .card h3 { margin:0 0 8px 0; font-size:14px; color:#111827; }
+    .text { color:#111827; font-size:13px; line-height:1.58; word-break:break-word; }
+    .muted { color:#4b5563; font-size:12px; line-height:1.5; }
+    .link-btn { border:1px solid var(--line); background:#fff; border-radius:8px; padding:6px 8px; cursor:pointer; font-size:12px; color:#0f172a; text-align:left; }
+    .link-btn:hover { border-color:var(--accent); color:var(--accent); }
+    .rel-item { display:grid; gap:6px; padding:8px; border:1px solid #d8dbe0; border-radius:10px; margin-bottom:8px; }
+    .hidden { display:none !important; }
+    @media (max-width:1120px) { html,body{overflow:auto} .layout{grid-template-columns:1fr;min-height:100vh} .stage{min-height:72vh;border-right:0;border-bottom:1px solid rgba(198,198,205,.45)} .topbar{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <main class="stage">
+      <div class="topbar">
+        <div class="ctrl" id="libraryCtrl">
+          <span class="ctrl-label">文献库（可多选）</span>
+          <button type="button" id="libraryToggle" class="field field-btn">加载中...</button>
+          <div id="libraryMenu" class="menu hidden"></div>
+        </div>
+        <div class="ctrl" id="searchCtrl">
+          <span class="ctrl-label">变量搜索（正则）</span>
+          <input id="searchInput" class="field" placeholder="例如：risk|resilience" />
+          <div id="searchResults" class="search-results hidden"></div>
+        </div>
+      </div>
+      <div id="graphWrap" class="graph-wrap"><div id="scene" class="scene"></div><div id="dragBadge" class="badge">Drag area</div></div>
+      <div id="tooltip" class="tooltip"></div>
+      <div id="fallback" class="fallback hidden">图谱加载中...</div>
+    </main>
+    <aside class="side"><div id="detailScroll" class="side-scroll"><section class="card"><h3>详情</h3><div class="muted">点击节点或关系后展示详细信息。</div></section></div></aside>
+  </div>
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/3d-force-graph@1.77.0/dist/3d-force-graph.min.js"></script>
+  <script>
+    (() => {
+      const params = new URLSearchParams(window.location.search || "");
+      const activeLibraryId = String(params.get("active_library_id") || params.get("library_id") || "supply_chain").trim() || "supply_chain";
+      const initialLibraryIds = String(params.get("library_ids") || activeLibraryId).split(",").map(v => v.trim()).filter(Boolean);
+      const state = { graph:null, pointerDown:false, allNodes:[], allLinks:[], moderationLinks:[], visibleNodes:[], visibleLinks:[], paperMap:{}, libraries:[], selectedLibraryIds:[...new Set(initialLibraryIds)], expandedRelations:false };
+      const els = { libraryToggle:document.getElementById("libraryToggle"), libraryMenu:document.getElementById("libraryMenu"), searchInput:document.getElementById("searchInput"), searchResults:document.getElementById("searchResults"), detailScroll:document.getElementById("detailScroll"), tooltip:document.getElementById("tooltip"), fallback:document.getElementById("fallback"), scene:document.getElementById("scene"), graphWrap:document.getElementById("graphWrap"), dragBadge:document.getElementById("dragBadge") };
+      const theme = { node:"#7bd8f6", pos:"#53d39a", neg:"#f07178", neu:"#f6c95b", mod:"#cbd5e1" };
+      const esc = t => String(t || "").replace(/[&<>]/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[ch]));
+      const nodeName = n => n?.label || n?.name || n?.id || "node";
+      const edgeKey = l => { const s = typeof l.source === "object" ? l.source?.id : l.source; const t = typeof l.target === "object" ? l.target?.id : l.target; return `${s}=>${t}::${l.paper_id||""}::${l.direction||""}::${l.is_moderation?"m":"e"}`; };
+      const showTip = (lines,x,y) => { if(!lines?.length){ els.tooltip.style.display="none"; return; } els.tooltip.innerHTML=lines.join("<br>"); els.tooltip.style.left=`${x+12}px`; els.tooltip.style.top=`${y+12}px`; els.tooltip.style.display="block"; };
+      const hideTip = () => { els.tooltip.style.display = "none"; };
+      const nodeConcept = n => String(n?.latest_concept || "").trim() || "暂无概念定义";
+      const nodeTheories = n => Array.isArray(n?.latest_theories) ? n.latest_theories.filter(Boolean).slice(0,6) : [];
+      const openReader = (paperId, libraryId) => window.parent.postMessage({ type:"KN_GRAPH_OPEN_READER", payload:{ paperId, libraryId: libraryId || activeLibraryId } }, "*");
+      const findNodeById = id => state.visibleNodes.find(n => n.id === id) || state.allNodes.find(n => n.id === id) || null;
+      const relationEdgesFor = id => state.visibleLinks.filter(l => { const s = typeof l.source === "object" ? l.source?.id : l.source; const t = typeof l.target === "object" ? l.target?.id : l.target; return s === id || t === id; });
+      const paperFromEdge = l => { const pid = String(l.paper_id || ""); if(!pid) return null; return Object.values(state.paperMap).find(p => String(p.paper_id || "") === pid) || { paper_id: pid }; };
+      const setEmpty = t => { els.detailScroll.innerHTML = `<section class="card"><h3>详情</h3><div class="muted">${esc(t)}</div></section>`; };
+      const visibleNodesFrom = nodes => { let n = nodes.filter(x => String(x.type||"")==="variable" && !!x.validated_variable && Number(x.relation_degree||0)>0); if(!n.length) n = nodes.filter(x => String(x.type||"")==="variable" && Number(x.relation_degree||0)>0); if(!n.length) n = nodes.filter(x => String(x.type||"")==="variable"); return n; };
+      const edgeColor = l => l.is_moderation ? theme.mod : ((String(l.display_effect_class||l.direction||"").toLowerCase()==="negative") ? theme.neg : (String(l.display_effect_class||l.direction||"").toLowerCase()==="positive") ? theme.pos : theme.neu);
+      const findByName = (name,nodes) => { const norm = String(name||"").trim().toLowerCase(); if(!norm) return null; return nodes.find(n => [n.label,n.name,n.id].some(v => String(v||"").trim().toLowerCase()===norm)) || null; };
+      function augmentModeration(nodes,links,mods){ const nodeById=new Map(nodes.map(n=>[n.id,n])); const outN=[...nodes]; const outL=[...links]; const visibleIds=new Set(nodes.map(n=>n.id)); (Array.isArray(mods)?mods:[]).forEach((m,i)=>{ const r=(m&&typeof m.moderated_relation==="object")?m.moderated_relation:{}; let mid=String(m.moderator_node_id||"").trim(), sid=String(r.source_node_id||r.source||"").trim(), tid=String(r.target_node_id||r.target||"").trim(); if(!mid){ const g=findByName(m.moderator_var,nodes); mid=g?String(g.id):""; } if(!sid){ const g=findByName(r.source_var,nodes); sid=g?String(g.id):""; } if(!tid){ const g=findByName(r.target_var,nodes); tid=g?String(g.id):""; } if(!mid||!sid||!tid||!visibleIds.has(mid)||!visibleIds.has(sid)||!visibleIds.has(tid)) return; const s=nodeById.get(sid), t=nodeById.get(tid); if(!s||!t) return; const aid=`mod_anchor::${mid}::${sid}::${tid}::${i}`; outN.push({id:aid,label:"",type:"mod_anchor",__is_mod_anchor:true,x:(Number(s.x)+Number(t.x))/2||0,y:(Number(s.y)+Number(t.y))/2||0,z:(Number(s.z)+Number(t.z))/2||0}); outL.push({source:mid,target:aid,is_moderation:true,direction:"moderation",relation_form:"moderation",relation_type_std:"moderation",display_effect_class:"moderation",paper_id:m.paper_id||"",doi:m.doi||"",verification:m.verification||"",evidence_anchor:m.evidence_anchor||"",evidence_snippet:m.evidence_snippet||"",hypothesis_label:m.hypothesis_label||"",moderated_source:sid,moderated_target:tid}); }); return {nodes:outN,links:outL}; }
+      function renderNodeDetails(node){
+        const rels=relationEdgesFor(node.id), show=state.expandedRelations?rels:rels.slice(0,3), srcInfo=node.latest_concept_source||{}, srcPid=String(srcInfo.paper_id||""), srcPaper=srcPid?Object.values(state.paperMap).find(p=>String(p.paper_id||"")===srcPid):null;
+        const rows=show.map(l=>{ if(l.is_moderation){ const s=findNodeById(String(l.moderated_source||"")), t=findNodeById(String(l.moderated_target||"")); return `<div class="rel-item"><div class="text">调节：${esc(nodeName(l.source))} 调节 ${esc(nodeName(s))} -> ${esc(nodeName(t))}</div><button class="link-btn" data-edge="${esc(edgeKey(l))}">查看关系详情</button></div>`; } const s=typeof l.source==="object"?l.source:findNodeById(String(l.source||"")); const t=typeof l.target==="object"?l.target:findNodeById(String(l.target||"")); return `<div class="rel-item"><div class="text">${esc(nodeName(s))} -> ${esc(nodeName(t))}</div><button class="link-btn" data-edge="${esc(edgeKey(l))}">查看关系详情</button></div>`; }).join("");
+        els.detailScroll.innerHTML=`<section class="card"><h3>变量名称</h3><div class="text">${esc(nodeName(node))}</div></section><section class="card"><h3>变量概念</h3><div class="text">${esc(nodeConcept(node))}</div></section><section class="card"><h3>来源论文</h3>${srcPid?`<button class="link-btn" id="openSourcePaper">${esc(String(srcPaper?.title||srcPid))}</button>`:'<div class="muted">暂无来源论文</div>'}</section><section class="card"><h3>相关关系</h3>${rels.length?rows:'<div class="muted">暂无相关关系</div>'}${rels.length>3?`<button class="link-btn" id="toggleRelations">${state.expandedRelations?"收起":"展开更多"}</button>`:""}</section>`;
+        const open=document.getElementById("openSourcePaper"); if(open&&srcPid) open.addEventListener("click",()=>openReader(srcPid,String(srcPaper?.library_id||activeLibraryId)));
+        const toggle=document.getElementById("toggleRelations"); if(toggle) toggle.addEventListener("click",()=>{ state.expandedRelations=!state.expandedRelations; renderNodeDetails(node); });
+        els.detailScroll.querySelectorAll("[data-edge]").forEach(el=>el.addEventListener("click",()=>{ const link=state.visibleLinks.find(l=>edgeKey(l)===String(el.getAttribute("data-edge")||"")); if(link) renderLinkDetails(link); }));
+      }
+      function renderLinkDetails(link){
+        const s=typeof link.source==="object"?link.source:findNodeById(String(link.source||"")); const t=typeof link.target==="object"?link.target:findNodeById(String(link.target||"")); const paper=paperFromEdge(link);
+        const title=link.is_moderation?`${esc(nodeName(s))} 调节 ${esc(nodeName(findNodeById(String(link.moderated_source||""))))} -> ${esc(nodeName(findNodeById(String(link.moderated_target||""))))}`:`${esc(nodeName(s))} -> ${esc(nodeName(t))}`;
+        const theories=[...new Set(nodeTheories(s).concat(nodeTheories(t)).filter(Boolean))];
+        els.detailScroll.innerHTML=`<section class="card"><h3>关系详情</h3><div class="text">${title}</div><div class="muted">方向：${esc(link.direction||"-")}</div><div class="muted">验证：${esc(link.verification||"-")}</div><div class="muted">证据：${esc(link.evidence_snippet||link.evidence_anchor||"-")}</div></section><section class="card"><h3>相关理论</h3><div class="text">${esc(theories.join("；")||"暂无理论")}</div></section><section class="card"><h3>相关变量及概念</h3><div class="rel-item"><button class="link-btn" data-node-id="${esc(String(s?.id||""))}">${esc(nodeName(s))}</button><div class="muted">${esc(nodeConcept(s))}</div></div><div class="rel-item"><button class="link-btn" data-node-id="${esc(String(t?.id||""))}">${esc(nodeName(t))}</button><div class="muted">${esc(nodeConcept(t))}</div></div></section><section class="card"><h3>来源论文</h3>${paper?.paper_id?`<button class="link-btn" id="openEdgePaper">${esc(String(paper.title||paper.paper_id))}</button>`:'<div class="muted">暂无来源论文</div>'}</section>`;
+        els.detailScroll.querySelectorAll("[data-node-id]").forEach(el=>el.addEventListener("click",()=>{ const n=findNodeById(String(el.getAttribute("data-node-id")||"")); if(n) renderNodeDetails(n); }));
+        const open=document.getElementById("openEdgePaper"); if(open&&paper?.paper_id) open.addEventListener("click",()=>openReader(String(paper.paper_id),String(paper.library_id||activeLibraryId)));
+      }
+      function mergePayloads(payloads,libraryIds){ const nodeById=new Map(),edgeByKey=new Map(),paperMap={},mods=[]; payloads.forEach((p,i)=>{ const lib=String((p.meta||{}).library_id||libraryIds[i]||activeLibraryId); (p.nodes||[]).forEach(n=>{ const row=Object.assign({},n,{library_id:n.library_id||lib}); const ex=nodeById.get(row.id); if(!ex) nodeById.set(row.id,row); else nodeById.set(row.id,Object.assign({},ex,row,{relation_degree:Math.max(Number(ex.relation_degree||0),Number(row.relation_degree||0)),paper_count:Math.max(Number(ex.paper_count||0),Number(row.paper_count||0))})); }); (p.edges||[]).forEach(e=>{ const s=typeof e.source==="object"?e.source?.id:e.source; const t=typeof e.target==="object"?e.target?.id:e.target; const k=`${s}=>${t}::${e.paper_id||""}::${e.direction||""}`; if(!edgeByKey.has(k)) edgeByKey.set(k,e); }); (p.moderation_links||[]).forEach(m=>mods.push(m)); Object.entries(p.paper_map||{}).forEach(([pid,v])=>{ paperMap[`${lib}::${pid}`]=Object.assign({},v,{paper_id:pid,library_id:lib}); }); }); return {nodes:[...nodeById.values()],edges:[...edgeByKey.values()],moderation_links:mods,paper_map:paperMap}; }
+      function buildGraph(merged){
+        state.allNodes=merged.nodes||[]; state.allLinks=merged.edges||[]; state.moderationLinks=merged.moderation_links||[]; state.paperMap=merged.paper_map||{}; state.visibleNodes=visibleNodesFrom(state.allNodes);
+        const visibleIds=new Set(state.visibleNodes.map(n=>n.id)); const baseLinks=state.allLinks.filter(l=>{ const s=typeof l.source==="object"?l.source?.id:l.source; const t=typeof l.target==="object"?l.target?.id:l.target; return visibleIds.has(s)&&visibleIds.has(t); });
+        const augmented=augmentModeration(state.visibleNodes,baseLinks,state.moderationLinks); const graphNodes=augmented.nodes; state.visibleLinks=augmented.links;
+        if(!state.visibleNodes.length){ if(state.graph&&typeof state.graph.graphData==="function") state.graph.graphData({nodes:[],links:[]}); els.fallback.classList.remove("hidden"); els.fallback.textContent="当前文献库组合下没有可展示的变量节点，请更换文献库。"; setEmpty("当前无可展示图谱数据。"); return; }
+        if(typeof window.ForceGraph3D!=="function"){ els.fallback.classList.remove("hidden"); els.fallback.textContent="3D 引擎未加载。"; setEmpty("3D 引擎未加载。"); return; }
+        els.fallback.classList.add("hidden"); els.scene.innerHTML="";
+        const forceNodes=graphNodes.map(n=>{const c=Object.assign({},n);delete c.x;delete c.y;delete c.z;delete c.fx;delete c.fy;delete c.fz;return c;});
+        const g=window.ForceGraph3D({rendererConfig:{alpha:true,antialias:true}})(els.scene).backgroundColor("rgba(0,0,0,0)").showNavInfo(false).nodeVal(n=>n&&n.__is_mod_anchor?0.001:4.5).nodeColor(n=>n&&n.__is_mod_anchor?"rgba(0,0,0,0)":theme.node).nodeRelSize(5).linkColor(edgeColor).linkOpacity(.84).linkWidth(l=>l.is_moderation?1.2:0.8+(Number(l.strength)||0.2)*1.9).linkDirectionalArrowLength(l=>l.is_moderation?5.5:3.5+(Number(l.strength)||0.2)*4.1).linkDirectionalArrowRelPos(1).linkDirectionalArrowResolution(12).linkDirectionalArrowColor(edgeColor).cooldownTicks(110).onNodeHover(n=>{if(!n||n.__is_mod_anchor)return hideTip();showTip([`<b>${esc(nodeName(n))}</b>`,`关系数：<code>${relationEdgesFor(n.id).length}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);}).onLinkHover(l=>{if(!l)return hideTip();if(l.is_moderation){const ms=findNodeById(String(l.moderated_source||"")),mt=findNodeById(String(l.moderated_target||""));showTip([`<b>调节关系</b>`,`${esc(nodeName(l.source))} 调节 ${esc(nodeName(ms))} -> ${esc(nodeName(mt))}`,`论文：<code>${esc(l.paper_id||"-")}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);return;}const s=typeof l.source==="object"?l.source:findNodeById(String(l.source||""));const t=typeof l.target==="object"?l.target:findNodeById(String(l.target||""));showTip([`<b>关系</b>`,`${esc(nodeName(s))} -> ${esc(nodeName(t))}`,`方向：<code>${esc(l.direction||"-")}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);}).onNodeClick(n=>{if(!n||n.__is_mod_anchor)return;renderNodeDetails(n);if(typeof g.centerAt==="function")g.centerAt(n.x||0,n.y||0,n.z||0,800);if(typeof g.zoom==="function")g.zoom(180,900);}).onLinkClick(l=>{if(!l)return;renderLinkDetails(l);});
+        state.graph=g; g.graphData({nodes:forceNodes,links:state.visibleLinks});
+        const lf=g.d3Force("link"); if(lf&&typeof lf.distance==="function")lf.distance(l=>Math.max(28,95-(Number(l.strength)||.2)*55)); if(lf&&typeof lf.strength==="function")lf.strength(l=>Math.max(.15,Math.min(.95,.35+(Number(l.strength)||.2)*.55)));
+        const ch=g.d3Force("charge"); if(ch&&typeof ch.strength==="function")ch.strength(-180); const ce=g.d3Force("center"); if(ce&&typeof ce.strength==="function")ce.strength(.06); if(typeof g.d3ReheatSimulation==="function")g.d3ReheatSimulation();
+        g.cameraPosition({x:0,y:32,z:240}); const controls=g.controls&&g.controls(); if(controls){controls.enableDamping=true;controls.dampingFactor=.08;controls.rotateSpeed=.92;controls.zoomSpeed=.9;}
+        const first=state.visibleNodes[0]; if(first) renderNodeDetails(first);
+      }
+      async function fetchLibraries(){ const r=await fetch("/literature/libraries"); if(!r.ok) throw new Error(`HTTP ${r.status}`); const p=await r.json(); state.libraries=Array.isArray(p.libraries)?p.libraries:[]; if(!state.selectedLibraryIds.length) state.selectedLibraryIds=[p.default_library_id||"supply_chain"]; els.libraryToggle.textContent=state.selectedLibraryIds.length?`已选 ${state.selectedLibraryIds.length} 个：${state.selectedLibraryIds.join(", ")}`:"请选择文献库"; els.libraryMenu.innerHTML=""; state.libraries.forEach(lib=>{ const row=document.createElement("label"); row.className="menu-row"; const checked=state.selectedLibraryIds.includes(lib.library_id); row.innerHTML=`<input type="checkbox" ${checked?"checked":""} data-lib="${esc(lib.library_id)}"/><span>${esc(lib.library_id)} (${Number(lib.paper_count||0)})</span>`; els.libraryMenu.appendChild(row); }); }
+      async function loadAll(){ const ids=state.selectedLibraryIds.length?state.selectedLibraryIds:[activeLibraryId]; const payloads=await Promise.all(ids.map(async id=>{ const r=await fetch(`/graph/full?library_id=${encodeURIComponent(id)}`); if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })); buildGraph(mergePayloads(payloads,ids)); window.parent.postMessage({type:"KN_GRAPH_SET_LIBRARIES",payload:{libraryIds:ids}},"*"); }
+      function runSearch(){ const q=String(els.searchInput.value||"").trim(); if(!q){els.searchResults.classList.add("hidden");els.searchResults.innerHTML="";return;} let re; try{re=new RegExp(q,"i");}catch(e){els.searchResults.classList.remove("hidden");els.searchResults.innerHTML=`<div class="result-item"><div class="result-name">正则无效</div><div class="result-meta">${esc(e.message||"")}</div></div>`;return;} const cands=state.visibleNodes.filter(n=>[n.label,n.name,n.id].concat(Array.isArray(n.aliases)?n.aliases:[]).some(f=>re.test(String(f||"")))).slice(0,30); if(!cands.length){els.searchResults.classList.remove("hidden");els.searchResults.innerHTML='<div class="result-item"><div class="result-name">无匹配结果</div></div>';return;} els.searchResults.classList.remove("hidden"); els.searchResults.innerHTML=cands.map(n=>`<div class="result-item" data-node-id="${esc(n.id)}"><div class="result-name">${esc(nodeName(n))}</div><div class="result-meta">${esc(nodeConcept(n).slice(0,88))}</div></div>`).join(""); els.searchResults.querySelectorAll("[data-node-id]").forEach(el=>el.addEventListener("click",()=>{ const n=findNodeById(String(el.getAttribute("data-node-id")||"")); if(n) renderNodeDetails(n); els.searchResults.classList.add("hidden"); })); }
+      function bind(){ window.addEventListener("pointermove",evt=>{window.__graphPointerX=evt.clientX;window.__graphPointerY=evt.clientY;if(els.tooltip.style.display==="block"){els.tooltip.style.left=`${evt.clientX+12}px`;els.tooltip.style.top=`${evt.clientY+12}px`;}}); els.graphWrap.addEventListener("pointerdown",()=>{state.pointerDown=true;els.dragBadge.textContent="drag-start";}); els.graphWrap.addEventListener("pointermove",()=>{if(state.pointerDown)els.dragBadge.textContent="dragging";}); const dragEnd=()=>{if(!state.pointerDown)return;state.pointerDown=false;els.dragBadge.textContent="drag-end";}; els.graphWrap.addEventListener("pointerup",dragEnd); els.graphWrap.addEventListener("pointercancel",dragEnd); els.graphWrap.addEventListener("pointerleave",dragEnd); els.libraryToggle.addEventListener("click",()=>els.libraryMenu.classList.toggle("hidden")); els.libraryMenu.addEventListener("change",async evt=>{const t=evt.target;if(!t||t.tagName!=="INPUT")return;const lib=String(t.getAttribute("data-lib")||"");const checked=!!t.checked;const next=checked?[...new Set(state.selectedLibraryIds.concat(lib))]:state.selectedLibraryIds.filter(id=>id!==lib);state.selectedLibraryIds=next.length?next:[lib||activeLibraryId];els.libraryToggle.textContent=state.selectedLibraryIds.length?`已选 ${state.selectedLibraryIds.length} 个：${state.selectedLibraryIds.join(", ")}`:"请选择文献库";try{await loadAll();}catch(err){setEmpty(`多文献库加载失败：${esc(err.message||"unknown")}`);}}); document.addEventListener("click",evt=>{if(!document.getElementById("libraryCtrl").contains(evt.target))els.libraryMenu.classList.add("hidden");if(!document.getElementById("searchCtrl").contains(evt.target))els.searchResults.classList.add("hidden");}); els.searchInput.addEventListener("input",runSearch); }
+      bind(); fetchLibraries().then(()=>loadAll()).catch(err=>{ els.fallback.classList.remove("hidden"); els.fallback.textContent=`图谱加载失败: ${err&&err.message?err.message:"unknown"}`; setEmpty(`图谱数据无法加载：${esc(err&&err.message?err.message:"unknown")}`); });
+    })();
+  </script>
+</body>
+</html>
