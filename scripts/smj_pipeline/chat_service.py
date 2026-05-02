@@ -781,30 +781,21 @@ class ChatService:
         if not lib:
             raise ValueError("library_id_required")
         if self._agent_backend == "codex":
-            workspace = self._resolve_workspace_path(lib)
-            runner = self._runner_factory.build("codex")
-            read_res = runner.thread_read(
-                thread_id=str(session_id),
-                workdir=workspace,
-                include_turns=True,
-                runtime_overrides=self._build_codex_runtime_overrides(workspace, lib),
-            )
-            thread = read_res.get("thread") if isinstance(read_res.get("thread"), dict) else {}
-            sid = str(thread.get("id", "") or "").strip()
-            if not sid:
-                return None
-            session = {
-                "session_id": sid,
-                "title": str(thread.get("name", "") or thread.get("goal", "") or "New chat"),
-                "default_mode": "agent",
-                "library_id": lib,
-                "created_at": str(thread.get("createdAt", "") or thread.get("created_at", "") or ""),
-                "updated_at": str(thread.get("updatedAt", "") or thread.get("updated_at", "") or ""),
-                "deleted_at": None,
-                "source": "codex",
-            }
+            rows = self.list_sessions(library_id=lib)
+            matched = next((r for r in rows if str(r.get("session_id", "")) == str(session_id)), None)
+            if not isinstance(matched, dict):
+                matched = {
+                    "session_id": str(session_id),
+                    "title": "New chat",
+                    "default_mode": "agent",
+                    "library_id": lib,
+                    "created_at": "",
+                    "updated_at": "",
+                    "deleted_at": None,
+                    "source": "codex",
+                }
             local_messages = [self._hydrate_message(m) for m in self._store.list_messages(str(session_id))]
-            return {"session": session, "messages": local_messages}
+            return {"session": matched, "messages": local_messages}
         sess = self._store.get_session(session_id, library_id=lib)
         if sess is None:
             return None
@@ -843,17 +834,6 @@ class ChatService:
         if session is None and self._agent_backend != "codex":
             raise KeyError("session_not_found")
         if session is None:
-            workspace = self._resolve_workspace_path(lib)
-            runner = self._runner_factory.build("codex")
-            thread_payload = runner.thread_read(
-                thread_id=str(session_id),
-                workdir=workspace,
-                include_turns=False,
-                runtime_overrides=self._build_codex_runtime_overrides(workspace, lib),
-            )
-            thread = thread_payload.get("thread") if isinstance(thread_payload.get("thread"), dict) else {}
-            if str(thread.get("id", "") or "").strip() != str(session_id):
-                raise KeyError("session_not_found")
             session = {"session_id": session_id, "default_mode": "agent", "library_id": lib}
         now = _now_iso()
         normalized_mode = str(mode or session.get("default_mode", "agent") or "agent").strip().lower()

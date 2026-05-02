@@ -751,7 +751,7 @@ class CodexRunner(AgentRunner):
                     "archived": bool(archived),
                     "limit": max(1, min(200, int(limit))),
                     "sortDirection": "desc",
-                    "sortKey": "updatedAt",
+                    "sortKey": "updated_at",
                 },
                 req_id,
             )
