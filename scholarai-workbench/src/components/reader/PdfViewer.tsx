@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -35,7 +35,6 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   const [selectionUI, setSelectionUI] = useState({ visible: false, x: 0, y: 0, text: '' });
   const [translationOpen, setTranslationOpen] = useState(false);
   const [translationText, setTranslationText] = useState('');
-  const selectionRangeRef = useRef<Range | null>(null);
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -59,49 +58,17 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       if (!picked || !sel || sel.rangeCount === 0) {
         return;
       }
-      const keep = sel.getRangeAt(0).cloneRange();
-      selectionRangeRef.current = keep;
       const range = sel.getRangeAt(0);
       const containerEl = (range.commonAncestorContainer instanceof Element ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement);
       if (!containerEl?.closest('.react-pdf__Page')) return;
       const rect = range.getBoundingClientRect();
       setSelectionUI({ visible: true, x: Math.max(12, rect.left), y: Math.max(12, rect.bottom + 8), text: picked });
-      window.setTimeout(() => {
-        try {
-          const s = window.getSelection();
-          if (!s) return;
-          s.removeAllRanges();
-          s.addRange(keep);
-        } catch {
-          // ignore
-        }
-      }, 0);
-    };
-    const onSelectionChange = () => {
-      if (!selectionUI.visible) return;
-      const active = document.activeElement as HTMLElement | null;
-      if (active?.closest('.selection-action-popover')) return;
-      const s = window.getSelection();
-      const current = String(s?.toString() || '').trim();
-      if (current) return;
-      const keep = selectionRangeRef.current;
-      if (!keep) return;
-      try {
-        const next = window.getSelection();
-        if (!next) return;
-        next.removeAllRanges();
-        next.addRange(keep);
-      } catch {
-        // ignore
-      }
     };
     document.addEventListener('mouseup', onUp);
-    document.addEventListener('selectionchange', onSelectionChange);
     return () => {
       document.removeEventListener('mouseup', onUp);
-      document.removeEventListener('selectionchange', onSelectionChange);
     };
-  }, [selectionUI.visible]);
+  }, []);
 
   const appendMdNoteByAnchor = async (selectedText: string, noteText: string) => {
     if (!markdownPath || window.desktopShell?.runtime !== 'electron') return;
@@ -161,8 +128,29 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     await appendMdNoteByAnchor(selectionUI.text, note);
     window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
     setSelectionUI((p) => ({ ...p, visible: false }));
-    selectionRangeRef.current = null;
   };
+
+  const pdfDocumentNode = useMemo(() => (
+    <Document
+      key={pdfUrl || fileName}
+      file={pdfUrl}
+      onLoadSuccess={(pdf) => {
+        setPageCount(pdf.numPages);
+        setCurrentPage(1);
+        setError(null);
+      }}
+      onLoadError={(e) => setError(`Failed to load PDF: ${e.message}`)}
+      loading={<div className="text-sm text-on-surface-variant">Loading PDF...</div>}
+      error={<div className="text-sm text-error">{error || 'Failed to load PDF.'}</div>}
+    >
+      <Page
+        pageNumber={currentPage}
+        scale={scale}
+        renderTextLayer
+        renderAnnotationLayer
+      />
+    </Document>
+  ), [pdfUrl, fileName, currentPage, scale, error]);
 
   if (!validHeader) {
     return (
@@ -213,25 +201,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       </div>
 
       <div className="flex-1 overflow-auto flex justify-center p-4">
-        <Document
-          key={pdfUrl || fileName}
-          file={pdfUrl}
-          onLoadSuccess={(pdf) => {
-            setPageCount(pdf.numPages);
-            setCurrentPage(1);
-            setError(null);
-          }}
-          onLoadError={(e) => setError(`Failed to load PDF: ${e.message}`)}
-          loading={<div className="text-sm text-on-surface-variant">Loading PDF...</div>}
-          error={<div className="text-sm text-error">{error || 'Failed to load PDF.'}</div>}
-        >
-          <Page
-            pageNumber={currentPage}
-            scale={scale}
-            renderTextLayer
-            renderAnnotationLayer
-          />
-        </Document>
+        {pdfDocumentNode}
       </div>
       <SelectionActionPopover
         visible={selectionUI.visible}
@@ -240,7 +210,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
         selectedText={selectionUI.text}
         onTranslate={handleTranslate}
         onSaveNote={handleSaveNote}
-        onClose={() => { setSelectionUI((p) => ({ ...p, visible: false })); selectionRangeRef.current = null; }}
+        onClose={() => { setSelectionUI((p) => ({ ...p, visible: false })); }}
       />
       <TranslationModal open={translationOpen} text={translationText} onClose={() => setTranslationOpen(false)} />
     </div>

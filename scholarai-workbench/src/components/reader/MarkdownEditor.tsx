@@ -103,7 +103,6 @@ export default function MarkdownEditor({
   const [selectionUI, setSelectionUI] = useState({ visible: false, x: 0, y: 0, text: '' });
   const [translationOpen, setTranslationOpen] = useState(false);
   const [translationText, setTranslationText] = useState('');
-  const selectionRangeRef = useRef<Range | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -205,8 +204,6 @@ export default function MarkdownEditor({
       if (!picked || !sel || sel.rangeCount === 0) {
         return;
       }
-      const keep = sel.getRangeAt(0).cloneRange();
-      selectionRangeRef.current = keep;
       const range = sel.getRangeAt(0);
       const rect = range.getBoundingClientRect();
       setSelectionUI({
@@ -215,42 +212,12 @@ export default function MarkdownEditor({
         y: Math.max(12, rect.bottom + 8),
         text: picked,
       });
-      window.setTimeout(() => {
-        try {
-          const s = window.getSelection();
-          if (!s) return;
-          s.removeAllRanges();
-          s.addRange(keep);
-        } catch {
-          // ignore
-        }
-      }, 0);
-    };
-    const onSelectionChange = () => {
-      if (!selectionUI.visible) return;
-      const active = document.activeElement as HTMLElement | null;
-      if (active?.closest('.selection-action-popover')) return;
-      const s = window.getSelection();
-      const current = String(s?.toString() || '').trim();
-      if (current) return;
-      const keep = selectionRangeRef.current;
-      if (!keep) return;
-      try {
-        const next = window.getSelection();
-        if (!next) return;
-        next.removeAllRanges();
-        next.addRange(keep);
-      } catch {
-        // ignore
-      }
     };
     document.addEventListener('mouseup', onUp);
-    document.addEventListener('selectionchange', onSelectionChange);
     return () => {
       document.removeEventListener('mouseup', onUp);
-      document.removeEventListener('selectionchange', onSelectionChange);
     };
-  }, [mode, selectionUI.visible]);
+  }, [mode]);
 
   const insertMdNote = (raw: string, selectedText: string, noteText: string): string => {
     const picked = String(selectedText || '').trim();
@@ -293,10 +260,9 @@ export default function MarkdownEditor({
       md_anchor: anchor,
     });
     setSelectionUI((p) => ({ ...p, visible: false }));
-    selectionRangeRef.current = null;
   };
 
-  const renderMarkdown = () => (
+  const renderedMarkdownNode = useMemo(() => (
     <div className="reader-markdown">
       <div
         dangerouslySetInnerHTML={{
@@ -304,7 +270,7 @@ export default function MarkdownEditor({
         }}
       />
     </div>
-  );
+  ), [renderedHtml]);
 
   return (
     <div className="flex flex-col h-full bg-surface-container-low">
@@ -342,7 +308,7 @@ export default function MarkdownEditor({
 
         {mode === 'read' && (
           <div className="h-full overflow-y-auto p-6 max-w-[800px] mx-auto">
-            {renderMarkdown()}
+            {renderedMarkdownNode}
           </div>
         )}
 
@@ -357,7 +323,7 @@ export default function MarkdownEditor({
               }}
             />
             <div className="flex-1 overflow-y-auto p-4">
-              {renderMarkdown()}
+              {renderedMarkdownNode}
             </div>
           </div>
         )}
@@ -369,7 +335,7 @@ export default function MarkdownEditor({
         selectedText={selectionUI.text}
         onTranslate={handleTranslate}
         onSaveNote={handleSaveNote}
-        onClose={() => { setSelectionUI((p) => ({ ...p, visible: false })); selectionRangeRef.current = null; }}
+        onClose={() => { setSelectionUI((p) => ({ ...p, visible: false })); }}
       />
       <TranslationModal open={translationOpen} text={translationText} onClose={() => setTranslationOpen(false)} />
     </div>
