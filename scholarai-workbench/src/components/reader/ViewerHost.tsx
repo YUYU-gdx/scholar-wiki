@@ -98,6 +98,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
             paperId={paperId}
             libraryId={libraryId}
             markdownPath={String(paperFiles?.files?.markdown?.path || '')}
+            sourcePath={String(document.absolute_path || '')}
           />
         )}
         {document.type === 'markdown' && typeof document.data === 'string' && (
@@ -121,6 +122,8 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
       {(document.type === 'pdf' || document.type === 'markdown') && (
         <AnnotationSidebar
           paperId={paperId}
+          libraryId={libraryId}
+          markdownPath={String(paperFiles?.files?.markdown?.path || '')}
           isOpen={sidebarOpen}
           onToggle={() => setSidebarOpen(!sidebarOpen)}
         />

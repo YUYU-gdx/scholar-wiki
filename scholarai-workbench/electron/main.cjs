@@ -245,10 +245,8 @@ function createMainWindow() {
     mainWindow = null;
   });
 
-  // Open devtools only when explicitly requested
-  if (String(process.env.OPEN_DEVTOOLS || "").toLowerCase() === "true") {
-    mainWindow.webContents.openDevTools();
-  }
+  // Always open devtools for reader diagnostics in current development workflow.
+  mainWindow.webContents.openDevTools({ mode: "detach" });
 }
 
 function stopBackendServer() {

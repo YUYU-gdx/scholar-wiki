@@ -14,6 +14,7 @@ export interface ReaderNoteRecord {
     suffix: string;
     hash: string;
   };
+  markdown_path_at_write?: string;
   created_at: string;
   updated_at: string;
 }
@@ -57,12 +58,12 @@ export const readerNotesManager = {
     const suffix = idx >= 0 ? doc.slice(idx + quote.length, idx + quote.length + 80) : '';
     return { quote, prefix, suffix, hash: hashText(quote) };
   },
-  async add(input: Omit<ReaderNoteRecord, 'id' | 'created_at' | 'updated_at'>): Promise<ReaderNoteRecord> {
+  async add(input: Omit<ReaderNoteRecord, 'id' | 'created_at' | 'updated_at'> & { id?: string }): Promise<ReaderNoteRecord> {
     const db = await getDb();
     const now = new Date().toISOString();
     const row: ReaderNoteRecord = {
       ...input,
-      id: crypto.randomUUID(),
+      id: String(input.id || crypto.randomUUID()),
       created_at: now,
       updated_at: now,
     };
@@ -81,6 +82,17 @@ export const readerNotesManager = {
     const row = await store.get(id) as ReaderNoteRecord | undefined;
     if (!row) return;
     row.note_text = String(noteText || '').trim();
+    row.updated_at = new Date().toISOString();
+    await store.put(row);
+    await tx.done;
+  },
+  async setMarkdownPath(id: string, markdownPath: string): Promise<void> {
+    const db = await getDb();
+    const tx = db.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    const row = await store.get(id) as ReaderNoteRecord | undefined;
+    if (!row) return;
+    row.markdown_path_at_write = String(markdownPath || '').trim();
     row.updated_at = new Date().toISOString();
     await store.put(row);
     await tx.done;

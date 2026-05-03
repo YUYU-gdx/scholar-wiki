@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { Languages } from 'lucide-react';
 
 interface SelectionActionPopoverProps {
@@ -21,8 +21,15 @@ export default function SelectionActionPopover({
   onClose,
 }: SelectionActionPopoverProps) {
   const [note, setNote] = useState('');
-  useEffect(() => { setNote(''); }, [selectedText, visible]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setNote('');
+    setSaving(false);
+  }, [selectedText, visible]);
+
   if (!visible) return null;
+
   return (
     <div
       style={{ left: x, top: y }}
@@ -43,8 +50,20 @@ export default function SelectionActionPopover({
           placeholder="输入笔记..."
           className="flex-1 px-2 py-1.5 rounded border border-outline-variant bg-surface-container text-xs"
         />
-        <button onClick={() => onSaveNote(note)} disabled={!note.trim()} className="px-3 py-1.5 rounded-lg bg-secondary text-on-secondary disabled:opacity-50 text-xs">
-          保存笔记
+        <button
+          onClick={async () => {
+            if (!note.trim() || saving) return;
+            setSaving(true);
+            try {
+              await onSaveNote(note);
+            } finally {
+              setSaving(false);
+            }
+          }}
+          disabled={!note.trim() || saving}
+          className="px-3 py-1.5 rounded-lg bg-secondary text-on-secondary disabled:opacity-50 text-xs"
+        >
+          {saving ? '保存中...' : '保存笔记'}
         </button>
       </div>
     </div>

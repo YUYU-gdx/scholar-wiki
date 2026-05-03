@@ -1,11 +1,14 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { Highlighter, Underline, StickyNote, Trash2, Pencil } from 'lucide-react';
 import { annotationManager } from './AnnotationManager';
 import type { Annotation } from './types';
 import { readerNotesManager, type ReaderNoteRecord } from './ReaderNotesManager';
+import { deleteNoteFromMarkdownAny, getRecordedNotesMarkdownPath, listRecordedNotesMarkdownPaths, upsertNoteInMarkdown } from './NoteMarkdownSync';
 
 interface AnnotationSidebarProps {
   paperId: string;
+  libraryId: string;
+  markdownPath?: string;
   isOpen: boolean;
   onToggle: () => void;
   onAnnotationClick?: (annotation: Annotation) => void;
@@ -18,7 +21,7 @@ const typeIcons: Record<string, React.ReactNode> = {
   ink: <Pencil className="w-3.5 h-3.5" />,
 };
 
-export default function AnnotationSidebar({ paperId, isOpen, onToggle, onAnnotationClick }: AnnotationSidebarProps) {
+export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '', isOpen, onToggle, onAnnotationClick }: AnnotationSidebarProps) {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [readerNotes, setReaderNotes] = useState<ReaderNoteRecord[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -48,20 +51,50 @@ export default function AnnotationSidebar({ paperId, isOpen, onToggle, onAnnotat
 
   const handleDelete = async (id: string) => {
     await annotationManager.remove(id);
+    window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
     refresh();
   };
 
+  const resolveMarkdownPath = (notePath?: string): string => {
+    const byNote = String(notePath || '').trim();
+    if (byNote) return byNote;
+    const direct = String(markdownPath || '').trim();
+    if (direct) return direct;
+    return String(getRecordedNotesMarkdownPath(libraryId, paperId) || '').trim();
+  };
+  const resolveMarkdownPathCandidates = (notePath?: string): string[] => {
+    const direct = String(notePath || '').trim();
+    const propPath = String(markdownPath || '').trim();
+    const cached = listRecordedNotesMarkdownPaths(libraryId, paperId);
+    return Array.from(new Set([direct, propPath, ...cached].filter(Boolean)));
+  };
+
+  const removeNoteBlockFromMarkdownById = async (noteId: string, selectedText: string, noteText: string, notePath?: string) => {
+    const candidates = resolveMarkdownPathCandidates(notePath);
+    // eslint-disable-next-line no-console
+    console.log('[notes] sidebar delete candidates', { noteId, candidates });
+    const result = await deleteNoteFromMarkdownAny(candidates, noteId, selectedText, noteText);
+    void result;
+  };
+
+  const updateNoteBlockInMarkdown = async (noteId: string, selectedText: string, noteText: string, notePath?: string) =>
+    upsertNoteInMarkdown(resolveMarkdownPath(notePath), noteId, selectedText, noteText);
+
   const handleSave = async (id: string) => {
     if (id.startsWith('rn:')) {
-      await readerNotesManager.update(id.slice(3), editComment);
+      const rid = id.slice(3);
+      const row = readerNotes.find((x) => x.id === rid);
+      await readerNotesManager.update(rid, editComment);
+      if (row) await updateNoteBlockInMarkdown(rid, row.selected_text, editComment, row.markdown_path_at_write);
     } else {
       await annotationManager.update(id, { comment: editComment });
     }
     setEditingId(null);
+    window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
     refresh();
   };
 
-  const sorted = [...annotations].sort((a, b) => {
+  const sorted = [...annotations].filter((a) => a.type !== 'note').sort((a, b) => {
     if (a.page_index !== b.page_index) return a.page_index - b.page_index;
     const aTop = a.rects[0]?.y ?? 0;
     const bTop = b.rects[0]?.y ?? 0;
@@ -78,7 +111,6 @@ export default function AnnotationSidebar({ paperId, isOpen, onToggle, onAnnotat
         <span className="text-xs font-mono font-bold text-on-surface uppercase tracking-wider">Notes ({annotations.length + readerNotes.length})</span>
         <button onClick={onToggle} className="text-xs text-outline hover:text-on-surface">&times;</button>
       </div>
-
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {sorted.length === 0 && sortedReaderNotes.length === 0 && (
           <p className="text-xs text-on-surface-variant text-center py-8">No annotations yet</p>
@@ -90,7 +122,7 @@ export default function AnnotationSidebar({ paperId, isOpen, onToggle, onAnnotat
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-outline"><StickyNote className="w-3.5 h-3.5" /></span>
                 <span className="text-[10px] font-mono text-outline">Pg {rn.page_index + 1}</span>
-                <button className="ml-auto text-outline hover:text-error" onClick={async () => { await readerNotesManager.remove(rn.id); refresh(); }}>
+                <button className="ml-auto text-outline hover:text-error" onClick={async () => { await readerNotesManager.remove(rn.id); await removeNoteBlockFromMarkdownById(rn.id, rn.selected_text, rn.note_text, rn.markdown_path_at_write); window.dispatchEvent(new CustomEvent('reader-note-md-deleted', { detail: { paperId, noteId: rn.id } })); window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } })); refresh(); }}>
                   <Trash2 className="w-3 h-3" />
                 </button>
               </div>
@@ -163,3 +195,4 @@ export default function AnnotationSidebar({ paperId, isOpen, onToggle, onAnnotat
     </div>
   );
 }
+

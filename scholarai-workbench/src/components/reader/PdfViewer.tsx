@@ -8,8 +8,9 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 import SelectionActionPopover from './SelectionActionPopover';
 import TranslationModal from './TranslationModal';
 import { api } from '../../api';
-import { annotationManager } from './AnnotationManager';
 import { readerNotesManager } from './ReaderNotesManager';
+import { ensureMarkdownPathForNotes, mergeNotesIntoMarkdown, setRecordedNotesMarkdownPath, upsertNoteInMarkdown } from './NoteMarkdownSync';
+import type { PaperFiles } from '../../types';
 
 interface PdfViewerProps {
   data: Uint8Array;
@@ -17,6 +18,7 @@ interface PdfViewerProps {
   paperId: string;
   libraryId: string;
   markdownPath: string;
+  sourcePath: string;
 }
 
 function hasValidPdfHeader(data: Uint8Array): boolean {
@@ -24,7 +26,7 @@ function hasValidPdfHeader(data: Uint8Array): boolean {
   return data[0] === 0x25 && data[1] === 0x50 && data[2] === 0x44 && data[3] === 0x46 && data[4] === 0x2d;
 }
 
-export default function PdfViewer({ data, fileName, paperId, libraryId, markdownPath }: PdfViewerProps) {
+export default function PdfViewer({ data, fileName, paperId, libraryId, markdownPath, sourcePath }: PdfViewerProps) {
   const [pageCount, setPageCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [scale, setScale] = useState(1.15);
@@ -70,24 +72,30 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     };
   }, []);
 
-  const appendMdNoteByAnchor = async (selectedText: string, noteText: string) => {
-    if (!markdownPath || window.desktopShell?.runtime !== 'electron') return;
-    const read = await window.desktopShell.readLocalText(markdownPath);
-    if (!read.ok || !read.data) return;
-    const raw = read.data;
-    const idx = raw.indexOf(selectedText);
-    const now = new Date().toISOString();
-    const block = `\n\n> [!NOTE] Reader Note\n> 引用：\n> ${selectedText}\n>\n> 笔记：\n> ${noteText}\n>\n> 时间：\n> ${now}\n`;
-    let next = '';
-    if (idx >= 0) {
-      const tail = raw.slice(idx);
-      const endInTail = tail.search(/\n\s*\n/);
-      const insertAt = endInTail >= 0 ? idx + endInTail : raw.length;
-      next = `${raw.slice(0, insertAt)}${block}${raw.slice(insertAt)}`;
-    } else {
-      next = `${raw}\n\n## Reader Notes${block}`;
+  const appendMdNoteByAnchor = async (noteId: string, selectedText: string, noteText: string): Promise<string> => {
+    if (markdownPath) setRecordedNotesMarkdownPath(libraryId, paperId, markdownPath);
+    const filesStub: PaperFiles = {
+      paper_id: paperId,
+      library_id: libraryId,
+      files: {
+        markdown: markdownPath ? { path: markdownPath, name: 'markdown.md', size_bytes: 0 } : undefined,
+        pdf: undefined,
+        html: undefined,
+      },
+      default_view: 'markdown',
+    };
+    // supply one existing path to derive directory when markdown is missing
+    if (!filesStub.files.markdown && sourcePath) {
+      filesStub.files.pdf = { path: sourcePath, name: fileName, size_bytes: 0 };
     }
-    await window.desktopShell.writeLocalText(markdownPath, next);
+    const ensured = await ensureMarkdownPathForNotes(filesStub, paperId);
+    if (!ensured) return '';
+    if (markdownPath && ensured && markdownPath !== ensured) {
+      await mergeNotesIntoMarkdown(markdownPath, ensured);
+    }
+    setRecordedNotesMarkdownPath(libraryId, paperId, ensured);
+    await upsertNoteInMarkdown(ensured, noteId, selectedText, noteText);
+    return ensured;
   };
 
   const handleTranslate = async () => {
@@ -103,31 +111,36 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   };
 
   const handleSaveNote = async (note: string) => {
-    const anchor = readerNotesManager.makeAnchor(selectionUI.text, selectionUI.text);
-    await readerNotesManager.add({
-      paper_id: paperId,
-      library_id: libraryId,
-      doc_type: 'pdf',
-      page_index: currentPage - 1,
-      selected_text: selectionUI.text,
-      note_text: note,
-      md_anchor: anchor,
-    });
-    await annotationManager.add({
-      paper_id: paperId,
-      library_id: libraryId,
-      type: 'note',
-      page_index: currentPage - 1,
-      rects: [],
-      text: selectionUI.text,
-      comment: note,
-      color: '#f59e0b',
-      ink_paths: [],
-      linked_node_ids: [],
-    });
-    await appendMdNoteByAnchor(selectionUI.text, note);
-    window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
-    setSelectionUI((p) => ({ ...p, visible: false }));
+    try {
+      const noteText = String(note || '').trim();
+      const picked = String(selectionUI.text || '').trim();
+      if (!noteText || !picked) return;
+      const anchor = readerNotesManager.makeAnchor(picked, picked);
+      const saved = await readerNotesManager.add({
+        paper_id: paperId,
+        library_id: libraryId,
+        doc_type: 'pdf',
+        page_index: currentPage - 1,
+        selected_text: picked,
+        note_text: noteText,
+        md_anchor: anchor,
+        markdown_path_at_write: markdownPath || '',
+      });
+      // eslint-disable-next-line no-console
+      console.log('[notes] pdf save created db row', { id: saved.id, markdownPath, sourcePath, paperId, libraryId });
+      const ensuredPath = await appendMdNoteByAnchor(saved.id, picked, noteText);
+      // eslint-disable-next-line no-console
+      console.log('[notes] pdf save ensured markdown path', { ensuredPath });
+      if (ensuredPath && ensuredPath !== saved.markdown_path_at_write) {
+        await readerNotesManager.setMarkdownPath(saved.id, ensuredPath);
+      }
+      window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
+      setSelectionUI((p) => ({ ...p, visible: false }));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[notes] pdf save failed', e);
+      window.alert(`保存笔记失败：${(e as Error).message}`);
+    }
   };
 
   const pdfDocumentNode = useMemo(() => (

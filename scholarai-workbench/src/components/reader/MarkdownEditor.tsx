@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+﻿import { useState, useRef, useEffect, useMemo } from 'react';
 import MarkdownIt from 'markdown-it';
 import markdownItFootnote from 'markdown-it-footnote';
 import markdownItTaskLists from 'markdown-it-task-lists';
@@ -12,6 +12,7 @@ import SelectionActionPopover from './SelectionActionPopover';
 import TranslationModal from './TranslationModal';
 import { api } from '../../api';
 import { readerNotesManager } from './ReaderNotesManager';
+import { addNoteToMarkdownAtomic, addNoteToMarkdownAtomicByLine, deleteNoteFromMarkdownAny, extractNoteBlocks, listRecordedNotesMarkdownPaths, readMarkdownText, setRecordedNotesMarkdownPath } from './NoteMarkdownSync';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -100,9 +101,10 @@ export default function MarkdownEditor({
   const [mode, setMode] = useState<ViewerMode>(initialMode);
   const [text, setText] = useState(content);
   const [renderedHtml, setRenderedHtml] = useState('');
-  const [selectionUI, setSelectionUI] = useState({ visible: false, x: 0, y: 0, text: '' });
+  const [selectionUI, setSelectionUI] = useState({ visible: false, x: 0, y: 0, text: '', lineEnd: -1 });
   const [translationOpen, setTranslationOpen] = useState(false);
   const [translationText, setTranslationText] = useState('');
+  const [noteRanges, setNoteRanges] = useState<Array<{ start: number; end: number; id: string; quote: string; note: string }>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -111,11 +113,34 @@ export default function MarkdownEditor({
 
   useEffect(() => {
     if (!absolutePath || window.desktopShell?.runtime !== 'electron') return;
+    if (mode === 'read') return;
     const timer = window.setTimeout(async () => {
       await window.desktopShell?.writeLocalText(absolutePath, text);
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [text, absolutePath]);
+  }, [text, absolutePath, mode]);
+
+  // In read mode, treat markdown file content as source of truth (Obsidian/VS Code-like behavior).
+  useEffect(() => {
+    if (!absolutePath || window.desktopShell?.runtime !== 'electron') return;
+    if (mode !== 'read') return;
+    let cancelled = false;
+    const tick = async () => {
+      const r = await window.desktopShell?.readLocalText(absolutePath);
+      if (cancelled || !r?.ok) return;
+      const disk = String(r.data || '');
+      if (disk !== text) {
+        setText(disk);
+        onContentChange?.(disk);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 800);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [absolutePath, mode, text, onContentChange]);
 
   const handleModeChange = (newMode: ViewerMode) => {
     setMode(newMode);
@@ -137,6 +162,35 @@ export default function MarkdownEditor({
   ), []);
 
   useEffect(() => {
+    const openRules = ['paragraph_open', 'heading_open', 'blockquote_open', 'list_item_open'];
+    for (const ruleName of openRules) {
+      const base = md.renderer.rules[ruleName];
+      md.renderer.rules[ruleName] = (tokens, idx, options, env, self) => {
+        const t = tokens[idx];
+        const map = t.map || null;
+        if (map && map.length >= 2) {
+          t.attrSet('data-src-line-start', String(map[0]));
+          t.attrSet('data-src-line-end', String(Math.max(map[0], map[1] - 1)));
+        }
+        return base ? base(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
+      };
+    }
+  }, [md]);
+
+  const findReaderNoteRanges = (raw: string): Array<{ start: number; end: number; id: string; quote: string; note: string }> =>
+    extractNoteBlocks(raw).map((x) => {
+      const quoteMatch = x.text.match(/>\s*(?:Quote|寮曠敤)锛?\s*\n>\s*([\s\S]*?)\n>\s*\n>\s*(?:Note|绗旇)锛?/);
+      const noteMatch = x.text.match(/>\s*(?:Note|绗旇)锛?\s*\n>\s*([\s\S]*?)\n>\s*\n>\s*(?:Time|鏃堕棿)锛?/);
+      return {
+        start: x.start,
+        end: x.end,
+        id: x.id,
+        quote: String(quoteMatch?.[1] || '').trim(),
+        note: String(noteMatch?.[1] || '').trim(),
+      };
+    });
+
+  useEffect(() => {
     let cancelled = false;
     const run = async () => {
       const clean = DOMPurify.sanitize(md.render(text), {
@@ -152,6 +206,7 @@ export default function MarkdownEditor({
           'href', 'src', 'alt', 'title', 'target', 'rel',
           'class', 'id', 'type', 'checked', 'disabled',
           'colspan', 'rowspan', 'align',
+          'data-src-line-start', 'data-src-line-end',
         ],
         ALLOWED_URI_REGEXP: /^(?:(?:https?|file|data|blob):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
       });
@@ -186,6 +241,31 @@ export default function MarkdownEditor({
       };
       await Promise.all(Array.from(doc.querySelectorAll('img')).map((el) => rewriteAttr(el, 'src')));
       await Promise.all(Array.from(doc.querySelectorAll('a')).map((el) => rewriteAttr(el, 'href')));
+      const notes = findReaderNoteRanges(text);
+      let noteIdx = 0;
+      for (const bq of Array.from(doc.querySelectorAll('blockquote'))) {
+        const t = String(bq.textContent || '');
+        if (!t.includes('[!NOTE] Reader Note')) continue;
+        const idx = noteIdx;
+        const noteId = notes[idx]?.id || '';
+        noteIdx += 1;
+        const wrapper = doc.createElement('div');
+        wrapper.setAttribute('data-reader-note-idx', String(idx));
+        wrapper.setAttribute('style', 'position:relative;');
+        const delBtn = doc.createElement('button');
+        delBtn.textContent = '鍒犻櫎绗旇';
+        delBtn.setAttribute('type', 'button');
+        delBtn.setAttribute('data-reader-note-delete', String(idx));
+        if (noteId) delBtn.setAttribute('data-reader-note-id', noteId);
+        delBtn.setAttribute('style', 'position:absolute;top:6px;right:6px;font-size:11px;padding:2px 6px;border:1px solid #94a3b8;border-radius:6px;background:#fff;cursor:pointer;');
+        const parent = bq.parentNode;
+        if (parent) {
+          parent.insertBefore(wrapper, bq);
+          wrapper.appendChild(bq);
+          wrapper.appendChild(delBtn);
+        }
+      }
+      if (!cancelled) setNoteRanges(notes);
       if (!cancelled) setRenderedHtml(doc.body.innerHTML);
     };
     run();
@@ -194,7 +274,7 @@ export default function MarkdownEditor({
 
   useEffect(() => {
     if (mode !== 'read' && mode !== 'live-preview') {
-      setSelectionUI({ visible: false, x: 0, y: 0, text: '' });
+      setSelectionUI({ visible: false, x: 0, y: 0, text: '', lineEnd: -1 });
       return;
     }
     const onUp = () => {
@@ -206,11 +286,26 @@ export default function MarkdownEditor({
       }
       const range = sel.getRangeAt(0);
       const rect = range.getBoundingClientRect();
+      const startEl = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)?.closest('[data-src-line-start]') as HTMLElement | null;
+      const endEl = (range.endContainer instanceof Element ? range.endContainer : range.endContainer.parentElement)?.closest('[data-src-line-end]') as HTMLElement | null;
+      const startLine = Number(startEl?.getAttribute('data-src-line-start') || '-1');
+      const anchorBlockEnd = Number(startEl?.getAttribute('data-src-line-end') || '-1');
+      const focusLineEnd = Number(endEl?.getAttribute('data-src-line-end') || '-1');
+      const coreRaw = raw.replace(/\n\s*$/, '');
+      const selectedNewlineCount = (coreRaw.match(/\n/g) || []).length;
+      let lineEnd = startLine >= 0 ? (startLine + selectedNewlineCount) : -1;
+      if (lineEnd < 0) {
+        lineEnd = anchorBlockEnd >= 0 ? anchorBlockEnd : Math.max(startLine, focusLineEnd);
+      }
+      if (anchorBlockEnd >= 0) {
+        lineEnd = Math.min(lineEnd, anchorBlockEnd);
+      }
       setSelectionUI({
         visible: true,
         x: Math.max(12, rect.left),
         y: Math.max(12, rect.bottom + 8),
         text: picked,
+        lineEnd,
       });
     };
     document.addEventListener('mouseup', onUp);
@@ -219,19 +314,29 @@ export default function MarkdownEditor({
     };
   }, [mode]);
 
-  const insertMdNote = (raw: string, selectedText: string, noteText: string): string => {
-    const picked = String(selectedText || '').trim();
-    const note = String(noteText || '').trim();
-    if (!picked || !note) return raw;
-    const now = new Date().toISOString();
-    const block = `\n\n> [!NOTE] Reader Note\n> 引用：\n> ${picked}\n>\n> 笔记：\n> ${note}\n>\n> 时间：\n> ${now}\n`;
-    const idx = raw.indexOf(picked);
-    if (idx < 0) return `${raw}\n\n## Reader Notes${block}`;
-    const tail = raw.slice(idx);
-    const endInTail = tail.search(/\n\s*\n/);
-    const insertAt = endInTail >= 0 ? idx + endInTail : raw.length;
-    return `${raw.slice(0, insertAt)}${block}${raw.slice(insertAt)}`;
-  };
+  useEffect(() => {
+    const onExternalDelete = (evt: Event) => {
+      const e = evt as CustomEvent<{ paperId?: string; noteId?: string }>;
+      if (String(e.detail?.paperId || '') !== String(paperId || '')) return;
+      const noteId = String(e.detail?.noteId || '').trim();
+      if (!noteId) return;
+      const marker = `> Note ID: ${noteId}`;
+      const at = text.indexOf(marker);
+      if (at < 0) return;
+      const start = text.lastIndexOf('> [!NOTE] Reader Note', at);
+      if (start < 0) return;
+      let end = text.indexOf('\n\n', at + marker.length);
+      if (end < 0) end = text.length;
+      const next = `${text.slice(0, start)}${text.slice(end)}`.replace(/\n{3,}/g, '\n\n');
+      setText(next);
+      onContentChange?.(next);
+      if (window.desktopShell?.runtime === 'electron' && absolutePath) {
+        window.desktopShell.writeLocalText(absolutePath, next).catch(() => {});
+      }
+    };
+    window.addEventListener('reader-note-md-deleted', onExternalDelete as EventListener);
+    return () => window.removeEventListener('reader-note-md-deleted', onExternalDelete as EventListener);
+  }, [paperId, text, absolutePath, onContentChange]);
 
   const handleTranslate = async () => {
     try {
@@ -240,26 +345,92 @@ export default function MarkdownEditor({
       setTranslationText(result.translated_text || '');
       setTranslationOpen(true);
     } catch (e) {
-      setTranslationText(`翻译失败：${(e as Error).message}`);
+      setTranslationText(`缈昏瘧澶辫触锛?{(e as Error).message}`);
       setTranslationOpen(true);
     }
   };
 
   const handleSaveNote = async (note: string) => {
-    const next = insertMdNote(text, selectionUI.text, note);
-    setText(next);
-    onContentChange?.(next);
-    const anchor = readerNotesManager.makeAnchor(next, selectionUI.text);
-    await readerNotesManager.add({
-      paper_id: paperId,
-      library_id: libraryId,
-      doc_type: 'markdown',
-      page_index: 0,
-      selected_text: selectionUI.text,
-      note_text: note,
-      md_anchor: anchor,
-    });
-    setSelectionUI((p) => ({ ...p, visible: false }));
+    try {
+      const noteText = String(note || '').trim();
+      const picked = String(selectionUI.text || '').trim();
+      if (!noteText || !picked) return;
+      if (absolutePath) setRecordedNotesMarkdownPath(libraryId, paperId, absolutePath);
+      // eslint-disable-next-line no-console
+      console.log('[notes] markdown save path alignment', {
+        absolutePath,
+        cachedPaths: listRecordedNotesMarkdownPaths(libraryId, paperId),
+        paperId,
+        libraryId,
+      });
+      const saved = await readerNotesManager.add({
+        paper_id: paperId,
+        library_id: libraryId,
+        doc_type: 'markdown',
+        page_index: 0,
+        selected_text: picked,
+        note_text: noteText,
+        md_anchor: readerNotesManager.makeAnchor(text, picked),
+        markdown_path_at_write: absolutePath,
+      });
+      const atomic = selectionUI.lineEnd >= 0
+        ? await addNoteToMarkdownAtomicByLine(absolutePath, saved.id, picked, noteText, selectionUI.lineEnd)
+        : await addNoteToMarkdownAtomic(absolutePath, saved.id, picked, noteText);
+      if (!atomic.ok) throw new Error('md_atomic_add_failed');
+      // eslint-disable-next-line no-console
+      console.log('[notes] markdown save atomic result', { noteId: saved.id, rawLen: atomic.raw.length, hasMarker: atomic.raw.includes(`> Note ID: ${saved.id}`) });
+      setText(atomic.raw);
+      onContentChange?.(atomic.raw);
+      if (window.desktopShell?.runtime === 'electron' && absolutePath) {
+        const marker = `> Note ID: ${saved.id}`;
+        window.setTimeout(async () => {
+          const r = await window.desktopShell?.readLocalText(absolutePath);
+          const stillExists = !!(r?.ok && String(r.data || '').includes(marker));
+          // eslint-disable-next-line no-console
+          console.log('[notes] markdown delayed verify 1s', { noteId: saved.id, stillExists, absolutePath });
+          if (!stillExists && r?.ok) {
+            const repair = await addNoteToMarkdownAtomic(absolutePath, saved.id, picked, noteText);
+            // eslint-disable-next-line no-console
+            console.warn('[notes] markdown repaired after overwrite (1s)', { noteId: saved.id, ok: repair.ok });
+          }
+        }, 1000);
+        window.setTimeout(async () => {
+          const r = await window.desktopShell?.readLocalText(absolutePath);
+          const stillExists = !!(r?.ok && String(r.data || '').includes(marker));
+          // eslint-disable-next-line no-console
+          console.log('[notes] markdown delayed verify 3s', { noteId: saved.id, stillExists, absolutePath });
+        }, 3000);
+      }
+      window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
+      setSelectionUI((p) => ({ ...p, visible: false, lineEnd: -1 }));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[notes] markdown save failed', e);
+      window.alert(`保存笔记失败：${(e as Error).message}`);
+    }
+  };
+
+  const handleDeleteNoteByIndex = async (index: number) => {
+    if (!Number.isInteger(index) || index < 0 || index >= noteRanges.length) return;
+    const range = noteRanges[index];
+    if (range.id) {
+      readerNotesManager.remove(range.id).catch(() => {});
+    }
+    const candidates = Array.from(new Set([
+      String(absolutePath || '').trim(),
+      ...listRecordedNotesMarkdownPaths(libraryId, paperId),
+    ].filter(Boolean)));
+    const res = await deleteNoteFromMarkdownAny(candidates, range.id || '', range.quote || '', range.note || '');
+    if (!res.ok) {
+      window.alert('删除已执行，但未在任何 MD 文件中找到对应笔记块。');
+      return;
+    }
+    const latest = await readMarkdownText(res.path || absolutePath);
+    if (latest) {
+      setText(latest);
+      onContentChange?.(latest);
+    }
+    window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
   };
 
   const renderedMarkdownNode = useMemo(() => (
@@ -308,7 +479,18 @@ export default function MarkdownEditor({
 
         {mode === 'read' && (
           <div className="h-full overflow-y-auto p-6 max-w-[800px] mx-auto">
-            {renderedMarkdownNode}
+            <div
+              onClick={(evt) => {
+                const rawTarget = evt.target;
+                const elem = rawTarget instanceof Element ? rawTarget : ((rawTarget as Node | null)?.parentElement || null);
+                const btn = elem?.closest('[data-reader-note-delete]') as HTMLElement | null;
+                if (!btn) return;
+                const idx = Number(btn.getAttribute('data-reader-note-delete') || '-1');
+                if (idx >= 0) handleDeleteNoteByIndex(idx);
+              }}
+            >
+              {renderedMarkdownNode}
+            </div>
           </div>
         )}
 
@@ -323,7 +505,18 @@ export default function MarkdownEditor({
               }}
             />
             <div className="flex-1 overflow-y-auto p-4">
-              {renderedMarkdownNode}
+              <div
+                onClick={(evt) => {
+                  const rawTarget = evt.target;
+                  const elem = rawTarget instanceof Element ? rawTarget : ((rawTarget as Node | null)?.parentElement || null);
+                  const btn = elem?.closest('[data-reader-note-delete]') as HTMLElement | null;
+                  if (!btn) return;
+                  const idx = Number(btn.getAttribute('data-reader-note-delete') || '-1');
+                  if (idx >= 0) handleDeleteNoteByIndex(idx);
+                }}
+              >
+                {renderedMarkdownNode}
+              </div>
             </div>
           </div>
         )}
@@ -335,9 +528,12 @@ export default function MarkdownEditor({
         selectedText={selectionUI.text}
         onTranslate={handleTranslate}
         onSaveNote={handleSaveNote}
-        onClose={() => { setSelectionUI((p) => ({ ...p, visible: false })); }}
+        onClose={() => { setSelectionUI((p) => ({ ...p, visible: false, lineEnd: -1 })); }}
       />
       <TranslationModal open={translationOpen} text={translationText} onClose={() => setTranslationOpen(false)} />
     </div>
   );
 }
+
+
+
