@@ -1,13 +1,21 @@
-﻿import { BookOpen, FileText, ArrowLeft } from 'lucide-react';
+import { BookOpen, FileText, ArrowLeft } from 'lucide-react';
+import { useState } from 'react';
 import { useApp } from '../App';
 import ViewerHost from './reader/ViewerHost';
 
 export default function ReaderView() {
+  const [docPath, setDocPath] = useState('');
   const {
     selectedPaperId,
     selectedPaperLibraryId,
     setSelectedPaperId,
+    setSelectedNodeId,
+    setSelectedPaperRawId,
+    setSelectedPaperPreferredType,
     selectedNodeId,
+    selectedPaperPreferredType,
+    selectedPaperRawId,
+    readerReturnView,
     setCurrentView,
   } = useApp();
 
@@ -33,7 +41,10 @@ export default function ReaderView() {
           className="flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface transition-colors"
           onClick={() => {
             setSelectedPaperId(null);
-            setCurrentView('graph');
+            setSelectedPaperRawId(null);
+            setSelectedPaperPreferredType(null);
+            setSelectedNodeId(null);
+            setCurrentView(readerReturnView);
           }}
         >
           <ArrowLeft className="w-3.5 h-3.5" />
@@ -45,16 +56,27 @@ export default function ReaderView() {
             {selectedPaperId || selectedNodeId || 'Document'}
           </span>
         </div>
+        {docPath && (
+          <span className="text-[10px] text-outline truncate ml-auto max-w-[48%]" title={docPath}>
+            {docPath}
+          </span>
+        )}
       </div>
 
       {selectedPaperId ? (
-        <ViewerHost paperId={selectedPaperId} libraryId={selectedPaperLibraryId} />
+        <ViewerHost
+          paperId={selectedPaperId}
+          libraryId={selectedPaperLibraryId}
+          preferredType={selectedPaperPreferredType}
+          rawPaperId={selectedPaperRawId || undefined}
+          onDocumentMeta={(meta) => setDocPath(meta.absolutePath || '')}
+        />
       ) : selectedNodeId ? (
         <div className="flex-1 flex items-center justify-center bg-surface-container-low">
           <div className="text-center space-y-3">
             <BookOpen className="w-8 h-8 text-outline mx-auto" />
             <p className="text-sm text-on-surface-variant">
-              Variable detail view — select a paper to open documents.
+              Variable detail view - select a paper to open documents.
             </p>
           </div>
         </div>

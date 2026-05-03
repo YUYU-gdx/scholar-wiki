@@ -1,5 +1,4 @@
 import type { PaperFiles } from '../../types';
-
 const API_BASE = '';
 
 export async function resolvePaperFiles(
@@ -46,18 +45,22 @@ async function electronReadText(path: string): Promise<string | null> {
 }
 
 export async function loadDocument(
+  _paperId: string,
+  _libraryId: string,
   files: PaperFiles,
+  _rawPaperId?: string,
   preferredType?: 'pdf' | 'markdown' | 'html' | null,
-): Promise<{ type: 'pdf' | 'markdown' | 'html' | 'none'; data: Uint8Array | string | null; file_name: string }> {
+): Promise<{ type: 'pdf' | 'markdown' | 'html' | 'none'; data: Uint8Array | string | null; file_name: string; absolute_path?: string }> {
   const isElectron = window.desktopShell?.runtime === 'electron';
+  if (!isElectron) {
+    throw new Error('reader_requires_electron_runtime');
+  }
 
-  const tryType = async (t: string): Promise<{ type: 'pdf' | 'markdown' | 'html' | 'none'; data: Uint8Array | string | null; file_name: string } | null> => {
+  const tryType = async (t: string): Promise<{ type: 'pdf' | 'markdown' | 'html' | 'none'; data: Uint8Array | string | null; file_name: string; absolute_path?: string } | null> => {
     const f = (files.files as Record<string, { path: string; name: string; size_bytes: number } | undefined>)[t];
     if (!f) return null;
-    const data = isElectron
-      ? (t === 'pdf' ? await electronReadFile(f.path) : await electronReadText(f.path))
-      : null;
-    return { type: t as 'pdf' | 'markdown' | 'html', data, file_name: f.name };
+    const data = t === 'pdf' ? await electronReadFile(f.path) : await electronReadText(f.path);
+    return { type: t as 'pdf' | 'markdown' | 'html', data, file_name: f.name, absolute_path: f.path };
   };
 
   if (preferredType) {
@@ -70,5 +73,5 @@ export async function loadDocument(
     if (r) return r;
   }
 
-  return { type: 'none', data: null, file_name: '' };
+  return { type: 'none', data: null, file_name: '', absolute_path: '' };
 }

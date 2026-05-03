@@ -136,3 +136,99 @@
 .electron-no-drag {
   -webkit-app-region: no-drag;
 }
+
+.reader-markdown {
+  max-width: 860px;
+  margin: 0 auto;
+  color: var(--color-on-surface);
+  font-family: "Newsreader", ui-serif, Georgia, serif;
+  line-height: 1.75;
+  font-size: 16px;
+}
+
+.reader-markdown h1,
+.reader-markdown h2,
+.reader-markdown h3,
+.reader-markdown h4,
+.reader-markdown h5,
+.reader-markdown h6 {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  line-height: 1.25;
+  margin-top: 1.3em;
+  margin-bottom: 0.55em;
+  color: var(--color-on-surface);
+}
+
+.reader-markdown h1 { font-size: 1.9rem; }
+.reader-markdown h2 { font-size: 1.5rem; }
+.reader-markdown h3 { font-size: 1.2rem; }
+
+.reader-markdown p {
+  margin: 0.8em 0;
+}
+
+.reader-markdown blockquote {
+  margin: 1em 0;
+  padding: 0.65em 1em;
+  border-left: 3px solid var(--color-secondary);
+  background: var(--color-surface-container-low);
+  border-radius: 8px;
+}
+
+.reader-markdown code {
+  font-family: "Work Sans", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace;
+  font-size: 0.9em;
+  background: var(--color-surface-container-low);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+}
+
+.reader-markdown pre {
+  margin: 1em 0;
+  padding: 0.9em 1em;
+  border-radius: 10px;
+  background: #111318;
+  color: #e9edf8;
+  overflow-x: auto;
+}
+
+.reader-markdown pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+}
+
+.reader-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.95em;
+}
+
+.reader-markdown th,
+.reader-markdown td {
+  border: 1px solid var(--color-outline-variant);
+  padding: 0.5em 0.65em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.reader-markdown thead th {
+  background: var(--color-surface-container);
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 600;
+}
+
+.reader-markdown ul,
+.reader-markdown ol {
+  margin: 0.7em 0;
+  padding-left: 1.4em;
+}
+
+.reader-markdown hr {
+  border: none;
+  border-top: 1px solid var(--color-outline-variant);
+  margin: 1.2em 0;
+}

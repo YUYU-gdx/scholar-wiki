@@ -19,14 +19,10 @@ def create_router(chat_service: ChatService) -> APIRouter:
 
     @router.get("/sessions")
     async def list_sessions(library_id: str = Query(default="")):
-        if not library_id:
-            return JSONResponse(status_code=400, content={"error": "library_id_required"})
         return chat_service.list_sessions(library_id=library_id)
 
     @router.get("/sessions/{session_id}")
     async def get_session(session_id: str, library_id: str = Query(default="")):
-        if not library_id:
-            return JSONResponse(status_code=400, content={"error": "library_id_required"})
         result = chat_service.get_session(session_id=session_id, library_id=library_id)
         if result is None:
             return JSONResponse(status_code=404, content={"error": "session_not_found", "session_id": session_id})
@@ -35,23 +31,17 @@ def create_router(chat_service: ChatService) -> APIRouter:
     @router.post("/sessions")
     async def create_session(body: CreateSessionRequest):
         library_id = str(body.library_id or "").strip()
-        if not library_id:
-            return JSONResponse(status_code=400, content={"error": "library_id_required"})
         result = chat_service.create_session(title=body.title, library_id=library_id)
         return JSONResponse(status_code=201, content=result)
 
     @router.delete("/sessions/{session_id}")
     async def delete_session(session_id: str, library_id: str = Query(default="")):
-        if not library_id:
-            return JSONResponse(status_code=400, content={"error": "library_id_required"})
         result = chat_service.delete_session(session_id=session_id, library_id=library_id)
         return result
 
     @router.post("/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: SendMessageRequest):
         library_id = str(body.library_id or "").strip()
-        if not library_id:
-            return JSONResponse(status_code=400, content={"error": "library_id_required"})
         content = str(body.content or "").strip()
         if not content:
             return JSONResponse(status_code=400, content={"error": "content_required"})
@@ -121,8 +111,6 @@ def create_router(chat_service: ChatService) -> APIRouter:
 
     @router.post("/sessions/{session_id}/restore")
     async def restore_session(session_id: str, library_id: str = Query(default="")):
-        if not library_id:
-            return JSONResponse(status_code=400, content={"error": "library_id_required"})
         result = chat_service.restore_session(session_id=session_id, library_id=library_id)
         if not isinstance(result, dict):
             return JSONResponse(status_code=500, content={"error": "chat_restore_failed"})

@@ -3,6 +3,7 @@ import { FileText, AlertCircle } from 'lucide-react';
 import PdfViewer from './PdfViewer';
 import MarkdownEditor from './MarkdownEditor';
 import AnnotationSidebar from './AnnotationSidebar';
+import ReaderChatSidebar from './ReaderChatSidebar';
 import { resolvePaperFiles, loadDocument } from './DocumentResolver';
 import type { PaperFiles, DocumentLoadResult } from './types';
 
@@ -11,19 +12,31 @@ interface ViewerHostProps {
   libraryId: string;
   preferredType?: 'pdf' | 'markdown' | 'html' | null;
   rawPaperId?: string;
+  onDocumentMeta?: (meta: { absolutePath: string; fileName: string; type: 'pdf' | 'markdown' | 'html' | 'none' }) => void;
 }
 
-export default function ViewerHost({ paperId, libraryId, preferredType, rawPaperId }: ViewerHostProps) {
+export default function ViewerHost({ paperId, libraryId, preferredType, rawPaperId, onDocumentMeta }: ViewerHostProps) {
   const [paperFiles, setPaperFiles] = useState<PaperFiles | null>(null);
   const [document, setDocument] = useState<DocumentLoadResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
   const sanitizeHtml = (html: string): string => {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-    const blockedTags = new Set(['script', 'iframe', 'object', 'embed', 'link', 'meta', 'base']);
+    const blockedTags = new Set(['script', 'iframe', 'object', 'embed', 'meta', 'base']);
+    const docBase = String(document?.absolute_path || '').replace(/[\\/][^\\/]*$/, '');
+    const rewrite = (raw: string): string => {
+      const s = String(raw || '').trim();
+      if (!s || s.startsWith('http://') || s.startsWith('https://') || s.startsWith('data:') || s.startsWith('blob:') || s.startsWith('#')) {
+        return s;
+      }
+      const normalized = s.replace(/\\/g, '/');
+      const joined = `${docBase.replace(/\\/g, '/')}/${normalized}`.replace(/\/+/g, '/');
+      return `file:///${encodeURI(joined)}`;
+    };
     for (const el of Array.from(doc.querySelectorAll('*'))) {
       const tag = el.tagName.toLowerCase();
       if (blockedTags.has(tag)) {
@@ -39,6 +52,25 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
           el.removeAttribute(attr.name);
         }
       }
+      if (tag === 'img') {
+        const src = el.getAttribute('src');
+        if (src) el.setAttribute('src', rewrite(src));
+      }
+      if (tag === 'a') {
+        const href = el.getAttribute('href');
+        if (href) el.setAttribute('href', rewrite(href));
+        if (!el.getAttribute('target')) el.setAttribute('target', '_blank');
+        if (!el.getAttribute('rel')) el.setAttribute('rel', 'noopener noreferrer');
+      }
+      if (tag === 'link') {
+        const rel = String(el.getAttribute('rel') || '').toLowerCase();
+        if (!['stylesheet', 'icon', 'shortcut icon'].includes(rel)) {
+          el.remove();
+          continue;
+        }
+        const href = el.getAttribute('href');
+        if (href) el.setAttribute('href', rewrite(href));
+      }
     }
     return doc.body.innerHTML;
   };
@@ -53,11 +85,16 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
       .then((files) => {
         if (cancelled) return;
         setPaperFiles(files);
-        return loadDocument(files, preferredType);
+        return loadDocument(paperId, libraryId, files, rawPaperId, preferredType);
       })
       .then((doc) => {
         if (cancelled) return;
         setDocument(doc);
+        onDocumentMeta?.({
+          absolutePath: String(doc?.absolute_path || ''),
+          fileName: String(doc?.file_name || ''),
+          type: doc?.type || 'none',
+        });
         setLoading(false);
       })
       .catch((e) => {
@@ -67,7 +104,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
       });
 
     return () => { cancelled = true; };
-  }, [paperId, libraryId, preferredType, rawPaperId]);
+  }, [paperId, libraryId, preferredType, rawPaperId, onDocumentMeta]);
 
   if (loading) {
     return (
@@ -110,7 +147,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
           <PdfViewer data={document.data} fileName={document.file_name} />
         )}
         {document.type === 'markdown' && typeof document.data === 'string' && (
-          <MarkdownEditor content={document.data} fileName={document.file_name} />
+          <MarkdownEditor content={document.data} fileName={document.file_name} absolutePath={String(document.absolute_path || '')} />
         )}
         {document.type === 'html' && typeof document.data === 'string' && (
           <div className="flex-1 overflow-auto p-6 bg-surface-container-lowest">
@@ -135,6 +172,14 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
           Annotations
         </button>
       )}
+
+      <ReaderChatSidebar
+        paperId={paperId}
+        libraryId={libraryId}
+        absolutePath={String(document.absolute_path || '')}
+        isOpen={chatOpen}
+        onToggle={() => setChatOpen(!chatOpen)}
+      />
     </div>
   );
 }

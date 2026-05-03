@@ -36,6 +36,8 @@ type AppContextType = {
   setSelectedPaperPreferredType: (type: 'pdf' | 'markdown' | 'html' | null) => void;
   selectedPaperRawId: string | null;
   setSelectedPaperRawId: (id: string | null) => void;
+  readerReturnView: 'library' | 'graph';
+  setReaderReturnView: (v: 'library' | 'graph') => void;
   sessions: ChatSession[];
   setSessions: React.Dispatch<React.SetStateAction<ChatSession[]>>;
   activeSessionId: string | null;
@@ -48,6 +50,8 @@ type AppContextType = {
   pipelineJobs: PipelineJob[];
   setPipelineJobs: React.Dispatch<React.SetStateAction<PipelineJob[]>>;
   graphLoading: boolean;
+  paperFileCache: Record<string, { pdf: boolean; markdown: boolean; html: boolean; loaded: boolean }>;
+  setPaperFileCache: React.Dispatch<React.SetStateAction<Record<string, { pdf: boolean; markdown: boolean; html: boolean; loaded: boolean }>>>;
 };
 
 export const AppContext = createContext<AppContextType>(null!);
@@ -120,12 +124,14 @@ export default function App() {
   const [selectedPaperLibraryId, setSelectedPaperLibraryId] = useState<string>('supply_chain');
   const [selectedPaperPreferredType, setSelectedPaperPreferredType] = useState<'pdf' | 'markdown' | 'html' | null>(null);
   const [selectedPaperRawId, setSelectedPaperRawId] = useState<string | null>(null);
+  const [readerReturnView, setReaderReturnView] = useState<'library' | 'graph'>('library');
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [libraries, setLibraries] = useState<LiteratureLibrary[]>([]);
   const [activeLibraryId, setActiveLibraryId] = useState('supply_chain');
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<string[]>(['supply_chain']);
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([]);
+  const [paperFileCache, setPaperFileCache] = useState<Record<string, { pdf: boolean; markdown: boolean; html: boolean; loaded: boolean }>>({});
 
   useEffect(() => {
     api.literature.listLibraries().then((res) => {
@@ -204,6 +210,8 @@ export default function App() {
     setSelectedPaperPreferredType,
     selectedPaperRawId,
     setSelectedPaperRawId,
+    readerReturnView,
+    setReaderReturnView,
     sessions,
     setSessions,
     activeSessionId,
@@ -216,6 +224,8 @@ export default function App() {
     pipelineJobs,
     setPipelineJobs,
     graphLoading,
+    paperFileCache,
+    setPaperFileCache,
   };
 
   return (

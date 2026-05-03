@@ -11,6 +11,9 @@ export default function GraphView() {
     setActiveLibraryId,
     setSelectedPaperId,
     setSelectedPaperLibraryId,
+    setSelectedPaperPreferredType,
+    setSelectedPaperRawId,
+    setReaderReturnView,
     setCurrentView,
   } = useApp();
 
@@ -23,8 +26,15 @@ export default function GraphView() {
         const paperId = String(data.payload?.paperId || '');
         const libraryId = String(data.payload?.libraryId || activeLibraryId || 'supply_chain');
         if (!paperId) return;
+        const rawType = String(data.payload?.preferredType || '');
+        const preferredType = (['pdf', 'markdown', 'html'].includes(rawType))
+          ? rawType as 'pdf' | 'markdown' | 'html'
+          : null;
         setSelectedPaperId(paperId);
         setSelectedPaperLibraryId(libraryId);
+        setSelectedPaperPreferredType(preferredType);
+        setSelectedPaperRawId(String(data.payload?.rawPaperId || '') || null);
+        setReaderReturnView('graph');
         setCurrentView('reader');
         return;
       }
@@ -53,6 +63,9 @@ export default function GraphView() {
     setSelectedLibraryIds,
     setSelectedPaperId,
     setSelectedPaperLibraryId,
+    setSelectedPaperPreferredType,
+    setSelectedPaperRawId,
+    setReaderReturnView,
   ]);
 
   const src = useMemo(() => {

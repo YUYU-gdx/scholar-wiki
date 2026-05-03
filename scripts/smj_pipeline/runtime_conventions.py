@@ -27,7 +27,7 @@ def detect_default_storage_root() -> Path:
     if explicit:
         return Path(explicit).resolve()
     if os.name == "nt":
-        return Path(r"D:\KNGraphAppData")
+        return Path(r"D:\KNGraphApp")
     return (Path.home() / ".kn_graph_data").resolve()
 
 

@@ -72,25 +72,29 @@ export const api = {
   },
 
   chat: {
-    listSessions(libraryId: string): Promise<{ sessions: ChatSession[] }> {
-      return jsonFetch(`/chat/sessions?library_id=${encodeURIComponent(libraryId)}`);
+    listSessions(libraryId: string = ''): Promise<{ sessions: ChatSession[] }> {
+      const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
+      return jsonFetch(`/chat/sessions${params}`);
     },
-    getSession(sessionId: string, libraryId: string): Promise<{ session: ChatSession; messages: ChatMessage[] }> {
-      return jsonFetch(`/chat/sessions/${encodeURIComponent(sessionId)}?library_id=${encodeURIComponent(libraryId)}`);
+    getSession(sessionId: string, libraryId: string = ''): Promise<{ session: ChatSession; messages: ChatMessage[] }> {
+      const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
+      return jsonFetch(`/chat/sessions/${encodeURIComponent(sessionId)}${params}`);
     },
-    createSession(title: string, libraryId: string, defaultMode: string = 'agent'): Promise<ChatSession> {
+    createSession(title: string, libraryId: string = '', defaultMode: string = 'agent'): Promise<ChatSession> {
       return jsonFetch('/chat/sessions', {
         method: 'POST',
         body: JSON.stringify({ title, library_id: libraryId, default_mode: defaultMode }),
       });
     },
-    deleteSession(sessionId: string, libraryId: string): Promise<void> {
-      return jsonFetch(`/chat/sessions/${encodeURIComponent(sessionId)}?library_id=${encodeURIComponent(libraryId)}`, { method: 'DELETE' }).then(() => {});
+    deleteSession(sessionId: string, libraryId: string = ''): Promise<void> {
+      const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
+      return jsonFetch(`/chat/sessions/${encodeURIComponent(sessionId)}${params}`, { method: 'DELETE' }).then(() => {});
     },
-    restoreSession(sessionId: string, libraryId: string): Promise<unknown> {
-      return jsonFetch(`/chat/sessions/${encodeURIComponent(sessionId)}/restore?library_id=${encodeURIComponent(libraryId)}`, { method: 'POST' });
+    restoreSession(sessionId: string, libraryId: string = ''): Promise<unknown> {
+      const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
+      return jsonFetch(`/chat/sessions/${encodeURIComponent(sessionId)}/restore${params}`, { method: 'POST' });
     },
-    sendMessage(sessionId: string, content: string, libraryId: string, mode: string = 'agent', provider: string = 'codex', model: string = 'codex-local', stream: boolean = true): Promise<SendMessageResponse> {
+    sendMessage(sessionId: string, content: string, libraryId: string = '', mode: string = 'agent', provider: string = 'codex', model: string = 'codex-local', stream: boolean = true): Promise<SendMessageResponse> {
       return jsonFetch(`/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: 'POST',
         body: JSON.stringify({ content, library_id: libraryId, mode, provider, model, stream }),

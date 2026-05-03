@@ -736,13 +736,81 @@ class GraphService:
             base["title"] = title_from_key
             base["source_pdf_name"] = str(meta.get("source_pdf_name", "") or "")
             paper_map_with_display[pkey] = base
+
+        # Build mapping: graph_views paper_id → workspace paper_key
+        gv_pid_to_pkey: dict[str, str] = {}
+        for pkey, meta in self._paper_meta_by_key.items():
+            wk_pid = str(meta.get("paper_id", "") or "").strip()
+            gv_paper = self._paper_map_unique.get(wk_pid, {})
+            if gv_paper:
+                gv_pid = str(gv_paper.get("paper_id", "") or "").strip()
+                if gv_pid:
+                    gv_pid_to_pkey[gv_pid] = pkey
+
+        # Best-effort fuzzy match for unmatched workspace papers (by variable name overlap)
+        for pkey, meta in self._paper_meta_by_key.items():
+            wk_pid = str(meta.get("paper_id", "") or "").strip()
+            gv_paper = self._paper_map_unique.get(wk_pid, {})
+            if gv_paper:
+                continue  # already matched via exact ID
+            title_lower = pkey.lower()
+            best_score = 0
+            best_gv_pid = ""
+            for gv_pid, gv_paper in self._paper_map_unique.items():
+                if gv_pid in gv_pid_to_pkey:
+                    continue
+                score = 0
+                for vdef in (gv_paper.get("variable_definitions", []) or []):
+                    if not isinstance(vdef, dict):
+                        continue
+                    var_name = str(vdef.get("variable", "") or "").strip().lower()
+                    if not var_name:
+                        continue
+                    if var_name in title_lower:
+                        score += 3
+                    else:
+                        for w in var_name.split():
+                            if len(w) > 4 and w in title_lower:
+                                score += 1
+                if score > best_score:
+                    best_score = score
+                    best_gv_pid = gv_pid
+            if best_gv_pid and best_score > 0:
+                gv_pid_to_pkey[best_gv_pid] = pkey
+
+        # Normalize nodes: replace graph_views paper_id with workspace paper_key
+        normalized_nodes: list[dict[str, Any]] = []
+        for n in self._nodes_public_by_id.values():
+            node_copy = dict(n)
+            src = node_copy.get("latest_concept_source")
+            if isinstance(src, dict) and src.get("paper_id"):
+                src_copy = dict(src)
+                gv_pid = str(src_copy.get("paper_id", "") or "").strip()
+                if gv_pid in gv_pid_to_pkey:
+                    src_copy["paper_id_raw"] = gv_pid
+                    src_copy["paper_id"] = gv_pid_to_pkey[gv_pid]
+                node_copy["latest_concept_source"] = src_copy
+            node_copy["library_id"] = library_id
+            normalized_nodes.append(node_copy)
+
         edges_mapped = [self._normalize_edge(edge, self._paper_key_by_pid) for edge in self._edges]
         moderation_mapped = [self._normalize_moderation_link(mod, self._paper_key_by_pid) for mod in self._moderation_links]
         interaction_mapped = [self._normalize_interaction_link(inter, self._paper_key_by_pid) for inter in self._interaction_links]
+
+        # Normalize edges: replace graph_views paper_id with workspace paper_key
+        edges_normalized: list[dict[str, Any]] = []
+        for e in edges_mapped:
+            edge_copy = dict(e)
+            gv_pid = str(edge_copy.get("paper_id", "")).strip()
+            if gv_pid in gv_pid_to_pkey:
+                edge_copy["paper_id_raw"] = gv_pid
+                edge_copy["paper_id"] = gv_pid_to_pkey[gv_pid]
+            edges_normalized.append(edge_copy)
+
         return {
             "meta": {**self._meta_public, "library_id": library_id},
-            "nodes": [{**n, "library_id": library_id} for n in self._nodes_public_by_id.values()],
-            "edges": edges_mapped,
+            "nodes": normalized_nodes,
+            "edges": edges_normalized,
             "moderation_links": moderation_mapped,
             "interaction_links": interaction_mapped,
             "paper_map": paper_map_with_display,
@@ -875,7 +943,11 @@ class GraphService:
                     obj = candidate
                     break
         if obj is None:
-            return None
+            if isinstance(meta_by_key, dict):
+                pid_from_meta = str(meta_by_key.get("paper_id", "") or "").strip()
+                obj = {"paper_id": pid_from_meta or paper_id_or_doi}
+            else:
+                return None
         payload = dict(obj)
         doi = str(payload.get("doi", "") or payload.get("paper_id", "")).strip()
         if not str(payload.get("article_url", "")).strip() and doi:
@@ -972,6 +1044,34 @@ class GraphService:
             "files": files,
             "default_view": default_view,
         }
+
+    def resolve_paper_file(self, paper_id_or_doi: str, library_id: str = "", file_type: str = "") -> dict[str, Any] | None:
+        files_payload = self.get_paper_files(paper_id_or_doi, library_id=library_id)
+        if files_payload is None:
+            return None
+        files = files_payload.get("files", {}) if isinstance(files_payload, dict) else {}
+        if not isinstance(files, dict):
+            files = {}
+        preferred = str(file_type or "").strip().lower()
+        order = [preferred] if preferred in {"pdf", "markdown", "html"} else []
+        for t in ("pdf", "markdown", "html"):
+            if t not in order:
+                order.append(t)
+        for t in order:
+            row = files.get(t)
+            if not isinstance(row, dict):
+                continue
+            p = str(row.get("path", "") or "").strip()
+            if not p:
+                continue
+            return {
+                "type": t,
+                "path": p,
+                "name": str(row.get("name", "") or "").strip(),
+                "paper_id": files_payload.get("paper_id", paper_id_or_doi),
+                "library_id": files_payload.get("library_id", library_id),
+            }
+        return None
 
     def reload(self, library_id: str = "") -> dict[str, Any]:
         self._loaded = False

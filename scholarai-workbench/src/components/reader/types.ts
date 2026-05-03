@@ -51,4 +51,5 @@ export interface DocumentLoadResult {
   type: 'pdf' | 'markdown' | 'html' | 'none';
   data: Uint8Array | string | null;
   file_name: string;
+  absolute_path?: string;
 }

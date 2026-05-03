@@ -245,8 +245,8 @@ function createMainWindow() {
     mainWindow = null;
   });
 
-  // Open devtools in development
-  if (process.env.NODE_ENV === "development") {
+  // Open devtools only when explicitly requested
+  if (String(process.env.OPEN_DEVTOOLS || "").toLowerCase() === "true") {
     mainWindow.webContents.openDevTools();
   }
 }
@@ -337,6 +337,17 @@ ipcMain.handle("read-local-text", async (_evt, filePath) => {
   try {
     const text = fs.readFileSync(p, "utf8");
     return { ok: true, data: text, size: Buffer.byteLength(text, 'utf8') };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
+ipcMain.handle("write-local-text", async (_evt, filePath, text) => {
+  const p = String(filePath || "").trim();
+  if (!p) return { ok: false, error: "empty_path" };
+  try {
+    fs.writeFileSync(p, String(text ?? ""), "utf8");
+    return { ok: true, size: Buffer.byteLength(String(text ?? ""), "utf8") };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

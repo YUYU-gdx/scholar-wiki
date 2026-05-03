@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { PlusSquare, Bot, User, Send, Activity, CheckCircle, Clock, Trash2, RotateCcw, X, ChevronDown, Zap } from 'lucide-react';
+import { PlusSquare, Bot, Send, Activity, Clock, Trash2, X, ChevronDown, Zap } from 'lucide-react';
 import { useApp } from '../App';
 import { api } from '../api';
 import type { ChatSession, ChatMessage, Citation as CitationType } from '../types';
@@ -134,6 +134,16 @@ function extractToolResult(toolCall: Record<string, unknown>): unknown {
   return undefined;
 }
 
+function shouldRenderToolCall(toolCall: Record<string, unknown>): boolean {
+  const kind = String(toolCall.kind || '').toLowerCase();
+  const state = String(toolCall.state || '').toLowerCase();
+  const summary = String(toolCall.summary || toolCall.tool || toolCall.name || '').toLowerCase();
+  if (kind === 'system') return false;
+  if (summary.includes('mcp.startup')) return false;
+  if (!state) return true;
+  return state === 'completed' || state === 'failed';
+}
+
 export default function ChatView() {
   const {
     sessions,
@@ -154,7 +164,6 @@ export default function ChatView() {
   const [loadingSession, setLoadingSession] = useState(false);
   const [showModeSwitcher, setShowModeSwitcher] = useState(false);
   const [citationModal, setCitationModal] = useState<CitationType | null>(null);
-  const [processTraceExpanded, setProcessTraceExpanded] = useState(false);
   const [expandedToolItems, setExpandedToolItems] = useState<Record<string, boolean>>({});
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
@@ -173,27 +182,27 @@ export default function ChatView() {
 
   const refreshSessions = useCallback(async () => {
     try {
-      const res = await api.chat.listSessions(activeLibraryId);
+      const res = await api.chat.listSessions();
       setSessions(res.sessions || []);
     } catch { /* ignore */ }
-  }, [activeLibraryId, setSessions]);
+  }, [setSessions]);
 
   useEffect(() => { refreshSessions(); }, [refreshSessions]);
 
   const loadSession = useCallback(async (sessionId: string) => {
     setLoadingSession(true);
     try {
-      const res = await api.chat.getSession(sessionId, activeLibraryId);
+      const res = await api.chat.getSession(sessionId);
       setMessages(res.messages || []);
       setActiveSessionId(sessionId);
       if (res.session?.default_mode) setMode(res.session.default_mode as 'fast' | 'agent');
     } catch { setMessages([]); }
     finally { setLoadingSession(false); }
-  }, [activeLibraryId, setActiveSessionId]);
+  }, [setActiveSessionId]);
 
   const createSession = async () => {
     try {
-      const session = await api.chat.createSession('新会话', activeLibraryId, mode);
+      const session = await api.chat.createSession('新会话', '', mode);
       setSessions(prev => [session, ...prev]);
       setActiveSessionId(session.session_id);
       setMessages([]);
@@ -202,7 +211,7 @@ export default function ChatView() {
 
   const deleteSession = async (sessionId: string) => {
     try {
-      await api.chat.deleteSession(sessionId, activeLibraryId);
+      await api.chat.deleteSession(sessionId);
       setSessions(prev => prev.filter(s => s.session_id !== sessionId));
       if (activeSessionId === sessionId) {
         setActiveSessionId(null);
@@ -242,7 +251,14 @@ export default function ChatView() {
         const payload = JSON.parse(evt.data || '{}');
         setMessages(prev => prev.map(m =>
           m.message_id === messageId
-            ? { ...m, content: payload.answer || m.content || '', citations: payload.citations || [], retrieval: payload.retrieval_trace || {}, tool_trace: payload.tool_trace || m.tool_trace || [], status: 'completed' as const }
+            ? {
+                ...m,
+                content: payload.answer || m.content || '',
+                citations: Array.isArray(payload.citations) && payload.citations.length > 0 ? payload.citations : (m.citations || []),
+                retrieval: (payload.retrieval_trace && typeof payload.retrieval_trace === 'object') ? payload.retrieval_trace : (m.retrieval || {}),
+                tool_trace: Array.isArray(payload.tool_trace) && payload.tool_trace.length > 0 ? payload.tool_trace : (m.tool_trace || []),
+                status: 'completed' as const,
+              }
             : m
         ));
       } catch { /* ignore */ }
@@ -319,7 +335,6 @@ export default function ChatView() {
   }, [messages]);
 
   const runningAssistant = messages.find(m => m.role === 'assistant' && m.status === 'running');
-  const latestAssistantWithTrace = messages.filter(m => m.role === 'assistant' && m.tool_trace && m.tool_trace.length > 0).slice(-1)[0];
 
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -409,9 +424,9 @@ export default function ChatView() {
                             ))}
                           </div>
                         )}
-                        {Array.isArray(m.tool_trace) && m.tool_trace.length > 0 && (
+                        {Array.isArray(m.tool_trace) && m.tool_trace.filter(t => shouldRenderToolCall((t && typeof t === 'object') ? (t as Record<string, unknown>) : {})).length > 0 && (
                           <div className="space-y-2 mt-2">
-                            {m.tool_trace.map((t, idx) => {
+                            {m.tool_trace.filter(t => shouldRenderToolCall((t && typeof t === 'object') ? (t as Record<string, unknown>) : {})).map((t, idx) => {
                               const toolCall = (t && typeof t === 'object') ? (t as Record<string, unknown>) : {};
                               const itemKey = `${m.message_id}-inline-${idx}`;
                               const itemExpanded = !!expandedToolItems[itemKey];
@@ -494,11 +509,7 @@ export default function ChatView() {
                     rows={3}
                   />
                   <div className="flex items-center justify-between px-4 pb-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-mono text-outline uppercase tracking-widest">Mode: {mode}</span>
-                      <div className="h-3 w-px bg-outline-variant"></div>
-                      <span className="text-[10px] font-mono text-outline uppercase tracking-widest">Library: {activeLibraryId}</span>
-                    </div>
+                    <div />
                     <button
                       onClick={sendMessage}
                       disabled={submitting || !input.trim() || !!runningAssistant}
@@ -543,80 +554,6 @@ export default function ChatView() {
           </div>
         </div>
       )}
-
-      <aside className="w-72 border-l border-outline-variant bg-surface-container-low flex flex-col">
-        <div className="p-4 border-b border-outline-variant flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-secondary" />
-            <h2 className="text-[10px] font-bold text-on-surface uppercase tracking-widest font-mono">Process Trace</h2>
-          </div>
-          <button
-            onClick={() => setProcessTraceExpanded(prev => !prev)}
-            className="text-outline hover:text-on-surface transition-colors p-1 rounded"
-            aria-label={processTraceExpanded ? 'Collapse tool calls' : 'Expand tool calls'}
-          >
-            <ChevronDown className={`w-4 h-4 transition-transform ${processTraceExpanded ? 'rotate-180' : ''}`} />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-          {!processTraceExpanded && (
-            <div className="text-[11px] text-outline font-mono">Tool calls are collapsed.</div>
-          )}
-          {processTraceExpanded && latestAssistantWithTrace && (
-            <div key={latestAssistantWithTrace.message_id} className="space-y-3">
-              <div className="text-[10px] font-mono text-outline uppercase tracking-widest font-bold mb-2">Tool Calls</div>
-              {(latestAssistantWithTrace.tool_trace || []).map((t, idx) => {
-                const toolCall = (t && typeof t === 'object') ? (t as Record<string, unknown>) : {};
-                const itemKey = `${latestAssistantWithTrace.message_id}-${idx}`;
-                const itemExpanded = !!expandedToolItems[itemKey];
-                const argsText = stringifyToolPayload(extractToolArgs(toolCall));
-                const resultText = stringifyToolPayload(extractToolResult(toolCall));
-                const toolName = extractToolName(toolCall);
-                return (
-                <div key={idx} className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-[10px] font-mono overflow-hidden">
-                  <button
-                    onClick={() => setExpandedToolItems(prev => ({ ...prev, [itemKey]: !itemExpanded }))}
-                    className="w-full text-left p-2.5 flex items-center justify-between hover:bg-surface-container-low transition-colors"
-                  >
-                    <span className="text-secondary font-bold truncate">{`工具调用：${toolNameZh(toolName)}`}</span>
-                    <ChevronDown className={`w-3.5 h-3.5 text-outline transition-transform ${itemExpanded ? 'rotate-180' : ''}`} />
-                  </button>
-                  {itemExpanded && (
-                    <div className="px-2.5 pb-2.5 space-y-2">
-                      <div>
-                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">参数</div>
-                        <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
-                          {normalizeToolArgs(extractToolArgs(toolCall)).map((row, i) => (
-                            <div key={`${row.label}-${i}`} className="flex items-start gap-2">
-                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary-container/20 text-secondary tracking-wide">{row.label}</span>
-                              <span className="text-[11px] text-on-surface-variant break-words">{row.value}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">调用结果</div>
-                        <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
-                          {normalizeToolResult(extractToolResult(toolCall)).map((line, i) => (
-                            <div key={`res-${i}`} className="text-[11px] text-on-surface-variant break-words">
-                              {line}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );})}
-            </div>
-          )}
-          {processTraceExpanded && !latestAssistantWithTrace && (
-            <div className="text-center text-outline text-[11px] font-mono mt-8">
-              Send a message to see process trace.
-            </div>
-          )}
-        </div>
-      </aside>
 
       {loadingSession && (
         <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-50 flex items-center justify-center">

@@ -39,8 +39,11 @@ export default function LibraryView() {
     setSelectedNodeId,
     setSelectedNodeLibraryId,
     setSelectedPaperRawId,
+    setReaderReturnView,
     setCurrentView,
     selectedLibraryIds,
+    paperFileCache,
+    setPaperFileCache,
   } = useApp();
   const [expandedPapers, setExpandedPapers] = useState<Record<string, boolean>>({});
   const [mode, setMode] = useState<Mode>(() => (localStorage.getItem(MODE_KEY) as Mode) || 'papers');
@@ -86,38 +89,60 @@ export default function LibraryView() {
       return () => { cancelled = true; };
     }
 
-    setPaperFilesByScopedKey((prev) => {
+    setPaperFilesByScopedKey(() => {
       const next: Record<string, PaperFileStatus> = {};
       for (const p of entries) {
-        next[p.scopedKey] = prev[p.scopedKey] || { pdf: false, markdown: false, html: false, loading: true };
-        next[p.scopedKey].loading = true;
+        const cached = paperFileCache[p.scopedKey];
+        if (cached?.loaded) {
+          next[p.scopedKey] = {
+            pdf: !!cached.pdf,
+            markdown: !!cached.markdown,
+            html: !!cached.html,
+            loading: false,
+          };
+        } else {
+          next[p.scopedKey] = { pdf: false, markdown: false, html: false, loading: true };
+        }
       }
       return next;
     });
 
     (async () => {
-      const next: Record<string, PaperFileStatus> = {};
-      await Promise.all(entries.map(async (p) => {
+      const toFetch = entries.filter((p) => !paperFileCache[p.scopedKey]?.loaded);
+      if (!toFetch.length) return;
+      const fetchedCache: Record<string, { pdf: boolean; markdown: boolean; html: boolean; loaded: boolean }> = {};
+      const fetchedLocal: Record<string, PaperFileStatus> = {};
+      await Promise.all(toFetch.map(async (p) => {
         try {
           let files = await api.graph.paperFiles(p.paperId, p.libraryId);
           if (!files.files.pdf && !files.files.markdown && !files.files.html && p.rawPaperId && p.rawPaperId !== p.paperId) {
             files = await api.graph.paperFiles(p.rawPaperId, p.libraryId);
           }
-          next[p.scopedKey] = {
+          fetchedLocal[p.scopedKey] = {
             pdf: !!files.files.pdf,
             markdown: !!files.files.markdown,
             html: !!files.files.html,
             loading: false,
           };
+          fetchedCache[p.scopedKey] = {
+            pdf: !!files.files.pdf,
+            markdown: !!files.files.markdown,
+            html: !!files.files.html,
+            loaded: true,
+          };
         } catch {
-          next[p.scopedKey] = { pdf: false, markdown: false, html: false, loading: false };
+          fetchedLocal[p.scopedKey] = { pdf: false, markdown: false, html: false, loading: false };
+          fetchedCache[p.scopedKey] = { pdf: false, markdown: false, html: false, loaded: true };
         }
       }));
-      if (!cancelled) setPaperFilesByScopedKey(next);
+      if (!cancelled) {
+        setPaperFileCache((prev) => ({ ...prev, ...fetchedCache }));
+        setPaperFilesByScopedKey((prev) => ({ ...prev, ...fetchedLocal }));
+      }
     })();
 
     return () => { cancelled = true; };
-  }, [paperList]);
+  }, [paperList, paperFileCache, setPaperFileCache]);
 
   const setSelectedPaper = (paperId: string, libraryId: string) => {
     setSelectedPaperId(paperId);
@@ -128,6 +153,7 @@ export default function LibraryView() {
     setSelectedPaper(paperId, libraryId);
     setSelectedPaperRawId(rawPaperId || null);
     setSelectedPaperPreferredType(preferredType);
+    setReaderReturnView('library');
     setCurrentView('reader');
   };
 
@@ -140,6 +166,31 @@ export default function LibraryView() {
       sourcePaperId: String(v.latest_concept_source?.paper_id || v.dominant_paper_id || '-'),
     })).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
   }, [variables]);
+
+  const openVariableSourceInReader = (row: { id: string; libraryId: string; sourcePaperId: string }) => {
+    const sourcePaperId = String(row.sourcePaperId || '').trim();
+    const hit = paperList.find((p) => (
+      p.libraryId === row.libraryId && (
+        p.paperId === sourcePaperId ||
+        p.rawPaperId === sourcePaperId ||
+        sourcePaperId === p.scopedKey.split('::').at(-1)
+      )
+    ));
+    if (hit) {
+      openInReader(hit.paperId, hit.libraryId, hit.rawPaperId, null);
+      return;
+    }
+    setSelectedNodeId(row.id);
+    setSelectedNodeLibraryId(row.libraryId);
+    if (sourcePaperId && sourcePaperId !== '-') {
+      setSelectedPaperId(sourcePaperId);
+      setSelectedPaperLibraryId(row.libraryId);
+      setSelectedPaperRawId(sourcePaperId);
+      setSelectedPaperPreferredType(null);
+    }
+    setReaderReturnView('library');
+    setCurrentView('reader');
+  };
 
   const setLibraryMode = (next: Mode) => {
     setMode(next);
@@ -224,7 +275,7 @@ export default function LibraryView() {
                     <td className="px-4 py-3 text-sm text-on-surface font-medium">{row.name}</td>
                     <td className="px-4 py-3 text-xs text-on-surface-variant">{row.concept}</td>
                     <td className="px-4 py-3 text-xs font-mono text-on-surface-variant">{row.sourcePaperId}</td>
-                    <td className="px-4 py-3 text-right"><button onClick={() => { setSelectedNodeId(row.id); setSelectedNodeLibraryId(row.libraryId); setCurrentView('reader'); }} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary">跳转</button></td>
+                    <td className="px-4 py-3 text-right"><button onClick={() => openVariableSourceInReader(row)} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary">跳转</button></td>
                   </tr>
                 ))}
               </tbody>
