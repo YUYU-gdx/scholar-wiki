@@ -10,6 +10,8 @@ from typing import Any, Protocol
 
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 _SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 
 
 class JobStore(Protocol):
