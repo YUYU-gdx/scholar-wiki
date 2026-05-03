@@ -81,17 +81,10 @@ class PostgresRepo:
             self._execute("DELETE FROM paper_domains WHERE paper_id = {p}", (paper_id,))
             self._execute("DELETE FROM variable_aliases WHERE paper_id = {p}", (paper_id,))
             self._execute("DELETE FROM variable_definitions WHERE paper_id = {p}", (paper_id,))
-            self._execute("DELETE FROM context_variables WHERE paper_id = {p}", (paper_id,))
-            self._execute("DELETE FROM operationalizations WHERE paper_id = {p}", (paper_id,))
             self._execute("DELETE FROM direct_effects WHERE paper_id = {p}", (paper_id,))
             self._execute("DELETE FROM moderations WHERE paper_id = {p}", (paper_id,))
             self._execute("DELETE FROM interactions WHERE paper_id = {p}", (paper_id,))
 
-            # Remove orphaned relation-input rows from previous replace cycles.
-            self._execute(
-                "DELETE FROM moderation_targets WHERE moderation_id NOT IN (SELECT id FROM moderations)",
-                (),
-            )
             self._execute(
                 "DELETE FROM interaction_inputs WHERE interaction_id NOT IN (SELECT id FROM interactions)",
                 (),
@@ -107,77 +100,31 @@ class PostgresRepo:
                 )
 
             for row in bundle.get("variable_definitions", []) or []:
-                aliases = _coerce_aliases(row.get("aliases"), str(row.get("variable", "") or ""))
+                variable_name = str(row.get("variable_name", "") or row.get("variable", "") or "").strip()
+                aliases = _coerce_aliases(row.get("aliases"), variable_name)
                 self._execute(
                     """
                     INSERT INTO variable_definitions (
-                        paper_id, variable_name, aliases_json, definition_text, evidence_section
+                        paper_id, variable_name, aliases_json, definition_text, measurement_text
                     ) VALUES ({p}, {p}, {p}, {p}, {p})
                     """,
                     (
                         paper_id,
-                        str(row.get("variable", "") or ""),
+                        variable_name,
                         json.dumps(aliases, ensure_ascii=False),
                         str(row.get("definition", "") or ""),
-                        str(row.get("definition_evidence_section", "") or ""),
+                        str(row.get("measurement", "") or ""),
                     ),
                 )
 
-            for name in bundle.get("context_variables", []) or []:
-                variable_name = str(name or "").strip()
-                if not variable_name:
-                    continue
-                self._execute(
-                    "INSERT INTO context_variables (paper_id, variable_name) VALUES ({p}, {p})",
-                    (paper_id, variable_name),
-                )
-
-            operationalization = bundle.get("operationalization", {}) or {}
-            if isinstance(operationalization, dict):
-                for variable_name, spec in operationalization.items():
-                    name = str(variable_name or "").strip()
-                    if not name:
-                        continue
-                    values: list[str] = []
-                    if isinstance(spec, dict):
-                        values = _coerce_aliases(spec.get("operationalized_as"), "")
-                    elif isinstance(spec, list):
-                        values = _coerce_aliases(spec, "")
-                    elif isinstance(spec, str):
-                        values = _coerce_aliases([spec], "")
-                    self._execute(
-                        """
-                        INSERT INTO operationalizations (
-                            paper_id, variable_name, operationalized_as_json
-                        ) VALUES ({p}, {p}, {p})
-                        """,
-                        (paper_id, name, json.dumps(values, ensure_ascii=False)),
-                    )
-
-            main_effects = bundle.get("main_effects", None)
-            if not isinstance(main_effects, list):
-                main_effects = []
-            direct_effect_rows = bundle.get("direct_effects", None)
-            if not isinstance(direct_effect_rows, list):
-                direct_effect_rows = []
-            source_effect_rows = main_effects if main_effects else direct_effect_rows
-
-            for row in source_effect_rows:
-                source_var = str(row.get("source", "") or row.get("from", "") or "")
-                target_var = str(row.get("target", "") or row.get("to", "") or "")
-                direction = str(row.get("direction", "") or "").strip()
-                relation_form = str(row.get("relation_form", "") or "").strip()
-                relation_form_raw = str(row.get("relation_form_raw", "") or "").strip()
-                if not direction:
-                    direction, relation_form, relation_form_raw = _map_main_effect_to_direction(
-                        str(row.get("effect", "") or ""),
-                        relation_form,
-                        relation_form_raw,
-                    )
+            for row in bundle.get("direct_effects", []) or []:
+                source_var = str(row.get("source", "") or "").strip()
+                target_var = str(row.get("target", "") or "").strip()
                 source_canonical = _canonical_var_id(source_var)
                 target_canonical = _canonical_var_id(target_var)
                 source_aliases = _coerce_aliases(row.get("source_aliases"), source_var)
                 target_aliases = _coerce_aliases(row.get("target_aliases"), target_var)
+                effect_form = str(row.get("effect_form", "") or "").strip().lower()
 
                 self._execute(
                     """
@@ -205,9 +152,9 @@ class PostgresRepo:
                     """
                     INSERT INTO direct_effects (
                         paper_id, source_var, target_var, source_canonical_var_id, target_canonical_var_id,
-                        source_alias_json, target_alias_json, direction, relation_form, relation_form_raw,
-                        hypothesis_label, verification, evidence_section, evidence_snippet
-                    ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                        source_alias_json, target_alias_json, effect_form, theory_name,
+                        verification, evidence_text
+                    ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
                     """,
                     (
                         paper_id,
@@ -217,19 +164,20 @@ class PostgresRepo:
                         target_canonical,
                         json.dumps(source_aliases, ensure_ascii=False),
                         json.dumps(target_aliases, ensure_ascii=False),
-                        direction,
-                        relation_form,
-                        relation_form_raw,
-                        str(row.get("hypothesis_label", "") or ""),
+                        effect_form,
+                        str(row.get("theory_name", "") or ""),
                         str(row.get("verification", "") or ""),
-                        str(row.get("evidence_section", "") or ""),
-                        str(row.get("evidence_snippet", "") or row.get("description", "") or ""),
+                        str(row.get("evidence_text", "") or ""),
                     ),
                 )
 
             for row in bundle.get("moderations", []) or []:
-                moderator_var = str(row.get("moderator", "") or "")
+                moderator_var = str(row.get("moderator", "") or "").strip()
+                source_var = str(row.get("source", "") or "").strip()
+                target_var = str(row.get("target", "") or "").strip()
                 moderator_canonical = _canonical_var_id(moderator_var)
+                source_canonical = _canonical_var_id(source_var)
+                target_canonical = _canonical_var_id(target_var)
                 moderator_aliases = _coerce_aliases(row.get("moderator_aliases"), moderator_var)
 
                 self._execute(
@@ -243,50 +191,52 @@ class PostgresRepo:
                 for alias in moderator_aliases:
                     self._insert_alias(moderator_canonical, alias, paper_id)
 
-                cursor = self._execute(
+                if source_var:
+                    self._execute(
+                        """
+                        INSERT INTO canonical_variables (canonical_var_id, canonical_name)
+                        VALUES ({p}, {p})
+                        ON CONFLICT(canonical_var_id) DO UPDATE SET canonical_name=excluded.canonical_name
+                        """,
+                        (source_canonical, source_var),
+                    )
+                if target_var:
+                    self._execute(
+                        """
+                        INSERT INTO canonical_variables (canonical_var_id, canonical_name)
+                        VALUES ({p}, {p})
+                        ON CONFLICT(canonical_var_id) DO UPDATE SET canonical_name=excluded.canonical_name
+                        """,
+                        (target_canonical, target_var),
+                    )
+
+                self._execute(
                     """
                     INSERT INTO moderations (
                         paper_id, moderator_var, moderator_canonical_var_id, moderator_alias_json,
-                        direction, hypothesis_label, verification, evidence_section, evidence_snippet
-                    ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
-                    RETURNING id
+                        source_var, target_var, source_canonical_var_id, target_canonical_var_id,
+                        effect_form, theory_name, verification, evidence_text
+                    ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
                     """,
                     (
                         paper_id,
                         moderator_var,
                         moderator_canonical,
                         json.dumps(moderator_aliases, ensure_ascii=False),
-                        str(row.get("direction", "") or ""),
-                        str(row.get("hypothesis_label", "") or ""),
+                        source_var,
+                        target_var,
+                        source_canonical,
+                        target_canonical,
+                        str(row.get("effect_form", "") or ""),
+                        str(row.get("theory_name", "") or ""),
                         str(row.get("verification", "") or ""),
-                        str(row.get("evidence_section", "") or ""),
-                        str(row.get("evidence_snippet", "") or ""),
+                        str(row.get("evidence_text", "") or ""),
                     ),
                 )
-                fetched = cursor.fetchone()
-                moderation_id = int(fetched[0]) if fetched else 0
-
-                for item in row.get("moderated_effects", []) or []:
-                    src = str(item.get("source", "") or "")
-                    tgt = str(item.get("target", "") or "")
-                    if not src or not tgt:
-                        continue
-                    src_id = str(item.get("source_canonical_var_id", "") or "").strip() or _canonical_var_id(src)
-                    tgt_id = str(item.get("target_canonical_var_id", "") or "").strip() or _canonical_var_id(tgt)
-                    self._execute(
-                        """
-                        INSERT INTO moderation_targets (
-                            moderation_id, source_var, target_var, source_canonical_var_id, target_canonical_var_id
-                        ) VALUES ({p}, {p}, {p}, {p}, {p})
-                        """,
-                        (moderation_id, src, tgt, src_id, tgt_id),
-                    )
 
             for row in bundle.get("interactions", []) or []:
-                output_var = str(row.get("output", "") or "")
+                output_var = str(row.get("output", "") or "").strip()
                 output_canonical = _canonical_var_id(output_var)
-                moderator_var = str(row.get("moderator", "") or "")
-                moderator_canonical = _canonical_var_id(moderator_var)
 
                 if output_var:
                     self._execute(
@@ -298,40 +248,22 @@ class PostgresRepo:
                         (output_canonical, output_var),
                     )
 
-                if moderator_var and moderator_canonical:
-                    self._execute(
-                        """
-                        INSERT INTO canonical_variables (canonical_var_id, canonical_name)
-                        VALUES ({p}, {p})
-                        ON CONFLICT(canonical_var_id) DO UPDATE SET canonical_name=excluded.canonical_name
-                        """,
-                        (moderator_canonical, moderator_var),
-                    )
-                    for alias in _coerce_aliases(row.get("moderator_aliases"), moderator_var):
-                        self._insert_alias(moderator_canonical, alias, paper_id)
-
                 cursor = self._execute(
                     """
                     INSERT INTO interactions (
-                        paper_id, output_var, output_canonical_var_id, interaction_type,
-                        moderator_var, moderator_canonical_var_id, effect, hypothesis_label,
-                        verification, evidence_section, evidence_snippet, description
-                    ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                        paper_id, output_var, output_canonical_var_id, effect_form, theory_name,
+                        verification, evidence_text
+                    ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p})
                     RETURNING id
                     """,
                     (
                         paper_id,
                         output_var,
                         output_canonical,
-                        str(row.get("type", "") or ""),
-                        moderator_var,
-                        moderator_canonical,
-                        str(row.get("effect", "") or ""),
-                        str(row.get("hypothesis_label", "") or ""),
+                        str(row.get("effect_form", "") or ""),
+                        str(row.get("theory_name", "") or ""),
                         str(row.get("verification", "") or ""),
-                        str(row.get("evidence_section", "") or ""),
-                        str(row.get("evidence_snippet", "") or ""),
-                        str(row.get("description", "") or ""),
+                        str(row.get("evidence_text", "") or ""),
                     ),
                 )
                 fetched = cursor.fetchone()
@@ -359,6 +291,7 @@ class PostgresRepo:
                         """,
                         (interaction_id, input_var, input_canonical, idx),
                     )
+
     def _insert_alias(self, canonical_var_id: str, alias: str, paper_id: str) -> None:
         alias_norm = _normalize_alias(alias)
         self._execute(
@@ -421,23 +354,3 @@ def _to_int(value: object) -> int | None:
         return int(float(text))
     except ValueError:
         return None
-
-
-def _map_main_effect_to_direction(effect: str, relation_form: str, relation_form_raw: str) -> tuple[str, str, str]:
-    raw = str(effect or "").strip()
-    text = raw.lower()
-    form = str(relation_form or "").strip().lower() or "linear"
-    form_raw = str(relation_form_raw or "").strip()
-    if text in {"+", "positive"}:
-        return "positive", form, form_raw
-    if text in {"-", "negative"}:
-        return "negative", form, form_raw
-    if text in {"mixed", "unclear"}:
-        return text, form, form_raw
-    if "nonlinear" in text or "u" in text or "curve" in text:
-        return "nonlinear", "nonlinear", raw if raw else form_raw
-    if text:
-        return "unclear", form, raw if raw else form_raw
-    return "unclear", form, form_raw
-
-

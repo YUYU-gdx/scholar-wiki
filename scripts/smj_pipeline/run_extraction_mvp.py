@@ -112,10 +112,10 @@ def run(
     stats = {
         "eligible_docs": 0,
         "extractable_yes_docs": 0,
-        "main_effects_total": 0,
+        "direct_effects_total": 0,
         "moderations_total": 0,
         "interactions_total": 0,
-        "validated_main_effects": 0,
+        "validated_direct_effects": 0,
     }
 
     rejected_records_acc: list[object] = []
@@ -182,10 +182,10 @@ def run(
 
     metrics = {
         "extractable_rate": _ratio(stats["extractable_yes_docs"], stats["eligible_docs"]),
-        "mean_main_effects_per_doc": _ratio(stats["main_effects_total"], stats["eligible_docs"]),
+        "mean_direct_effects_per_doc": _ratio(stats["direct_effects_total"], stats["eligible_docs"]),
         "mean_moderations_per_doc": _ratio(stats["moderations_total"], stats["eligible_docs"]),
         "mean_interactions_per_doc": _ratio(stats["interactions_total"], stats["eligible_docs"]),
-        "main_effect_validation_rate": _ratio(stats["validated_main_effects"], max(1, stats["main_effects_total"])),
+        "direct_effect_validation_rate": _ratio(stats["validated_direct_effects"], max(1, stats["direct_effects_total"])),
     }
     report = _render_report(metrics, {"run_id": "mvp-local", "sample_size": denominator_used})
     if report_output_path is not None:
@@ -206,8 +206,6 @@ def _process_class_a_record(
 
     validation = validate_relation_records(bundle.direct_effects)
     bundle.direct_effects = validation.accepted_records
-    if getattr(bundle, "main_effects", None):
-        bundle.main_effects = [_to_main_effect_from_direct(r) for r in bundle.direct_effects]
 
     paper_id = str(row.get("paper_id") or row.get("doi") or "")
     payload = {
@@ -224,13 +222,10 @@ def _process_class_a_record(
         "paper_type": getattr(bundle, "paper_type", ""),
         "extractability_reason": getattr(bundle, "extractability_reason", ""),
         "extractability_evidence_section": getattr(bundle, "extractability_evidence_section", ""),
-        "main_effects": getattr(bundle, "main_effects", []),
-        "variable_definitions": bundle.variable_definitions,
         "direct_effects": bundle.direct_effects,
+        "variable_definitions": bundle.variable_definitions,
         "moderations": bundle.moderations,
         "interactions": bundle.interactions,
-        "context_variables": list(getattr(bundle, "context_variables", [])),
-        "operationalization": dict(getattr(bundle, "operationalization", {}) or {}),
     }
     if paper_id and postgres_repo is not None:
         getattr(postgres_repo, "replace_paper_bundle")(paper_id, payload)
@@ -250,16 +245,16 @@ def _process_class_a_record(
 
 def _accumulate_stats(stats: dict[str, int], bundle: object) -> None:
     status = str(getattr(bundle, "extractability_status", "")).strip().lower()
-    main_effects = list(getattr(bundle, "main_effects", []))
+    direct_effects = list(getattr(bundle, "direct_effects", []))
     moderations = list(getattr(bundle, "moderations", []))
     interactions = list(getattr(bundle, "interactions", []))
 
     if status == "yes":
         stats["extractable_yes_docs"] += 1
-    stats["main_effects_total"] += len(main_effects)
+    stats["direct_effects_total"] += len(direct_effects)
     stats["moderations_total"] += len(moderations)
     stats["interactions_total"] += len(interactions)
-    stats["validated_main_effects"] += len(main_effects)
+    stats["validated_direct_effects"] += len(direct_effects)
 
 
 def _ratio(numerator: int, denominator: int) -> float:
@@ -353,29 +348,6 @@ def _coerce_optional_int(v: object) -> int | None:
         return None
 
 
-def _to_main_effect_from_direct(row: dict[str, Any]) -> dict[str, Any]:
-    direction = str(row.get("direction", "") or "").strip().lower()
-    relation_form = str(row.get("relation_form", "") or "").strip().lower()
-    if relation_form == "nonlinear" or direction == "nonlinear":
-        effect = "nonlinear"
-    elif direction == "positive":
-        effect = "+"
-    elif direction == "negative":
-        effect = "-"
-    elif direction:
-        effect = direction
-    else:
-        effect = ""
-    return {
-        "from": str(row.get("source", "") or "").strip(),
-        "to": str(row.get("target", "") or "").strip(),
-        "effect": effect,
-        "hypothesis_label": str(row.get("hypothesis_label", "") or "").strip(),
-        "verification": str(row.get("verification", "") or "").strip(),
-        "evidence_section": str(row.get("evidence_section", "") or "").strip(),
-        "evidence_snippet": str(row.get("evidence_snippet", "") or "").strip(),
-        "description": "",
-    }
 
 
 def parse_args() -> argparse.Namespace:

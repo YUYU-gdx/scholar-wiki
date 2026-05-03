@@ -32,10 +32,10 @@ def _bundle(target: str = "B") -> dict[str, object]:
         "paper_domains": ["strategy"],
         "variable_definitions": [
             {
-                "variable": "A",
+                "variable_name": "A",
                 "aliases": ["alpha"],
                 "definition": "A definition",
-                "definition_evidence_section": "Theory",
+                "measurement": "survey scale",
             }
         ],
         "direct_effects": [
@@ -44,25 +44,22 @@ def _bundle(target: str = "B") -> dict[str, object]:
                 "target": target,
                 "source_aliases": ["A"],
                 "target_aliases": [target],
-                "direction": "positive",
-                "relation_form": "linear",
-                "relation_form_raw": "",
-                "hypothesis_label": "H1",
+                "effect_form": "positive",
+                "theory_name": "RBV",
                 "verification": "supported",
-                "evidence_section": "Results",
-                "evidence_snippet": "coef > 0",
+                "evidence_text": "H1: coef > 0",
             }
         ],
         "moderations": [
             {
                 "moderator": "M",
                 "moderator_aliases": ["M"],
-                "moderated_effects": [{"source": "A", "target": target}],
-                "direction": "positive",
-                "hypothesis_label": "H2",
+                "source": "A",
+                "target": target,
+                "effect_form": "positive",
+                "theory_name": "contingency theory",
                 "verification": "supported",
-                "evidence_section": "Results",
-                "evidence_snippet": "interaction > 0",
+                "evidence_text": "H2: interaction > 0",
             }
         ],
         "interactions": [],
@@ -87,19 +84,19 @@ class PostgresRepoTest(unittest.TestCase):
             ("paper-1",),
         ).fetchone()
         direct_effects = self.connection.execute(
-            "SELECT source_var, target_var, direction, verification FROM direct_effects"
+            "SELECT source_var, target_var, effect_form, verification, evidence_text FROM direct_effects"
         ).fetchall()
         moderations = self.connection.execute(
-            "SELECT moderator_var, direction FROM moderations"
+            "SELECT moderator_var, source_var, target_var, effect_form FROM moderations"
         ).fetchall()
-        targets = self.connection.execute(
-            "SELECT source_var, target_var FROM moderation_targets"
+        variable_defs = self.connection.execute(
+            "SELECT variable_name, definition_text, measurement_text FROM variable_definitions"
         ).fetchall()
 
         self.assertEqual(dict(paper), {"extractability_status": "yes", "paper_type": "quantitative_empirical", "publication_year": 2021})
-        self.assertEqual([dict(r) for r in direct_effects], [{"source_var": "A", "target_var": "B", "direction": "positive", "verification": "supported"}])
-        self.assertEqual([dict(r) for r in moderations], [{"moderator_var": "M", "direction": "positive"}])
-        self.assertEqual([dict(r) for r in targets], [{"source_var": "A", "target_var": "B"}])
+        self.assertEqual([dict(r) for r in direct_effects], [{"source_var": "A", "target_var": "B", "effect_form": "positive", "verification": "supported", "evidence_text": "H1: coef > 0"}])
+        self.assertEqual([dict(r) for r in moderations], [{"moderator_var": "M", "source_var": "A", "target_var": "B", "effect_form": "positive"}])
+        self.assertEqual([dict(r) for r in variable_defs], [{"variable_name": "A", "definition_text": "A definition", "measurement_text": "survey scale"}])
 
     def test_replace_paper_bundle_overwrites_previous_rows(self) -> None:
         self.repo.apply_schema()
@@ -112,46 +109,6 @@ class PostgresRepoTest(unittest.TestCase):
         ).fetchall()
         self.assertEqual([r[0] for r in direct_effects], ["C"])
 
-    def test_moderation_targets_use_provided_canonical_ids(self) -> None:
-        self.repo.apply_schema()
-        b = _bundle("B")
-        b["moderations"] = [
-            {
-                "moderator": "M",
-                "moderator_aliases": ["M"],
-                "moderated_effects": [
-                    {
-                        "source": "A short",
-                        "target": "B short",
-                        "source_canonical_var_id": "var::alpha-canonical",
-                        "target_canonical_var_id": "var::beta-canonical",
-                    }
-                ],
-                "direction": "positive",
-                "hypothesis_label": "H2",
-                "verification": "supported",
-                "evidence_section": "Results",
-                "evidence_snippet": "interaction > 0",
-            }
-        ]
-        self.repo.replace_paper_bundle("paper-1", b)
-
-        targets = self.connection.execute(
-            "SELECT source_var, target_var, source_canonical_var_id, target_canonical_var_id FROM moderation_targets"
-        ).fetchall()
-        self.assertEqual(
-            [dict(r) for r in targets],
-            [
-                {
-                    "source_var": "A short",
-                    "target_var": "B short",
-                    "source_canonical_var_id": "var::alpha-canonical",
-                    "target_canonical_var_id": "var::beta-canonical",
-                }
-            ],
-        )
-
 
 if __name__ == "__main__":
     unittest.main()
-

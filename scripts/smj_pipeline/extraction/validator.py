@@ -20,7 +20,6 @@ class ValidationResult:
 
 
 def validate_relation_records(records: list[dict[str, Any]]) -> ValidationResult:
-    """Backward-compatible entrypoint. Validates direct_effect records."""
     schemas_module = _load_sibling_module("smj_pipeline_extraction_schemas", "schemas.py")
     accepted_records: list[dict[str, Any]] = []
     rejected_records: list[RejectedRecord] = []
@@ -41,20 +40,16 @@ def _collect_reason_codes(record: dict[str, Any], schemas_module: Any) -> list[s
     if not str(record.get("source", "")).strip() or not str(record.get("target", "")).strip():
         reason_codes.append("MISSING_SOURCE_TARGET")
 
-    if not str(record.get("evidence_section", "")).strip():
-        reason_codes.append("MISSING_EVIDENCE_SECTION")
+    if not str(record.get("evidence_text", "")).strip():
+        reason_codes.append("MISSING_EVIDENCE_TEXT")
 
-    direction = str(record.get("direction", "")).strip().lower()
-    if direction not in set(schemas_module.ALLOWED_EFFECT_DIRECTIONS):
-        reason_codes.append("INVALID_DIRECTION")
+    effect_form = str(record.get("effect_form", "")).strip().lower()
+    if effect_form not in set(schemas_module.ALLOWED_EFFECT_FORM):
+        reason_codes.append("INVALID_EFFECT_FORM")
 
     verification = str(record.get("verification", "")).strip().lower()
     if verification not in set(schemas_module.ALLOWED_VERIFICATION):
         reason_codes.append("INVALID_VERIFICATION")
-
-    relation_form = str(record.get("relation_form", "")).strip().lower()
-    if relation_form not in set(schemas_module.ALLOWED_RELATION_FORM):
-        reason_codes.append("INVALID_RELATION_FORM")
 
     return reason_codes
 

@@ -52,11 +52,10 @@ def write_review_queue_csv(queue: ReviewQueue, output_path: str | Path) -> None:
         "paper_id",
         "source",
         "target",
-        "direction",
-        "relation_form",
+        "effect_form",
+        "theory_name",
         "verification",
-        "evidence_section",
-        "hypothesis_label",
+        "evidence_text",
     ]
     with output.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -68,10 +67,9 @@ def write_review_queue_csv(queue: ReviewQueue, output_path: str | Path) -> None:
                     "paper_id": item.record.get("paper_id", ""),
                     "source": item.record.get("source", ""),
                     "target": item.record.get("target", ""),
-                    "direction": item.record.get("direction", ""),
-                    "relation_form": item.record.get("relation_form", ""),
+                    "effect_form": item.record.get("effect_form", ""),
+                    "theory_name": item.record.get("theory_name", ""),
                     "verification": item.record.get("verification", ""),
-                    "evidence_section": item.record.get("evidence_section", ""),
-                    "hypothesis_label": item.record.get("hypothesis_label", ""),
+                    "evidence_text": item.record.get("evidence_text", ""),
                 }
             )

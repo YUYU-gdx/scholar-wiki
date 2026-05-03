@@ -57,56 +57,6 @@ def _coerce_optional_int(value: object) -> int | None:
         return None
 
 
-def _display_effect_class(direction: str, relation_form: str) -> str:
-    form = str(relation_form or "").strip().lower()
-    if form == "nonlinear":
-        return "nonlinear"
-    d = str(direction or "").strip().lower()
-    if d == "negative":
-        return "negative"
-    if d == "positive":
-        return "positive"
-    return "nonlinear"
-
-
-def _effect_to_direction_and_form(effect_raw: str) -> tuple[str, str, str]:
-    raw = str(effect_raw or "").strip()
-    t = raw.lower()
-    if t in {"+", "positive"}:
-        return "positive", "linear", ""
-    if t in {"-", "negative"}:
-        return "negative", "linear", ""
-    if "nonlinear" in t or "u" in t or "curve" in t:
-        return "nonlinear", "nonlinear", raw
-    if t in {"mixed", "unclear"}:
-        return t, "linear", ""
-    return "unclear", "linear", raw if raw else ""
-
-
-def _main_effect_from_direct(rel: dict[str, Any]) -> dict[str, Any]:
-    direction = str(rel.get("direction", "") or "").strip().lower()
-    relation_form = str(rel.get("relation_form", "") or "").strip().lower()
-    effect = ""
-    if relation_form == "nonlinear" or direction == "nonlinear":
-        effect = "nonlinear"
-    elif direction == "positive":
-        effect = "+"
-    elif direction == "negative":
-        effect = "-"
-    elif direction:
-        effect = direction
-    return {
-        "from": str(rel.get("source", "") or "").strip(),
-        "to": str(rel.get("target", "") or "").strip(),
-        "effect": effect,
-        "hypothesis_label": str(rel.get("hypothesis_label", "") or "").strip(),
-        "verification": str(rel.get("verification", "") or "").strip(),
-        "evidence_section": str(rel.get("evidence_section", "") or "").strip(),
-        "evidence_snippet": str(rel.get("evidence_snippet", "") or "").strip(),
-        "description": "",
-    }
-
-
 def _ensure_node(
     variable_nodes: dict[str, dict[str, Any]],
     node_aliases: dict[str, set[str]],
@@ -153,19 +103,6 @@ def run_export(
     input_json: Path,
     output_json: Path | None = None,
 ) -> Path | None:
-    """Export extraction JSON/JSONL to a frontend-friendly graph artifact.
-
-    Loads the extraction JSON/JSONL from *input_json*, processes every row
-    through the extractor module, builds variable nodes, edges, moderation
-    and interaction links, and writes the result to *output_json*.
-
-    Args:
-        input_json: Path to the extraction JSON/JSONL file.
-        output_json: Destination path for ``frontend_artifact.json``.
-            Defaults to ``input_json.parent / "frontend_artifact.json"``.
-    Returns:
-        The output :class:`~pathlib.Path` on success, or ``None`` on failure.
-    """
     if output_json is None:
         output_json = input_json.parent / "frontend_artifact.json"
     try:
@@ -216,29 +153,26 @@ def run_export(
             "paper_type": bundle.paper_type,
             "extractability_reason": bundle.extractability_reason,
             "extractability_evidence_section": bundle.extractability_evidence_section,
-            "main_effects": list(getattr(bundle, "main_effects", []))
-            or [_main_effect_from_direct(x) for x in list(getattr(bundle, "direct_effects", []))],
-            "interactions": bundle.interactions,
-            "context_variables": list(getattr(bundle, "context_variables", [])),
-            "operationalization": dict(getattr(bundle, "operationalization", {}) or {}),
-            "variable_definitions": list(getattr(bundle, "variable_definitions", []) or []),
+            "direct_effects": list(bundle.direct_effects),
+            "interactions": list(bundle.interactions),
+            "variable_definitions": list(bundle.variable_definitions),
         }
         papers.append(paper_payload)
 
-        for rel in paper_payload["main_effects"]:
-            source = str(rel.get("from", "")).strip()
-            target = str(rel.get("to", "")).strip()
+        for rel in bundle.direct_effects:
+            source = str(rel.get("source", "")).strip()
+            target = str(rel.get("target", "")).strip()
             if not source or not target:
                 continue
             source_id = _canonical_var_id(source)
             target_id = _canonical_var_id(target)
             _ensure_node(variable_nodes, node_aliases, source_id, source, [])
             _ensure_node(variable_nodes, node_aliases, target_id, target, [])
-            direction, relation_form, relation_form_raw = _effect_to_direction_and_form(str(rel.get("effect", "") or ""))
 
-            evidence = str(rel.get("evidence_section", "") or "").strip()
-            rel_std = "main_effect"
-            dedupe_key = f"{paper_id}|{source_id}|{target_id}|{rel_std}|{evidence}"
+            effect_form = str(rel.get("effect_form", "") or "").strip().lower()
+            evidence_text = str(rel.get("evidence_text", "") or "").strip()
+
+            dedupe_key = f"{paper_id}|{source_id}|{target_id}|{evidence_text}"
             if dedupe_key in edge_key_seen:
                 continue
             edge_key_seen.add(dedupe_key)
@@ -251,62 +185,52 @@ def run_export(
                     "target_name_local": target,
                     "paper_id": paper_id,
                     "doi": doi,
-                    "relation_type": "main_effect",
-                    "relation_type_std": rel_std,
-                    "direction": direction,
-                    "relation_form": relation_form,
-                    "relation_form_raw": relation_form_raw,
-                    "verification": rel.get("verification", ""),
-                    "evidence_section": evidence,
-                    "evidence_snippet": rel.get("evidence_snippet", ""),
-                    "hypothesis_label": rel.get("hypothesis_label", ""),
+                    "effect_form": effect_form,
+                    "theory_name": str(rel.get("theory_name", "") or "").strip(),
+                    "verification": str(rel.get("verification", "") or ""),
+                    "evidence_text": evidence_text,
                     "paper_year": paper_payload.get("publication_year"),
-                    "display_effect_class": _display_effect_class(direction, relation_form),
+                    "display_effect_class": effect_form or "unclear",
                 }
             )
 
-        for mod in bundle.moderations:
-            moderator = str(mod.get("moderator", "")).strip()
-            if not moderator:
+        for rel in bundle.moderations:
+            moderator = str(rel.get("moderator", "")).strip()
+            source = str(rel.get("source", "")).strip()
+            target = str(rel.get("target", "")).strip()
+            if not moderator or not source or not target:
                 continue
             moderator_id = _canonical_var_id(moderator)
+            source_id = _canonical_var_id(source)
+            target_id = _canonical_var_id(target)
             _ensure_node(variable_nodes, node_aliases, moderator_id, moderator, [])
-            condition_text = str(mod.get("condition_text", "") or "")
-            for target in mod.get("moderated_effects", []) or []:
-                src = str(target.get("source", "")).strip()
-                tgt = str(target.get("target", "")).strip()
-                if not src or not tgt:
-                    continue
-                src_id = _canonical_var_id(src)
-                tgt_id = _canonical_var_id(tgt)
-                _ensure_node(variable_nodes, node_aliases, src_id, src, [])
-                _ensure_node(variable_nodes, node_aliases, tgt_id, tgt, [])
-                moderation_links.append(
-                    {
-                        "id": f"mod::{_slug(paper_id)}::{_slug(moderator)}::{len(moderation_links)}",
-                        "paper_id": paper_id,
-                        "doi": doi,
-                        "moderator_var": moderator,
-                        "moderator_node_id": moderator_id,
-                        "moderated_relation": {
-                            "source_var": src,
-                            "target_var": tgt,
-                            "source_node_id": src_id,
-                            "target_node_id": tgt_id,
-                        },
-                        "direction": mod.get("direction", ""),
-                        "verification": mod.get("verification", ""),
-                        "hypothesis_label": mod.get("hypothesis_label", ""),
-                        "condition_text": condition_text,
-                        "evidence_section": mod.get("evidence_section", ""),
-                        "evidence_snippet": mod.get("evidence_snippet", ""),
-                        "paper_year": paper_payload.get("publication_year"),
-                    }
-                )
+            _ensure_node(variable_nodes, node_aliases, source_id, source, [])
+            _ensure_node(variable_nodes, node_aliases, target_id, target, [])
 
-        for interaction in bundle.interactions:
-            inputs = list(interaction.get("inputs", []) or [])
-            output = str(interaction.get("output", "") or "").strip()
+            moderation_links.append(
+                {
+                    "id": f"mod::{_slug(paper_id)}::{_slug(moderator)}::{len(moderation_links)}",
+                    "paper_id": paper_id,
+                    "doi": doi,
+                    "moderator_var": moderator,
+                    "moderator_node_id": moderator_id,
+                    "moderated_relation": {
+                        "source_var": source,
+                        "target_var": target,
+                        "source_node_id": source_id,
+                        "target_node_id": target_id,
+                    },
+                    "effect_form": str(rel.get("effect_form", "") or "").strip().lower(),
+                    "theory_name": str(rel.get("theory_name", "") or "").strip(),
+                    "verification": str(rel.get("verification", "") or ""),
+                    "evidence_text": str(rel.get("evidence_text", "") or ""),
+                    "paper_year": paper_payload.get("publication_year"),
+                }
+            )
+
+        for rel in bundle.interactions:
+            inputs = list(rel.get("inputs", []) or [])
+            output = str(rel.get("output", "") or "").strip()
             if len(inputs) < 2 or not output:
                 continue
             output_id = _canonical_var_id(output)
@@ -326,11 +250,6 @@ def run_export(
             if len(resolved_input_ids) < 2:
                 continue
 
-            moderator = str(interaction.get("moderator", "") or "").strip()
-            moderator_id = _canonical_var_id(moderator) if moderator else ""
-            if moderator and moderator_id:
-                _ensure_node(variable_nodes, node_aliases, moderator_id, moderator, [])
-
             interaction_links.append(
                 {
                     "id": f"int::{_slug(paper_id)}::{len(interaction_links)}",
@@ -340,46 +259,13 @@ def run_export(
                     "input_node_ids": resolved_input_ids,
                     "output": output,
                     "output_node_id": output_id,
-                    "interaction_type": str(interaction.get("type", "") or ""),
-                    "moderator": moderator,
-                    "moderator_node_id": moderator_id,
-                    "effect": str(interaction.get("effect", "") or ""),
-                    "verification": str(interaction.get("verification", "") or ""),
-                    "hypothesis_label": str(interaction.get("hypothesis_label", "") or ""),
-                    "evidence_section": str(interaction.get("evidence_section", "") or ""),
-                    "evidence_snippet": str(interaction.get("evidence_snippet", "") or ""),
-                    "description": str(interaction.get("description", "") or ""),
+                    "effect_form": str(rel.get("effect_form", "") or "").strip().lower(),
+                    "theory_name": str(rel.get("theory_name", "") or "").strip(),
+                    "verification": str(rel.get("verification", "") or ""),
+                    "evidence_text": str(rel.get("evidence_text", "") or ""),
                     "paper_year": paper_payload.get("publication_year"),
                 }
             )
-            interaction_type_text = str(interaction.get("type", "") or "").strip().lower()
-            if "moderat" in interaction_type_text and moderator_id:
-                for idx, src_name in enumerate(resolved_input_names):
-                    src_id = resolved_input_ids[idx] if idx < len(resolved_input_ids) else ""
-                    if not src_id or src_id == moderator_id:
-                        continue
-                    moderation_links.append(
-                        {
-                            "id": f"mod::from_inter::{_slug(paper_id)}::{len(moderation_links)}",
-                            "paper_id": paper_id,
-                            "doi": doi,
-                            "moderator_var": moderator,
-                            "moderator_node_id": moderator_id,
-                            "moderated_relation": {
-                                "source_var": src_name,
-                                "target_var": output,
-                                "source_node_id": src_id,
-                                "target_node_id": output_id,
-                            },
-                            "direction": str(interaction.get("effect", "") or ""),
-                            "verification": str(interaction.get("verification", "") or ""),
-                            "hypothesis_label": str(interaction.get("hypothesis_label", "") or ""),
-                            "condition_text": "",
-                            "evidence_section": str(interaction.get("evidence_section", "") or ""),
-                            "evidence_snippet": str(interaction.get("evidence_snippet", "") or ""),
-                            "paper_year": paper_payload.get("publication_year"),
-                        }
-                    )
 
     _fill_node_first_year(variable_nodes, edges)
     for node_id, aliases in node_aliases.items():

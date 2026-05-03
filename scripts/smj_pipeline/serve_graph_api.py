@@ -284,7 +284,7 @@ def _relation_summary_from_mention(m: dict[str, Any]) -> dict[str, Any]:
             "direction": str(m.get("direction", "") or "").strip(),
             "relation_form": "interaction",
             "relation_type": str(m.get("relation_type_std", "interaction") or "interaction"),
-            "evidence_section": str(m.get("evidence_section", "") or "").strip(),
+            "evidence_section": str(m.get("evidence_text", "") or "").strip(),
         }
     if kind == "moderation":
         moderator = str(m.get("moderator_name", "") or "").strip()
@@ -296,7 +296,7 @@ def _relation_summary_from_mention(m: dict[str, Any]) -> dict[str, Any]:
             "direction": str(m.get("direction", "") or "").strip(),
             "relation_form": str(m.get("relation_form", "linear") or "linear"),
             "relation_type": "moderation",
-            "evidence_section": str(m.get("evidence_section", "") or "").strip(),
+            "evidence_section": str(m.get("evidence_text", "") or "").strip(),
         }
     src = str(m.get("source_name", "") or "").strip()
     tgt = str(m.get("target_name", "") or "").strip()
@@ -306,7 +306,7 @@ def _relation_summary_from_mention(m: dict[str, Any]) -> dict[str, Any]:
         "direction": str(m.get("direction", "") or "").strip(),
         "relation_form": str(m.get("relation_form", "") or "").strip(),
         "relation_type": str(m.get("relation_type_std", "") or "").strip(),
-        "evidence_section": str(m.get("evidence_section", "") or "").strip(),
+        "evidence_section": str(m.get("evidence_text", "") or "").strip(),
     }
 
 
@@ -386,7 +386,7 @@ def make_handler(
             "relation_form": str(edge.get("relation_form", "") or ""),
             "relation_type_std": str(edge.get("relation_type_std", "") or str(edge.get("relation_type", "") or "")),
             "relation_type_raw": str(edge.get("relation_type_raw", "") or str(edge.get("relation_type", "") or "")),
-            "evidence_section": str(edge.get("evidence_section", "") or ""),
+            "evidence_section": str(edge.get("evidence_text", "") or ""),
         }
         mention["mention_kind"] = "edge"
         if source != target:
@@ -420,7 +420,7 @@ def make_handler(
             "relation_form": "linear",
             "relation_type_std": "moderation",
             "relation_type_raw": "moderation",
-            "evidence_section": str(mod.get("evidence_section", "") or ""),
+            "evidence_section": str(mod.get("evidence_text", "") or ""),
             "mention_kind": "moderation",
             "moderator_node_id": moderator_node_id,
             "moderator_name": moderator_name,
@@ -452,11 +452,11 @@ def make_handler(
             "target_name": str(inter.get("output", "") or node_id_to_name.get(output_id, output_id)),
             "source_name_canonical": " x ".join(node_id_to_name.get(nid, nid) for nid in input_ids),
             "target_name_canonical": node_id_to_name.get(output_id, output_id),
-            "direction": str(inter.get("effect", "") or ""),
+            "direction": str(inter.get("effect_form", "") or ""),
             "relation_form": "interaction",
             "relation_type_std": "interaction",
             "relation_type_raw": str(inter.get("interaction_type", "") or "interaction"),
-            "evidence_section": str(inter.get("evidence_section", "") or ""),
+            "evidence_section": str(inter.get("evidence_text", "") or ""),
             "mention_kind": "interaction",
         }
         for nid in input_ids:
@@ -519,9 +519,9 @@ def make_handler(
         for item in definitions:
             if not isinstance(item, dict):
                 continue
-            variable = str(item.get("variable", "") or "").strip()
+            variable = str(item.get("variable_name", "") or "").strip()
             definition = str(item.get("definition", "") or "").strip()
-            evidence = str(item.get("definition_evidence_section", "") or "").strip()
+            evidence = str(item.get("measurement", "") or "").strip()
             norm = _norm_rel_text(variable)
             if not norm:
                 continue
@@ -575,7 +575,7 @@ def make_handler(
             payload["latest_concept_source"] = {
                 "paper_id": str(concept_entry.get("paper_id", "") or ""),
                 "publication_year": concept_entry.get("publication_year"),
-                "evidence_section": str(concept_entry.get("evidence_section", "") or ""),
+                "evidence_section": str(concept_entry.get("evidence_text", "") or ""),
             }
             payload["latest_theories"] = list(concept_entry.get("theories", []) or [])
         else:
@@ -644,13 +644,13 @@ def make_handler(
         )
 
     for pid, paper in paper_map_unique.items():
-        rels = list(paper.get("main_effects", []) or [])
+        rels = list(paper.get("direct_effects", []) or [])
         inters = list(paper.get("interactions", []) or [])
         rel_snippets: list[str] = []
         for r in rels[:20]:
             src = str(r.get("source", "") or r.get("from", "")).strip()
             tgt = str(r.get("target", "") or r.get("to", "")).strip()
-            tag = str(r.get("direction", "") or r.get("effect", "") or r.get("relation_type", "")).strip()
+            tag = str(r.get("direction", "") or r.get("effect_form", "") or r.get("relation_type", "")).strip()
             rel_snippets.append(f"{src}->{tgt} {tag}".strip())
         for it in inters[:10]:
             inputs = [str(v or "").strip() for v in (it.get("inputs", []) or []) if str(v or "").strip()]
@@ -892,7 +892,7 @@ def make_handler(
         if _agent_runner_mod is None:
             payload["code"] = "agent_runner_module_unavailable"
             payload["detail"] = "agent runner module unavailable"
-            payload["suggestion"] = "检�?scripts/smj_pipeline/agent_runner.py 是否存在且可导入"
+            payload["suggestion"] = "检�?scripts/smj_pipeline/agent_runner.py 是否存在且可导入"
             return payload
         try:
             cfg = _agent_runner_mod.load_codex_config(codex_config_path)
@@ -905,12 +905,12 @@ def make_handler(
                 payload["code"] = "ok"
             else:
                 payload["code"] = str(health.get("reason", "codex_unavailable") or "codex_unavailable")
-                payload["suggestion"] = "确认 OpenAI 鉴权环境变量、Codex CLI 安装与网络可达�?
+                payload["suggestion"] = "确认 OpenAI 鉴权环境变量、Codex CLI 安装与网络可达�?
             return payload
         except Exception as exc:
             payload["code"] = "codex_healthcheck_failed"
             payload["detail"] = str(exc)
-            payload["suggestion"] = "检�?codex 配置文件与可执行命令"
+            payload["suggestion"] = "检�?codex 配置文件与可执行命令"
             return payload
 
     def _check_workspace_and_library_config(library_id: str) -> list[dict[str, Any]]:
@@ -1016,7 +1016,7 @@ def make_handler(
         if not probe_script.exists():
             row["code"] = "mcp_probe_script_missing"
             row["detail"] = str(probe_script)
-            row["suggestion"] = "确认 scripts/smj_pipeline/mcp_probe.py 已存�?
+            row["suggestion"] = "确认 scripts/smj_pipeline/mcp_probe.py 已存�?
             return row
         cmd = [
             sys.executable,
@@ -1047,11 +1047,11 @@ def make_handler(
                 row["code"] = "ok"
             else:
                 row["code"] = f"mcp_probe_failed:{int(proc.returncode)}"
-                row["suggestion"] = "检�?kn_mcp_server、文献检索接口与 library_id 是否可用"
+                row["suggestion"] = "检�?kn_mcp_server、文献检索接口与 library_id 是否可用"
         except Exception as exc:
             row["code"] = "mcp_probe_exception"
             row["detail"] = str(exc)
-            row["suggestion"] = "检�?Python 运行环境�?mcp_probe.py 可执行�?
+            row["suggestion"] = "检�?Python 运行环境�?mcp_probe.py 可执行�?
         return row
 
     def _build_preflight_payload(library_id: str, base_url: str) -> dict[str, Any]:
@@ -1468,7 +1468,7 @@ def make_handler(
                         return _json(
                             self,
                             {
-                                "answer": "文献服务暂不可用，当前无法基于文献库给出可靠回答�?,
+                                "answer": "文献服务暂不可用，当前无法基于文献库给出可靠回答�?,
                                 "citations": [],
                                 "retrieval": {
                                     "keyword_hits": [],
@@ -1966,34 +1966,31 @@ def make_handler(
                     raw_defs = list(p.get("variable_definitions", []) or [])
                     concepts = [
                         {
-                            "variable": str(d.get("variable", "") or "").strip(),
+                            "variable": str(d.get("variable_name", "") or "").strip(),
                             "definition": str(d.get("definition", "") or "").strip(),
-                            "evidence_section": str(d.get("definition_evidence_section", "") or "").strip(),
+                            "evidence_section": str(d.get("measurement", "") or "").strip(),
                         }
                         for d in raw_defs
-                        if _norm_rel_text(str(d.get("variable", "") or "")) == _norm_rel_text(variable_name)
+                        if _norm_rel_text(str(d.get("variable_name", "") or "")) == _norm_rel_text(variable_name)
                         and str(d.get("definition", "") or "").strip()
                     ]
-                    operationalization = p.get("operationalization", {})
+                    operationalization = p.get("variable_definitions", [])
                     measurement_methods: list[dict[str, Any]] = []
-                    if isinstance(operationalization, dict):
-                        for v_name, spec in operationalization.items():
-                            v_txt = str(v_name or "").strip()
+                    if isinstance(operationalization, list):
+                        for d in operationalization:
+                            if not isinstance(d, dict):
+                                continue
+                            v_txt = str(d.get("variable_name", "") or "").strip()
                             if _norm_rel_text(v_txt) != _norm_rel_text(variable_name):
                                 continue
-                            values: list[str] = []
-                            if isinstance(spec, dict):
-                                values = [str(x or "").strip() for x in (spec.get("operationalized_as", []) or []) if str(x or "").strip()]
-                            elif isinstance(spec, list):
-                                values = [str(x or "").strip() for x in spec if str(x or "").strip()]
-                            elif isinstance(spec, str):
-                                values = [spec.strip()] if spec.strip() else []
-                            measurement_methods.append(
-                                {
-                                    "variable": v_txt,
-                                    "operationalized_as": values,
-                                }
-                            )
+                            measurement = str(d.get("measurement", "") or "").strip()
+                            if measurement:
+                                measurement_methods.append(
+                                    {
+                                        "variable": v_txt,
+                                        "operationalized_as": [measurement],
+                                    }
+                                )
 
                     relation_summaries = [_relation_summary_from_mention(item) for item in m]
                     papers_payload.append(

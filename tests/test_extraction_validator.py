@@ -39,10 +39,10 @@ class ExtractionValidatorTest(unittest.TestCase):
                     "paper_id": "p1",
                     "source": "A",
                     "target": "B",
-                    "direction": "positive",
-                    "relation_form": "linear",
+                    "effect_form": "positive",
+                    "theory_name": "RBV",
                     "verification": "supported",
-                    "evidence_section": "Results",
+                    "evidence_text": "H1 results",
                 }
             ]
         )
@@ -56,16 +56,15 @@ class ExtractionValidatorTest(unittest.TestCase):
                     "paper_id": "p2",
                     "source": "A",
                     "target": "B",
-                    "direction": "sideways",
-                    "relation_form": "curve",
+                    "effect_form": "sideways",
                     "verification": "partially_supported",
-                    "evidence_section": " ",
+                    "evidence_text": " ",
                 }
             ]
         )
         self.assertEqual(result.accepted_records, [])
-        self.assertIn("MISSING_EVIDENCE_SECTION", result.rejected_records[0].reason_codes)
-        self.assertIn("INVALID_DIRECTION", result.rejected_records[0].reason_codes)
+        self.assertIn("MISSING_EVIDENCE_TEXT", result.rejected_records[0].reason_codes)
+        self.assertIn("INVALID_EFFECT_FORM", result.rejected_records[0].reason_codes)
 
     def test_builds_review_queue_and_writes_jsonl_and_csv(self) -> None:
         validation_result = validate_relation_records(
@@ -74,10 +73,9 @@ class ExtractionValidatorTest(unittest.TestCase):
                     "paper_id": "p5",
                     "source": "A",
                     "target": "C",
-                    "direction": "invalid",
-                    "relation_form": "linear",
+                    "effect_form": "invalid",
                     "verification": "supported",
-                    "evidence_section": "Results",
+                    "evidence_text": "Results text",
                 },
             ]
         )
@@ -94,7 +92,7 @@ class ExtractionValidatorTest(unittest.TestCase):
 
             jsonl_lines = jsonl_path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(jsonl_lines), 1)
-            self.assertIn("INVALID_DIRECTION", jsonl_lines[0])
+            self.assertIn("INVALID_EFFECT_FORM", jsonl_lines[0])
 
             with csv_path.open("r", encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))

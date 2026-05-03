@@ -101,13 +101,10 @@ def main() -> None:
                 "paper_type": getattr(bundle, "paper_type", ""),
                 "extractability_reason": getattr(bundle, "extractability_reason", ""),
                 "extractability_evidence_section": getattr(bundle, "extractability_evidence_section", ""),
-                "main_effects": list(getattr(bundle, "main_effects", []) or []),
                 "variable_definitions": list(getattr(bundle, "variable_definitions", []) or []),
                 "direct_effects": list(getattr(bundle, "direct_effects", []) or []),
                 "moderations": list(getattr(bundle, "moderations", []) or []),
                 "interactions": list(getattr(bundle, "interactions", []) or []),
-                "context_variables": list(getattr(bundle, "context_variables", []) or []),
-                "operationalization": dict(getattr(bundle, "operationalization", {}) or {}),
             }
             repo.replace_paper_bundle(paper_id, payload)
             ok += 1

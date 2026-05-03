@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import importlib.util
 import json
@@ -38,8 +38,6 @@ def _empty_bundle():
         moderations=[],
         interactions=[],
         paper_domains=[],
-        context_variables=[],
-        operationalization={},
     )
 
 
@@ -120,10 +118,9 @@ class RunExtractionMvpTest(unittest.TestCase):
                                 {
                                     "source": "A",
                                     "target": "B",
-                                    "direction": "positive",
-                                    "relation_form": "linear",
+                                    "effect_form": "positive",
+                                    "evidence_text": "Results text",
                                     "verification": "supported",
-                                    "evidence_section": "Results",
                                 }
                             ],
                             "moderations": [],

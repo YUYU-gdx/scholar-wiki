@@ -41,20 +41,20 @@ class ExtractionExtractorTest(unittest.TestCase):
           "extractability_evidence_section": "Methods",
           "variable_definitions": [
             {
-              "variable": "strategic flexibility",
+              "variable_name": "strategic flexibility",
               "aliases": ["flexibility"],
               "definition": "firm strategic adaptability",
-              "definition_evidence_section": "Theory"
+              "measurement": "survey scale"
             }
           ],
           "direct_effects": [
             {
               "source": "strategic flexibility",
               "target": "firm performance",
-              "direction": "positive",
-              "relation_form": "linear",
-              "verification": "supported",
-              "evidence_section": "Results"
+              "effect_form": "positive",
+              "theory_name": "resource based view",
+              "evidence_text": "H1: strategic flexibility positively affects firm performance",
+              "verification": "supported"
             }
           ],
           "moderations": [],
@@ -67,7 +67,10 @@ class ExtractionExtractorTest(unittest.TestCase):
         self.assertIsInstance(bundle, ExtractionBundle)
         self.assertEqual(bundle.extractability_status, "yes")
         self.assertEqual(bundle.direct_effects[0]["source"], "strategic flexibility")
-        self.assertEqual(bundle.variable_definitions[0]["variable"], "strategic flexibility")
+        self.assertEqual(bundle.direct_effects[0]["effect_form"], "positive")
+        self.assertEqual(bundle.direct_effects[0]["theory_name"], "resource based view")
+        self.assertEqual(bundle.variable_definitions[0]["variable_name"], "strategic flexibility")
+        self.assertEqual(bundle.variable_definitions[0]["measurement"], "survey scale")
 
     def test_extract_records_calls_fake_client_with_system_and_user_messages(self) -> None:
         document_html = """
@@ -83,7 +86,7 @@ class ExtractionExtractorTest(unittest.TestCase):
               "extractability_reason": "has regression",
               "extractability_evidence_section": "Methods",
               "variable_definitions": [],
-              "direct_effects": [{"source": "A", "target": "B", "direction": "positive", "relation_form": "linear", "verification": "supported", "evidence_section": "Results"}],
+              "direct_effects": [{"source": "A", "target": "B", "effect_form": "positive", "evidence_text": "H1 text", "verification": "supported"}],
               "moderations": [],
               "interactions": []
             }
@@ -111,7 +114,7 @@ class ExtractionExtractorTest(unittest.TestCase):
           "extractability_reason": "conceptual paper",
           "extractability_evidence_section": "Abstract",
           "variable_definitions": [],
-          "direct_effects": [{"source": "A", "target": "B", "direction": "positive", "relation_form": "linear", "verification": "supported", "evidence_section": "Results"}],
+          "direct_effects": [{"source": "A", "target": "B", "effect_form": "positive", "evidence_text": "Results", "verification": "supported"}],
           "moderations": [],
           "interactions": []
         }
@@ -135,7 +138,7 @@ class ExtractionExtractorTest(unittest.TestCase):
         bundle = parse_extraction_response(response_text)
         self.assertEqual(bundle.direct_effects, [])
 
-    def test_parse_extraction_response_keeps_moderation_target_canonical_ids(self) -> None:
+    def test_parse_extraction_response_handles_moderation_with_source_target(self) -> None:
         response_text = """
         {
           "extractability_status": "yes",
@@ -147,26 +150,48 @@ class ExtractionExtractorTest(unittest.TestCase):
           "moderations": [
             {
               "moderator": "M",
-              "direction": "positive",
-              "verification": "supported",
-              "evidence_section": "Results",
-              "moderated_effects": [
-                {
-                  "source": "A short",
-                  "target": "B short",
-                  "source_canonical_var_id": "var::a-canonical",
-                  "target_canonical_var_id": "var::b-canonical"
-                }
-              ]
+              "source": "A",
+              "target": "B",
+              "effect_form": "positive",
+              "theory_name": "contingency theory",
+              "evidence_text": "M positively moderates A->B",
+              "verification": "supported"
             }
           ],
           "interactions": []
         }
         """
         bundle = parse_extraction_response(response_text)
-        target = bundle.moderations[0]["moderated_effects"][0]
-        self.assertEqual(target["source_canonical_var_id"], "var::a-canonical")
-        self.assertEqual(target["target_canonical_var_id"], "var::b-canonical")
+        mod = bundle.moderations[0]
+        self.assertEqual(mod["moderator"], "M")
+        self.assertEqual(mod["source"], "A")
+        self.assertEqual(mod["target"], "B")
+        self.assertEqual(mod["effect_form"], "positive")
+
+    def test_parse_extraction_response_handles_interactions(self) -> None:
+        response_text = """
+        {
+          "extractability_status": "yes",
+          "paper_type": "quantitative_empirical",
+          "extractability_reason": "has regression",
+          "extractability_evidence_section": "Methods",
+          "variable_definitions": [],
+          "direct_effects": [],
+          "moderations": [],
+          "interactions": [
+            {
+              "inputs": ["X1", "X2"],
+              "output": "Y",
+              "effect_form": "nonlinear",
+              "theory_name": "",
+              "evidence_text": "X1 and X2 jointly affect Y",
+              "verification": "partially_supported"
+            }
+          ]
+        }
+        """
+        with self.assertRaises(ValueError):
+            parse_extraction_response(response_text)
 
 
 if __name__ == "__main__":

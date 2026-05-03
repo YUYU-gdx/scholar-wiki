@@ -30,16 +30,15 @@ class GraphEdge(BaseModel):
     relation_type: str = ""
     relation_type_std: str = ""
     relation_type_raw: str = ""
-    direction: str = ""
-    effect: str = ""
+    effect_form: str = ""
     source_name: str = ""
     target_name: str = ""
     source_name_local: str = ""
     target_name_local: str = ""
     source_name_canonical: str = ""
     target_name_canonical: str = ""
-    relation_form: str = ""
-    evidence_section: str = ""
+    theory_name: str = ""
+    evidence_text: str = ""
     paper_id: str = ""
     doi: str = ""
 
@@ -52,7 +51,9 @@ class ModerationLink(BaseModel):
     paper_id: str = ""
     doi: str = ""
     moderated_relation: Optional[dict[str, Any]] = None
-    evidence_section: str = ""
+    effect_form: str = ""
+    theory_name: str = ""
+    evidence_text: str = ""
 
 
 class InteractionLink(BaseModel):
@@ -62,11 +63,11 @@ class InteractionLink(BaseModel):
     output_node_id: str = ""
     inputs: list[str] = []
     output: str = ""
-    interaction_type: str = ""
-    effect: str = ""
+    effect_form: str = ""
+    theory_name: str = ""
     paper_id: str = ""
     doi: str = ""
-    evidence_section: str = ""
+    evidence_text: str = ""
 
 
 class IsolatedNode(BaseModel):
@@ -172,7 +173,7 @@ class PaperDetail(BaseModel):
     article_url: str = ""
     offline_html_path: str = ""
     variable_definitions: list[dict[str, Any]] = []
-    main_effects: list[dict[str, Any]] = []
+    direct_effects: list[dict[str, Any]] = []
     interactions: list[dict[str, Any]] = []
     paper_domains: list[str] = []
 

@@ -3,8 +3,8 @@
 ## 1. 分层模型总览
 - L1 抽取层：模型输出 JSON（由 `prompt/extraction_system_prompt.md` 约束，`extraction/extractor.py` 解析与校验）。
 - L2 存储层：PostgreSQL 标准化表（`scripts/smj_pipeline/storage/schema_postgres.sql`）。
-- L3 产物层：前端 artifact（`export_frontend_artifact*.py` 输出）与 graph views（`build_graph_views.py` 输出）。
-- L4 服务层：`serve_graph_api.py` 直接读取 graph views 对外提供接口。
+- L3 产物层：前端 artifact（`export_frontend_artifact.py` 输出）与 graph views（`build_graph_views.py` 输出）。
+- L4 服务层：`kn_graph serve` / `serve_graph_api.py` 直接读取 graph views 对外提供接口。
 
 ## 2. L1 抽取层（模型返回契约）
 
@@ -13,37 +13,28 @@
 - `paper_type`
 - `extractability_reason`
 - `extractability_evidence_section`
-- `main_effects`（数组）
+- `direct_effects`（数组）
 
 ### 2.2 可选顶层字段
 - `variable_definitions`
-- `direct_effects`
 - `moderations`
 - `interactions`
-- `context_variables`
-- `operationalization`
-- `paper_domains`
+- `paper_domains`（由 HTML 元数据填充，不由 LLM 产出）
 
 ### 2.3 关键子结构
-- `main_effects[]`
-  - `from`、`to`、`effect`、`hypothesis_label`、`verification`、`evidence_section`、`evidence_snippet`、`description`
 - `direct_effects[]`
-  - `source`、`target`、`direction`、`relation_form`、`relation_form_raw`、`hypothesis_label`、`verification`、`evidence_section`、`evidence_snippet`
+  - `source`、`target`、`effect_form`、`theory_name`、`evidence_text`、`verification`
 - `moderations[]`
-  - `moderator`、`moderated_effects[]`（每项含 `source`、`target`）、`direction`、`hypothesis_label`、`verification`、`evidence_section`、`evidence_snippet`
+  - `moderator`、`source`、`target`、`effect_form`、`theory_name`、`evidence_text`、`verification`
 - `interactions[]`
-  - `inputs[]`（至少 2 个）、`output`、`type`、`moderator`、`effect`、`hypothesis_label`、`verification`、`evidence_section`、`evidence_snippet`、`description`
+  - `inputs[]`（至少 2 个）、`output`、`effect_form`、`theory_name`、`evidence_text`、`verification`
 - `variable_definitions[]`
-  - `variable`、`aliases[]`、`definition`、`definition_evidence_section`
-- `operationalization`
-  - `{"变量名": {"operationalized_as": [...]}}`
+  - `variable_name`、`definition`、`measurement`、`aliases[]`
 
 ### 2.4 枚举约束（解析器校验）
-- `direction`（direct_effects）：`positive|negative|mixed|unclear|nonlinear`
-- `relation_form`：`linear|nonlinear|other`
+- `effect_form`：`positive|negative|nonlinear|unclear`
 - `verification`：`supported|not_supported|mixed|unclear`
-- `moderations.direction`：`positive|negative|mixed|unclear`
-- `interactions.effect`：`positive|negative|mixed|unclear|nonlinear|+|-|conditional`
+- `extractability_status`：`yes|no|uncertain`
 
 ## 3. L2 存储层（PostgreSQL 表）
 
@@ -55,9 +46,7 @@
 
 ### 3.2 论文扩展表
 - `paper_domains(paper_id, domain, source)`
-- `context_variables(paper_id, variable_name)`
-- `operationalizations(paper_id, variable_name, operationalized_as_json)`
-- `variable_definitions(paper_id, variable_name, aliases_json, definition_text, evidence_section)`
+- `variable_definitions(paper_id, variable_name, aliases_json, definition_text, measurement_text)`
 
 ### 3.3 变量规范化表
 - `canonical_variables(canonical_var_id, canonical_name)`
@@ -69,22 +58,19 @@
   - `source_var` / `target_var`
   - `source_canonical_var_id` / `target_canonical_var_id`
   - `source_alias_json` / `target_alias_json`
-  - `direction` / `relation_form` / `relation_form_raw`
-  - `hypothesis_label` / `verification` / `evidence_section` / `evidence_snippet`
+  - `effect_form` / `theory_name`
+  - `verification` / `evidence_text`
 - `moderations`
   - `paper_id`
   - `moderator_var` / `moderator_canonical_var_id` / `moderator_alias_json`
-  - `direction` / `hypothesis_label` / `verification` / `evidence_section` / `evidence_snippet`
-- `moderation_targets`
-  - `moderation_id`
-  - `source_var` / `target_var`
-  - `source_canonical_var_id` / `target_canonical_var_id`
+  - `source_var` / `target_var` / `source_canonical_var_id` / `target_canonical_var_id`
+  - `effect_form` / `theory_name`
+  - `verification` / `evidence_text`
 - `interactions`
   - `paper_id`
   - `output_var` / `output_canonical_var_id`
-  - `interaction_type`
-  - `moderator_var` / `moderator_canonical_var_id`
-  - `effect` / `hypothesis_label` / `verification` / `evidence_section` / `evidence_snippet` / `description`
+  - `effect_form` / `theory_name`
+  - `verification` / `evidence_text`
 - `interaction_inputs`
   - `interaction_id`
   - `input_var` / `input_canonical_var_id` / `input_order`
@@ -95,19 +81,18 @@
 
 ## 4. L3 产物层
 
-### 4.1 Frontend artifact (`frontend_artifact*.json`)
+### 4.1 Frontend artifact (`frontend_artifact.json`)
 - 顶层：`meta`、`nodes[]`、`edges[]`、`moderation_links[]`、`interaction_links[]`、`papers[]`。
 - `nodes[]`
   - 变量节点，`id` 默认 `var::<变量名>`，含 `label/name/canonical_var_id`、`aliases/alias_count`、`first_year`。
 - `edges[]`
-  - 当前统一映射主效应，`relation_type_std="main_effect"`。
-  - 关键字段：`source`、`target`、`paper_id`、`doi`、`direction`、`relation_form`、`verification`、`evidence_section`、`paper_year`、`display_effect_class`。
+  - 关键字段：`source`、`target`、`paper_id`、`doi`、`effect_form`、`theory_name`、`verification`、`evidence_text`、`paper_year`、`display_effect_class`。
 - `moderation_links[]`
-  - 关键字段：`moderator_var/moderator_node_id`、`moderated_relation{source,target}`、`direction`、`verification`。
+  - 关键字段：`moderator_var/moderator_node_id`、`moderated_relation{source,target}`、`effect_form`、`theory_name`、`verification`、`evidence_text`。
 - `interaction_links[]`
-  - 关键字段：`inputs/input_node_ids`、`output/output_node_id`、`interaction_type`、`moderator/moderator_node_id`、`effect`、`verification`。
+  - 关键字段：`inputs/input_node_ids`、`output/output_node_id`、`effect_form`、`theory_name`、`verification`、`evidence_text`。
 - `papers[]`
-  - API 论文详情来源，包含分流字段、变量定义、关系、操作化、元数据。
+  - API 论文详情来源，包含分流字段、变量定义、直接效应、交互效应、论文领域。
 
 ### 4.2 Graph views (`graph_views.json`)
 - 在 artifact 基础上增加：
@@ -121,14 +106,8 @@
 - `/paper/{id}` 直接返回 `paper_map` 对象。
 - `/variable/{id}`：
   - `concepts` 来自 `variable_definitions` 过滤匹配该变量名。
-  - `measurement_methods` 来自 `operationalization`。
+  - `measurement_methods` 来自 `variable_definitions[].measurement`。
   - `relations` 来自 `edges/moderation_links/interaction_links` 聚合。
 - `/graph/search`：
   - 变量检索索引来自节点 + 关系邻接摘要。
-  - 论文检索索引来自 `papers.main_effects/interactions/paper_domains`。
-
-## 6. 当前实现中的兼容与注意事项
-- 逻辑模型以 `main_effects` 为主，但物理存储仍写入 `direct_effects`（兼容旧链路）。
-- 解析器可在 `main_effects` 与 `direct_effects` 间自动桥接，缺失一方时自动补齐。
-- `GRAPH_EMBEDDING_MODEL` 当前不会启用真实向量检索，服务端仍固定使用哈希向量 fallback。
-- run 管理默认从 `outputs/runs/active.json` 切换数据版本，便于多批次回放。
+  - 论文检索索引来自 `papers.direct_effects/interactions/paper_domains`。
