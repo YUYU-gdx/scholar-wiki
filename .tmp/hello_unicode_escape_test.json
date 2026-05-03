@@ -1,6 +1,0 @@
-﻿{
-    "ok":  true,
-    "status":  "completed",
-    "content":  "你好。当前仓库根目录基本为空，只看到 `.codex` 和 `.codex_home`。我也检查了 MCP 资源，未发现可直接读取的 `using-superpowers` 资源；本地只找到两个插件技能目录下的 `AGENTS.md`，没有看到仓库根目录的 `AGENTS.md` 文件。\n\n你可以直接告诉我接下来要做什么；如果涉及实现或排查，我会继续按你的仓库规则优先寻找并遵循 `using-superpowers`，同时 Python/命令相关会优先用 `uv`。",
-    "error_detail":  ""
-}
