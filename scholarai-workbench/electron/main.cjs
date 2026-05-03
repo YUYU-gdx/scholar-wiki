@@ -353,6 +353,86 @@ ipcMain.handle("write-local-text", async (_evt, filePath, text) => {
   }
 });
 
+function normalizeAssetRel(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (s.startsWith("/paper/") && s.includes("/asset?")) {
+    try {
+      const u = new URL(s, "http://localhost");
+      const qp = u.searchParams.get("rel_path");
+      if (qp) return qp;
+    } catch (_e) {
+      return s;
+    }
+  }
+  return s;
+}
+
+function findFirstByName(rootDir, fileName) {
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(cur, { withFileTypes: true });
+    } catch (_e) {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(cur, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (entry.isFile() && entry.name === fileName) {
+        return full;
+      }
+    }
+  }
+  return "";
+}
+
+ipcMain.handle("resolve-local-asset", async (_evt, markdownPath, rawRelPath) => {
+  const mdPath = String(markdownPath || "").trim();
+  const relIn = normalizeAssetRel(rawRelPath);
+  if (!mdPath || !relIn) return { ok: false, error: "invalid_args" };
+  const rel = decodeURIComponent(relIn);
+  try {
+    if (path.isAbsolute(rel) && fs.existsSync(rel) && fs.statSync(rel).isFile()) {
+      return { ok: true, path: rel };
+    }
+    const mdDir = path.dirname(mdPath);
+    const direct = path.resolve(mdDir, rel);
+    if (fs.existsSync(direct) && fs.statSync(direct).isFile()) {
+      return { ok: true, path: direct };
+    }
+
+    const marker = `${path.sep}final_named${path.sep}`;
+    const pos = mdPath.toLowerCase().indexOf(marker.toLowerCase());
+    if (pos >= 0) {
+      const root = mdPath.slice(0, pos);
+      const stem = path.basename(mdPath, path.extname(mdPath));
+      if (stem) {
+        const unpackedByStem = path.resolve(root, "unpacked", stem, rel);
+        if (fs.existsSync(unpackedByStem) && fs.statSync(unpackedByStem).isFile()) {
+          return { ok: true, path: unpackedByStem };
+        }
+      }
+      const fileName = path.basename(rel);
+      if (fileName) {
+        const unpackedRoot = path.resolve(root, "unpacked");
+        if (fs.existsSync(unpackedRoot) && fs.statSync(unpackedRoot).isDirectory()) {
+          const hit = findFirstByName(unpackedRoot, fileName);
+          if (hit) return { ok: true, path: hit };
+        }
+      }
+    }
+    return { ok: false, error: "asset_not_found" };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
 app.on("before-quit", () => {
   quitInProgress = true;
   stopBackendServer().catch(() => {});

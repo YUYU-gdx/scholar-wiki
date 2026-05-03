@@ -219,7 +219,6 @@ export default function LibraryView() {
             const detected = paperFilesByScopedKey[p.scopedKey];
             const hasPdf = !!detected?.pdf;
             const hasMd = !!detected?.markdown;
-            const hasHtml = !!detected?.html;
             const loadingFiles = !detected || !!detected.loading;
             return (
               <div key={p.scopedKey} className="p-4 bg-surface-container-lowest border border-outline-variant rounded-xl">
@@ -239,7 +238,7 @@ export default function LibraryView() {
                     <div className="flex items-center gap-2">
                       {hasPdf && <button onClick={() => openInReader(p.paperId, p.libraryId, p.rawPaperId, 'pdf')} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />PDF</button>}
                       {hasMd && <button onClick={() => openInReader(p.paperId, p.libraryId, p.rawPaperId, 'markdown')} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />MD</button>}
-                      {hasHtml && <button onClick={() => openInReader(p.paperId, p.libraryId, p.rawPaperId, 'html')} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />HTML</button>}
+                      
                     </div>
                   )}
                 </div>

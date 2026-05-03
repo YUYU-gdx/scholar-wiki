@@ -8,6 +8,7 @@ interface DesktopShell {
   readLocalFile(filePath: string): Promise<{ ok: boolean; data?: string; size?: number; error?: string }>;
   readLocalText(filePath: string): Promise<{ ok: boolean; data?: string; size?: number; error?: string }>;
   writeLocalText(filePath: string, text: string): Promise<{ ok: boolean; size?: number; error?: string }>;
+  resolveLocalAsset(markdownPath: string, relPath: string): Promise<{ ok: boolean; path?: string; error?: string }>;
 }
 
 declare global {

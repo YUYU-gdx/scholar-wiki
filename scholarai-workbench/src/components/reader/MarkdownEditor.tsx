@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import MarkdownIt from 'markdown-it';
 import markdownItFootnote from 'markdown-it-footnote';
 import markdownItTaskLists from 'markdown-it-task-lists';
@@ -18,6 +18,69 @@ interface MarkdownEditorProps {
   onContentChange?: (content: string) => void;
 }
 
+function toFileUrl(absPath: string): string {
+  const win = String(absPath || '').replace(/\\/g, '/');
+  const withLeading = /^[a-zA-Z]:\//.test(win) ? `/${win}` : win;
+  return `file://${encodeURI(withLeading)}`;
+}
+
+function resolveLocalResourceUrl(raw: string, markdownAbsolutePath: string): string {
+  const s = String(raw || '').trim();
+  if (!s) return s;
+  if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('data:') || s.startsWith('blob:') || s.startsWith('#')) {
+    return s;
+  }
+  const mdPath = String(markdownAbsolutePath || '');
+  if (!mdPath) return s;
+  const mdDir = mdPath.replace(/[\\/][^\\/]*$/, '');
+  let rel = s;
+  if (s.startsWith('/paper/') && s.includes('/asset?')) {
+    try {
+      const u = new URL(s, 'http://localhost');
+      const qp = u.searchParams.get('rel_path');
+      if (qp) rel = qp;
+    } catch {
+      // keep original rel
+    }
+  }
+  if (/^[a-zA-Z]:[\\/]/.test(rel) || rel.startsWith('/')) {
+    return toFileUrl(rel);
+  }
+  const baseDir = mdDir.endsWith('/') || mdDir.endsWith('\\') ? mdDir : `${mdDir}/`;
+  const primary = new URL(rel, toFileUrl(baseDir)).toString();
+  const marker = '\\final_named\\';
+  const markerPos = mdPath.toLowerCase().indexOf(marker.toLowerCase());
+  if (markerPos < 0) return primary;
+  const fileStem = (mdPath.split(/[/\\]/).pop() || '').replace(/\.[^.]+$/, '');
+  if (!fileStem) return primary;
+  const root = mdPath.slice(0, markerPos);
+  const unpackedBase = `${root}\\unpacked\\${fileStem}\\`;
+  return new URL(rel, toFileUrl(unpackedBase)).toString();
+}
+
+function fileUrlToPath(fileUrl: string): string {
+  try {
+    const u = new URL(fileUrl);
+    if (u.protocol !== 'file:') return '';
+    const decoded = decodeURIComponent(u.pathname || '');
+    if (/^\/[a-zA-Z]:\//.test(decoded)) return decoded.slice(1).replace(/\//g, '\\');
+    return decoded;
+  } catch {
+    return '';
+  }
+}
+
+function guessMimeByPath(p: string): string {
+  const lower = String(p || '').toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.bmp')) return 'image/bmp';
+  return 'application/octet-stream';
+}
+
 export default function MarkdownEditor({
   content,
   fileName,
@@ -28,6 +91,7 @@ export default function MarkdownEditor({
 }: MarkdownEditorProps) {
   const [mode, setMode] = useState<ViewerMode>(initialMode);
   const [text, setText] = useState(content);
+  const [renderedHtml, setRenderedHtml] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -47,60 +111,81 @@ export default function MarkdownEditor({
     onModeChange?.(newMode);
   };
 
-  const md = new MarkdownIt({
-    html: true,
-    linkify: true,
-    typographer: true,
-    breaks: false,
-  })
-    .use(markdownItFootnote)
-    .use(markdownItTaskLists, { enabled: true, label: true })
-    .use(markdownItMark)
-    .use(markdownItDeflist)
-    .use(markdownItKatex);
+  const md = useMemo(() => (
+    new MarkdownIt({
+      html: true,
+      linkify: true,
+      typographer: true,
+      breaks: false,
+    })
+      .use(markdownItFootnote)
+      .use(markdownItTaskLists, { enabled: true, label: true })
+      .use(markdownItMark)
+      .use(markdownItDeflist)
+      .use(markdownItKatex)
+  ), []);
 
-  const renderMarkdown = (value: string) => (
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const clean = DOMPurify.sanitize(md.render(text), {
+        ALLOWED_TAGS: [
+          'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+          'strong', 'em', 's', 'mark', 'u', 'sub', 'sup',
+          'blockquote', 'code', 'pre', 'span', 'div',
+          'ul', 'ol', 'li', 'input', 'label',
+          'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+          'a', 'img', 'details', 'summary', 'dl', 'dt', 'dd',
+        ],
+        ALLOWED_ATTR: [
+          'href', 'src', 'alt', 'title', 'target', 'rel',
+          'class', 'id', 'type', 'checked', 'disabled',
+          'colspan', 'rowspan', 'align',
+        ],
+        ALLOWED_URI_REGEXP: /^(?:(?:https?|file|data|blob):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
+      });
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(clean, 'text/html');
+      const rewriteAttr = async (el: Element, key: 'src' | 'href') => {
+        const raw = el.getAttribute(key);
+        if (!raw) return;
+        let next = resolveLocalResourceUrl(raw, absolutePath);
+        if (window.desktopShell?.runtime === 'electron' && absolutePath && !next.startsWith('http://') && !next.startsWith('https://') && !next.startsWith('data:') && !next.startsWith('blob:') && !next.startsWith('file://')) {
+          const r = await window.desktopShell.resolveLocalAsset(absolutePath, raw);
+          if (r?.ok && r.path) next = toFileUrl(r.path);
+        }
+        if (window.desktopShell?.runtime === 'electron' && absolutePath && next.startsWith('file://')) {
+          const relTry = raw.startsWith('file://') ? '' : raw;
+          if (relTry) {
+            const r = await window.desktopShell.resolveLocalAsset(absolutePath, relTry);
+            if (r?.ok && r.path) next = toFileUrl(r.path);
+          }
+        }
+        if (key === 'src' && next.startsWith('file://') && window.desktopShell?.runtime === 'electron') {
+          const localPath = fileUrlToPath(next);
+          if (localPath) {
+            const read = await window.desktopShell.readLocalFile(localPath);
+            if (read?.ok && read.data) {
+              const mime = guessMimeByPath(localPath);
+              next = `data:${mime};base64,${read.data}`;
+            }
+          }
+        }
+        el.setAttribute(key, next);
+      };
+      await Promise.all(Array.from(doc.querySelectorAll('img')).map((el) => rewriteAttr(el, 'src')));
+      await Promise.all(Array.from(doc.querySelectorAll('a')).map((el) => rewriteAttr(el, 'href')));
+      if (!cancelled) setRenderedHtml(doc.body.innerHTML);
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [absolutePath, md, text]);
+
+  const renderMarkdown = () => (
     <div className="reader-markdown">
       <div
         dangerouslySetInnerHTML={{
-          __html: (() => {
-            const clean = DOMPurify.sanitize(md.render(value), {
-            ALLOWED_TAGS: [
-              'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-              'strong', 'em', 's', 'mark', 'u', 'sub', 'sup',
-              'blockquote', 'code', 'pre', 'span', 'div',
-              'ul', 'ol', 'li', 'input', 'label',
-              'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
-              'a', 'img', 'details', 'summary', 'dl', 'dt', 'dd',
-            ],
-            ALLOWED_ATTR: [
-              'href', 'src', 'alt', 'title', 'target', 'rel',
-              'class', 'id', 'type', 'checked', 'disabled',
-              'colspan', 'rowspan', 'align',
-            ],
-            });
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(clean, 'text/html');
-            const rewrite = (raw: string): string => {
-              const s = String(raw || '').trim();
-              if (!s || s.startsWith('http://') || s.startsWith('https://') || s.startsWith('data:') || s.startsWith('blob:') || s.startsWith('#')) {
-                return s;
-              }
-              const base = absolutePath ? absolutePath.replace(/[\\/][^\\/]*$/, '') : '';
-              const normalized = s.replace(/\\/g, '/');
-              const joined = `${base.replace(/\\/g, '/')}/${normalized}`.replace(/\/+/g, '/');
-              return `file:///${encodeURI(joined)}`;
-            };
-            for (const img of Array.from(doc.querySelectorAll('img'))) {
-              const src = img.getAttribute('src');
-              if (src) img.setAttribute('src', rewrite(src));
-            }
-            for (const a of Array.from(doc.querySelectorAll('a'))) {
-              const href = a.getAttribute('href');
-              if (href) a.setAttribute('href', rewrite(href));
-            }
-            return doc.body.innerHTML;
-          })(),
+          __html: renderedHtml,
         }}
       />
     </div>
@@ -142,7 +227,7 @@ export default function MarkdownEditor({
 
         {mode === 'read' && (
           <div className="h-full overflow-y-auto p-6 max-w-[800px] mx-auto">
-            {renderMarkdown(text)}
+            {renderMarkdown()}
           </div>
         )}
 
@@ -157,7 +242,7 @@ export default function MarkdownEditor({
               }}
             />
             <div className="flex-1 overflow-y-auto p-4">
-              {renderMarkdown(text)}
+              {renderMarkdown()}
             </div>
           </div>
         )}

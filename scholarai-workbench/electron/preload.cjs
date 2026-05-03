@@ -10,4 +10,5 @@ contextBridge.exposeInMainWorld("desktopShell", {
   readLocalFile: (filePath) => ipcRenderer.invoke("read-local-file", filePath),
   readLocalText: (filePath) => ipcRenderer.invoke("read-local-text", filePath),
   writeLocalText: (filePath, text) => ipcRenderer.invoke("write-local-text", filePath, text),
+  resolveLocalAsset: (markdownPath, relPath) => ipcRenderer.invoke("resolve-local-asset", markdownPath, relPath),
 });
