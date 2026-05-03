@@ -9,14 +9,39 @@ import type { PaperFiles, DocumentLoadResult } from './types';
 interface ViewerHostProps {
   paperId: string;
   libraryId: string;
+  preferredType?: 'pdf' | 'markdown' | 'html' | null;
+  rawPaperId?: string;
 }
 
-export default function ViewerHost({ paperId, libraryId }: ViewerHostProps) {
+export default function ViewerHost({ paperId, libraryId, preferredType, rawPaperId }: ViewerHostProps) {
   const [paperFiles, setPaperFiles] = useState<PaperFiles | null>(null);
   const [document, setDocument] = useState<DocumentLoadResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const sanitizeHtml = (html: string): string => {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const blockedTags = new Set(['script', 'iframe', 'object', 'embed', 'link', 'meta', 'base']);
+    for (const el of Array.from(doc.querySelectorAll('*'))) {
+      const tag = el.tagName.toLowerCase();
+      if (blockedTags.has(tag)) {
+        el.remove();
+        continue;
+      }
+      for (const attr of Array.from(el.attributes)) {
+        const name = attr.name.toLowerCase();
+        const value = String(attr.value || '').trim().toLowerCase();
+        const isEvent = name.startsWith('on');
+        const isJsUrl = (name === 'href' || name === 'src' || name === 'xlink:href') && value.startsWith('javascript:');
+        if (isEvent || isJsUrl) {
+          el.removeAttribute(attr.name);
+        }
+      }
+    }
+    return doc.body.innerHTML;
+  };
 
   useEffect(() => {
     if (!paperId) return;
@@ -24,11 +49,11 @@ export default function ViewerHost({ paperId, libraryId }: ViewerHostProps) {
     setLoading(true);
     setError(null);
 
-    resolvePaperFiles(paperId, libraryId)
+    resolvePaperFiles(paperId, libraryId, rawPaperId)
       .then((files) => {
         if (cancelled) return;
         setPaperFiles(files);
-        return loadDocument(files);
+        return loadDocument(files, preferredType);
       })
       .then((doc) => {
         if (cancelled) return;
@@ -42,7 +67,7 @@ export default function ViewerHost({ paperId, libraryId }: ViewerHostProps) {
       });
 
     return () => { cancelled = true; };
-  }, [paperId, libraryId]);
+  }, [paperId, libraryId, preferredType, rawPaperId]);
 
   if (loading) {
     return (
@@ -89,7 +114,7 @@ export default function ViewerHost({ paperId, libraryId }: ViewerHostProps) {
         )}
         {document.type === 'html' && typeof document.data === 'string' && (
           <div className="flex-1 overflow-auto p-6 bg-surface-container-lowest">
-            <div className="max-w-[800px] mx-auto" dangerouslySetInnerHTML={{ __html: document.data }} />
+            <div className="max-w-[800px] mx-auto" dangerouslySetInnerHTML={{ __html: sanitizeHtml(document.data) }} />
           </div>
         )}
       </div>

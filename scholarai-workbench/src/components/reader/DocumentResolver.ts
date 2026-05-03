@@ -5,9 +5,19 @@ const API_BASE = '';
 export async function resolvePaperFiles(
   paperId: string,
   libraryId: string,
+  rawPaperId?: string,
 ): Promise<PaperFiles> {
   const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
-  const resp = await fetch(`${API_BASE}/paper/${encodeURIComponent(paperId)}/files${params}`);
+
+  const tryFetch = async (id: string): Promise<Response> =>
+    fetch(`${API_BASE}/paper/${encodeURIComponent(id)}/files${params}`);
+
+  let resp = await tryFetch(paperId);
+
+  if (resp.status === 404 && rawPaperId && rawPaperId !== paperId) {
+    resp = await tryFetch(rawPaperId);
+  }
+
   if (!resp.ok) {
     throw new Error(`failed to resolve paper files: ${resp.status}`);
   }
@@ -37,31 +47,27 @@ async function electronReadText(path: string): Promise<string | null> {
 
 export async function loadDocument(
   files: PaperFiles,
+  preferredType?: 'pdf' | 'markdown' | 'html' | null,
 ): Promise<{ type: 'pdf' | 'markdown' | 'html' | 'none'; data: Uint8Array | string | null; file_name: string }> {
   const isElectron = window.desktopShell?.runtime === 'electron';
 
-  if (files.files.pdf) {
-    const f = files.files.pdf;
+  const tryType = async (t: string): Promise<{ type: 'pdf' | 'markdown' | 'html' | 'none'; data: Uint8Array | string | null; file_name: string } | null> => {
+    const f = (files.files as Record<string, { path: string; name: string; size_bytes: number } | undefined>)[t];
+    if (!f) return null;
     const data = isElectron
-      ? await electronReadFile(f.path)
+      ? (t === 'pdf' ? await electronReadFile(f.path) : await electronReadText(f.path))
       : null;
-    return { type: 'pdf', data, file_name: f.name };
+    return { type: t as 'pdf' | 'markdown' | 'html', data, file_name: f.name };
+  };
+
+  if (preferredType) {
+    const r = await tryType(preferredType);
+    if (r) return r;
   }
 
-  if (files.files.markdown) {
-    const f = files.files.markdown;
-    const data = isElectron
-      ? await electronReadText(f.path)
-      : null;
-    return { type: 'markdown', data, file_name: f.name };
-  }
-
-  if (files.files.html) {
-    const f = files.files.html;
-    const data = isElectron
-      ? await electronReadText(f.path)
-      : null;
-    return { type: 'html', data, file_name: f.name };
+  for (const t of ['pdf', 'markdown', 'html']) {
+    const r = await tryType(t);
+    if (r) return r;
   }
 
   return { type: 'none', data: null, file_name: '' };

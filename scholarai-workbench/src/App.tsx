@@ -32,6 +32,10 @@ type AppContextType = {
   selectedPaperLibraryId: string;
   setSelectedPaperId: (id: string | null) => void;
   setSelectedPaperLibraryId: (id: string) => void;
+  selectedPaperPreferredType: 'pdf' | 'markdown' | 'html' | null;
+  setSelectedPaperPreferredType: (type: 'pdf' | 'markdown' | 'html' | null) => void;
+  selectedPaperRawId: string | null;
+  setSelectedPaperRawId: (id: string | null) => void;
   sessions: ChatSession[];
   setSessions: React.Dispatch<React.SetStateAction<ChatSession[]>>;
   activeSessionId: string | null;
@@ -107,13 +111,15 @@ function mergeGraphPayloads(payloads: GraphFull[]): GraphFull {
 }
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<View>('graph');
+  const [currentView, setCurrentView] = useState<View>('library');
   const [graphData, setGraphData] = useState<GraphFull | null>(null);
   const [graphLoading, setGraphLoading] = useState(true);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeLibraryId, setSelectedNodeLibraryId] = useState<string>('supply_chain');
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
   const [selectedPaperLibraryId, setSelectedPaperLibraryId] = useState<string>('supply_chain');
+  const [selectedPaperPreferredType, setSelectedPaperPreferredType] = useState<'pdf' | 'markdown' | 'html' | null>(null);
+  const [selectedPaperRawId, setSelectedPaperRawId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [libraries, setLibraries] = useState<LiteratureLibrary[]>([]);
@@ -194,6 +200,10 @@ export default function App() {
     selectedPaperLibraryId,
     setSelectedPaperId,
     setSelectedPaperLibraryId,
+    selectedPaperPreferredType,
+    setSelectedPaperPreferredType,
+    selectedPaperRawId,
+    setSelectedPaperRawId,
     sessions,
     setSessions,
     activeSessionId,
@@ -291,14 +301,14 @@ export default function App() {
         </aside>
 
         <main className="flex-1 flex flex-col relative overflow-hidden bg-background">
-          <header className="h-12 border-b border-outline-variant bg-surface-container-lowest/80 backdrop-blur-md flex justify-between items-center px-6 z-40">
-            <div className="flex items-center flex-1 max-w-md">
+          <header className="electron-drag h-12 border-b border-outline-variant bg-surface-container-lowest/80 backdrop-blur-md flex justify-between items-center px-6 z-40">
+            <div className="electron-no-drag flex items-center flex-1 max-w-md">
               <div className="relative w-full group">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-outline group-focus-within:text-secondary transition-colors" />
                 <input
                   type="text"
                   placeholder="Search variables, papers..."
-                  className="w-full bg-surface-container border border-outline-variant rounded-lg px-10 py-1.5 text-sm font-mono focus:ring-1 focus:ring-secondary/30 outline-none transition-all placeholder:text-outline"
+                  className="electron-no-drag w-full bg-surface-container border border-outline-variant rounded-lg px-10 py-1.5 text-sm font-mono focus:ring-1 focus:ring-secondary/30 outline-none transition-all placeholder:text-outline"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && e.currentTarget.value.trim()) {
                       setSelectedNodeId(null);
@@ -309,12 +319,12 @@ export default function App() {
                 />
               </div>
             </div>
-            <div className="flex items-center gap-4">
-              <button className="text-on-surface-variant hover:text-secondary transition-all flex items-center gap-1.5 focus:outline-none">
+            <div className="electron-no-drag flex items-center gap-4">
+              <button className="electron-no-drag text-on-surface-variant hover:text-secondary transition-all flex items-center gap-1.5 focus:outline-none">
                 <Zap className="w-4 h-4" />
                 <span className="text-[11px] font-mono uppercase tracking-wider">Live</span>
               </button>
-              <button className="text-on-surface-variant hover:text-secondary transition-all relative focus:outline-none">
+              <button className="electron-no-drag text-on-surface-variant hover:text-secondary transition-all relative focus:outline-none">
                 <Bell className="w-4 h-4" />
               </button>
             </div>

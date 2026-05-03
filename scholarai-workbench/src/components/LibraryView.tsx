@@ -1,10 +1,19 @@
-﻿import { FileText, ExternalLink, Library, Layers, ChevronDown, ChevronRight } from 'lucide-react';
-import { useMemo, useState } from 'react';
+﻿import { FileText, ExternalLink, Library, Layers, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../App';
+import { api } from '../api';
 
 const MODE_KEY = 'kn_graph_library_mode';
 
 type Mode = 'papers' | 'variables';
+type PaperFileAvailability = {
+  pdf: boolean;
+  markdown: boolean;
+  html: boolean;
+};
+type PaperFileStatus = PaperFileAvailability & {
+  loading: boolean;
+};
 
 function firstTitle(v: Record<string, unknown>, paperId: string): string {
   const pretty = (s: string): string => String(s || '').replace(/\.pdf$/i, '').replace(/__/g, ' ').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
@@ -26,13 +35,16 @@ export default function LibraryView() {
     graphData,
     setSelectedPaperId,
     setSelectedPaperLibraryId,
+    setSelectedPaperPreferredType,
     setSelectedNodeId,
     setSelectedNodeLibraryId,
+    setSelectedPaperRawId,
     setCurrentView,
     selectedLibraryIds,
   } = useApp();
   const [expandedPapers, setExpandedPapers] = useState<Record<string, boolean>>({});
   const [mode, setMode] = useState<Mode>(() => (localStorage.getItem(MODE_KEY) as Mode) || 'papers');
+  const [paperFilesByScopedKey, setPaperFilesByScopedKey] = useState<Record<string, PaperFileStatus>>({});
 
   const variables = useMemo(() => (graphData?.nodes || []).filter((n) => String(n.type || '') === 'variable'), [graphData]);
 
@@ -40,8 +52,9 @@ export default function LibraryView() {
     const paperMap = graphData?.paper_map || {};
     return Object.entries(paperMap).map(([scopedKey, detail]) => {
       const d = (detail || {}) as Record<string, unknown>;
-      const paperId = String(d.paper_id || scopedKey.split('::').at(-1) || scopedKey);
-      const rawPaperId = String(d.paper_id_raw || '');
+      const mappedPaperId = String(d.paper_id || scopedKey.split('::').at(-1) || scopedKey).trim();
+      const paperId = mappedPaperId.includes('::') ? String(mappedPaperId.split('::').at(-1) || mappedPaperId) : mappedPaperId;
+      const rawPaperId = String(d.paper_id_raw || '').trim();
       const libraryId = String(d.library_id || scopedKey.split('::')[0] || '');
       const paperVars = variables.filter((v) => {
         const src = String(v.latest_concept_source?.paper_id || '');
@@ -54,24 +67,68 @@ export default function LibraryView() {
         rawPaperId,
         libraryId,
         title: firstTitle(d, paperId),
-        pdf: String(d.source_pdf_path || ''),
-        md: String(d.source_md_path || ''),
-        html: String(d.offline_html_path || ''),
         sourcePdfName: String(d.source_pdf_name || ''),
         variables: paperVars,
       };
     }).sort((a, b) => a.paperId.localeCompare(b.paperId));
   }, [graphData, variables]);
 
-  const openLocal = async (p: string) => {
-    const target = String(p || '').trim();
-    if (!target) return;
-    const shellApi = (window as unknown as { desktopShell?: { openLocalPath?: (x: string) => Promise<{ ok: boolean; error?: string }> } }).desktopShell;
-    if (shellApi?.openLocalPath) {
-      await shellApi.openLocalPath(target);
-      return;
+  useEffect(() => {
+    let cancelled = false;
+    const entries = paperList.map((p) => ({
+      scopedKey: p.scopedKey,
+      paperId: p.paperId,
+      rawPaperId: p.rawPaperId,
+      libraryId: p.libraryId,
+    }));
+    if (!entries.length) {
+      setPaperFilesByScopedKey({});
+      return () => { cancelled = true; };
     }
-    window.open(`file:///${target.replace(/\\/g, '/')}`, '_blank');
+
+    setPaperFilesByScopedKey((prev) => {
+      const next: Record<string, PaperFileStatus> = {};
+      for (const p of entries) {
+        next[p.scopedKey] = prev[p.scopedKey] || { pdf: false, markdown: false, html: false, loading: true };
+        next[p.scopedKey].loading = true;
+      }
+      return next;
+    });
+
+    (async () => {
+      const next: Record<string, PaperFileStatus> = {};
+      await Promise.all(entries.map(async (p) => {
+        try {
+          let files = await api.graph.paperFiles(p.paperId, p.libraryId);
+          if (!files.files.pdf && !files.files.markdown && !files.files.html && p.rawPaperId && p.rawPaperId !== p.paperId) {
+            files = await api.graph.paperFiles(p.rawPaperId, p.libraryId);
+          }
+          next[p.scopedKey] = {
+            pdf: !!files.files.pdf,
+            markdown: !!files.files.markdown,
+            html: !!files.files.html,
+            loading: false,
+          };
+        } catch {
+          next[p.scopedKey] = { pdf: false, markdown: false, html: false, loading: false };
+        }
+      }));
+      if (!cancelled) setPaperFilesByScopedKey(next);
+    })();
+
+    return () => { cancelled = true; };
+  }, [paperList]);
+
+  const setSelectedPaper = (paperId: string, libraryId: string) => {
+    setSelectedPaperId(paperId);
+    setSelectedPaperLibraryId(libraryId);
+  };
+
+  const openInReader = (paperId: string, libraryId: string, rawPaperId: string, preferredType: 'pdf' | 'markdown' | 'html' | null) => {
+    setSelectedPaper(paperId, libraryId);
+    setSelectedPaperRawId(rawPaperId || null);
+    setSelectedPaperPreferredType(preferredType);
+    setCurrentView('reader');
   };
 
   const variableRows = useMemo(() => {
@@ -108,6 +165,11 @@ export default function LibraryView() {
             const expanded = !!expandedPapers[p.scopedKey];
             const previewVars = p.variables.slice(0, 5);
             const remain = Math.max(0, p.variables.length - 5);
+            const detected = paperFilesByScopedKey[p.scopedKey];
+            const hasPdf = !!detected?.pdf;
+            const hasMd = !!detected?.markdown;
+            const hasHtml = !!detected?.html;
+            const loadingFiles = !detected || !!detected.loading;
             return (
               <div key={p.scopedKey} className="p-4 bg-surface-container-lowest border border-outline-variant rounded-xl">
                 <div className="flex items-center justify-between gap-3">
@@ -118,12 +180,17 @@ export default function LibraryView() {
                       <div className="text-xs text-on-surface-variant">{p.paperId}</div>
                     </div>
                   </button>
-                  <div className="flex items-center gap-2">
-                    {p.pdf && <button onClick={() => void openLocal(p.pdf)} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />PDF</button>}
-                    {p.md && <button onClick={() => void openLocal(p.md)} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />MD</button>}
-                    {!p.md && p.html && <button onClick={() => void openLocal(p.html)} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />HTML</button>}
-                    <button onClick={() => { setSelectedPaperId(p.paperId); setSelectedPaperLibraryId(p.libraryId); setCurrentView('reader'); }} className="text-xs px-2 py-1 rounded bg-secondary text-white">查看文献</button>
-                  </div>
+                  {loadingFiles ? (
+                    <div className="w-6 h-6 rounded-full border border-outline-variant bg-surface-container flex items-center justify-center" title="加载中">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-secondary" />
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      {hasPdf && <button onClick={() => openInReader(p.paperId, p.libraryId, p.rawPaperId, 'pdf')} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />PDF</button>}
+                      {hasMd && <button onClick={() => openInReader(p.paperId, p.libraryId, p.rawPaperId, 'markdown')} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />MD</button>}
+                      {hasHtml && <button onClick={() => openInReader(p.paperId, p.libraryId, p.rawPaperId, 'html')} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />HTML</button>}
+                    </div>
+                  )}
                 </div>
                 <div className="mt-2 text-xs text-on-surface-variant">变量: {previewVars.map((v) => v.label || v.name || v.id).join('、') || '无'}{remain > 0 && `（+${remain} 个已折叠）`}</div>
                 {expanded && (
