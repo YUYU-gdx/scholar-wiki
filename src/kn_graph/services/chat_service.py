@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -256,6 +257,98 @@ class ChatService:
         saved = registry.update_config(body)
         saved["config_path"] = str(registry.config_path)
         return saved
+
+    def _translation_config_path(self) -> Path:
+        return self._settings.data_dir / "chat" / "translation_provider_config.json"
+
+    def get_translation_provider_config(self) -> dict[str, Any]:
+        path = self._translation_config_path()
+        if not path.exists():
+            return {
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+                "api_key": "",
+                "base_url": "https://api.deepseek.com",
+                "endpoint_url": "https://api.deepseek.com/v1/chat/completions",
+                "target_lang": "zh",
+            }
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        return {
+            "provider": str(data.get("provider", "deepseek") or "deepseek"),
+            "model": str(data.get("model", "deepseek-v4-flash") or "deepseek-v4-flash"),
+            "api_key": str(data.get("api_key", "") or ""),
+            "base_url": str(data.get("base_url", "https://api.deepseek.com") or "https://api.deepseek.com"),
+            "endpoint_url": str(data.get("endpoint_url", "https://api.deepseek.com/v1/chat/completions") or "https://api.deepseek.com/v1/chat/completions"),
+            "target_lang": str(data.get("target_lang", "zh") or "zh"),
+        }
+
+    def save_translation_provider_config(self, body: dict[str, Any]) -> dict[str, Any]:
+        current = self.get_translation_provider_config()
+        next_payload = dict(current)
+        for key in ("provider", "model", "api_key", "base_url", "endpoint_url", "target_lang"):
+            if key in body:
+                next_payload[key] = str(body.get(key, "") or "").strip()
+        path = self._translation_config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(next_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return self.get_translation_provider_config()
+
+    def translate_text(
+        self,
+        text: str,
+        target_lang: str = "zh",
+        provider: str = "deepseek",
+        model: str = "deepseek-v4-flash",
+        api_key: str = "",
+        base_url: str = "",
+        endpoint_url: str = "",
+    ) -> dict[str, Any]:
+        src = str(text or "").strip()
+        if not src:
+            raise ValueError("text_required")
+        cfg = self.get_translation_provider_config()
+        resolved_provider = str(provider or cfg.get("provider") or "deepseek").strip()
+        resolved_model = str(model or cfg.get("model") or "deepseek-v4-flash").strip()
+        resolved_target = str(target_lang or cfg.get("target_lang") or "zh").strip() or "zh"
+        resolved_api_key = str(api_key or cfg.get("api_key") or "").strip()
+        resolved_base_url = str(base_url or cfg.get("base_url") or "").strip()
+        resolved_endpoint = str(endpoint_url or cfg.get("endpoint_url") or "").strip()
+
+        if not resolved_endpoint and resolved_base_url:
+            resolved_endpoint = resolved_base_url.rstrip("/") + "/v1/chat/completions"
+        if not resolved_endpoint:
+            resolved_endpoint = "https://api.deepseek.com/v1/chat/completions"
+        if not resolved_base_url:
+            resolved_base_url = resolved_endpoint.rsplit("/", 3)[0] if "/v1/" in resolved_endpoint else resolved_endpoint
+
+        ProviderRegistry = _load_provider_registry_class()
+        registry = ProviderRegistry(config_path=Path(self._settings.llm_provider_config_path))
+        options = {
+            "api_key": resolved_api_key,
+            "base_url": resolved_endpoint,
+            "timeout_seconds": 90,
+            "temperature": 0.1,
+        }
+        messages = [
+            {"role": "system", "content": f"You are a translator. Translate the user text into {resolved_target}. Output translation only."},
+            {"role": "user", "content": src},
+        ]
+        begin = time.perf_counter()
+        client = registry.create_message_client(provider=resolved_provider, model=resolved_model, options=options)
+        translated = str(client.complete_messages(messages=messages, timeout_seconds=90) or "").strip()
+        latency_ms = int((time.perf_counter() - begin) * 1000)
+        return {
+            "translated_text": translated,
+            "provider": resolved_provider,
+            "model": resolved_model,
+            "target_lang": resolved_target,
+            "latency_ms": latency_ms,
+        }
 
     def test_provider(self, provider: str, model: str = "", options: dict[str, Any] | None = None, prompt: str = "") -> dict[str, Any]:
         if options is None:

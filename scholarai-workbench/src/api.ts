@@ -14,6 +14,8 @@ import type {
   LiteratureSearchResponse,
   LiteratureAnswerResponse,
   WorkspaceLayout,
+  TranslationProviderConfig,
+  TranslateResponse,
 } from './types';
 
 const API_BASE = '';
@@ -117,6 +119,32 @@ export const api = {
       return jsonFetch('/chat/provider-test', {
         method: 'POST',
         body: JSON.stringify({ provider, model, prompt }),
+      });
+    },
+    getTranslationProviderConfig(): Promise<TranslationProviderConfig> {
+      return jsonFetch('/chat/translation-provider-config');
+    },
+    saveTranslationProviderConfig(config: Partial<TranslationProviderConfig>): Promise<{ ok: boolean; config: TranslationProviderConfig }> {
+      return jsonFetch('/chat/translation-provider-config', {
+        method: 'POST',
+        body: JSON.stringify(config),
+      });
+    },
+    translate(
+      text: string,
+      options: Partial<TranslationProviderConfig> = {},
+    ): Promise<TranslateResponse> {
+      return jsonFetch('/chat/translate', {
+        method: 'POST',
+        body: JSON.stringify({
+          text,
+          target_lang: options.target_lang || 'zh',
+          provider: options.provider || 'deepseek',
+          model: options.model || 'deepseek-v4-flash',
+          api_key: options.api_key || '',
+          base_url: options.base_url || '',
+          endpoint_url: options.endpoint_url || '',
+        }),
       });
     },
     getCodexConfig(): Promise<Record<string, unknown>> {

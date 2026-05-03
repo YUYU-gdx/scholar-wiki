@@ -357,4 +357,21 @@ export interface PaperFiles {
   default_view: 'pdf' | 'markdown' | 'html' | 'none';
 }
 
-export type View = 'library' | 'graph' | 'chat' | 'reader' | 'pipeline';
+export interface TranslationProviderConfig {
+  provider: string;
+  model: string;
+  api_key: string;
+  base_url: string;
+  endpoint_url: string;
+  target_lang: string;
+}
+
+export interface TranslateResponse {
+  translated_text: string;
+  provider: string;
+  model: string;
+  target_lang: string;
+  latency_ms: number;
+}
+
+export type View = 'library' | 'graph' | 'chat' | 'reader' | 'pipeline' | 'settings';

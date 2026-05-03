@@ -92,10 +92,22 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
     <div className="flex-1 flex overflow-hidden relative">
       <div className="flex-1 flex flex-col overflow-hidden">
         {document.type === 'pdf' && document.data instanceof Uint8Array && (
-          <PdfViewer data={document.data} fileName={document.file_name} />
+          <PdfViewer
+            data={document.data}
+            fileName={document.file_name}
+            paperId={paperId}
+            libraryId={libraryId}
+            markdownPath={String(paperFiles?.files?.markdown?.path || '')}
+          />
         )}
         {document.type === 'markdown' && typeof document.data === 'string' && (
-          <MarkdownEditor content={document.data} fileName={document.file_name} absolutePath={String(document.absolute_path || '')} />
+          <MarkdownEditor
+            paperId={paperId}
+            libraryId={libraryId}
+            content={document.data}
+            fileName={document.file_name}
+            absolutePath={String(document.absolute_path || '')}
+          />
         )}
         {document.type === 'html' && typeof document.data === 'string' && (
           <div className="flex-1 overflow-auto p-6 bg-surface-container-lowest">
@@ -106,7 +118,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
         )}
       </div>
 
-      {document.type === 'pdf' && (
+      {(document.type === 'pdf' || document.type === 'markdown') && (
         <AnnotationSidebar
           paperId={paperId}
           isOpen={sidebarOpen}
@@ -114,12 +126,12 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
         />
       )}
 
-      {!sidebarOpen && document.type === 'pdf' && (
+      {!sidebarOpen && (document.type === 'pdf' || document.type === 'markdown') && (
         <button
           className="absolute right-4 top-16 px-2 py-1 text-[10px] font-mono bg-surface-container border border-outline-variant rounded hover:bg-surface-container-low z-10 shadow-sm"
           onClick={() => setSidebarOpen(true)}
         >
-          Annotations
+          Notes
         </button>
       )}
 

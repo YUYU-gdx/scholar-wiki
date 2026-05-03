@@ -157,3 +157,26 @@ class ProviderConfig(BaseModel):
     default_provider: str = ""
     providers: list[ProviderItem] = []
     config_path: str = ""
+
+
+class TranslateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    text: str = ""
+    target_lang: str = "zh"
+    provider: str = "deepseek"
+    model: str = "deepseek-v4-flash"
+    api_key: str = ""
+    base_url: str = ""
+    endpoint_url: str = ""
+
+
+class TranslationProviderConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    provider: str = "deepseek"
+    model: str = "deepseek-v4-flash"
+    api_key: str = ""
+    base_url: str = ""
+    endpoint_url: str = ""
+    target_lang: str = "zh"

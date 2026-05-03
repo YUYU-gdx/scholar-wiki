@@ -10,6 +10,7 @@ from sse_starlette.sse import EventSourceResponse
 from kn_graph.models.chat import (
     CreateSessionRequest,
     SendMessageRequest,
+    TranslateRequest,
 )
 from kn_graph.services.chat_service import ChatService
 
@@ -360,5 +361,33 @@ def create_router(chat_service: ChatService) -> APIRouter:
             return result
         except Exception as exc:
             return JSONResponse(status_code=400, content={"error": "provider_test_failed", "detail": str(exc)})
+
+    @router.get("/translation-provider-config")
+    async def get_translation_provider_config():
+        return chat_service.get_translation_provider_config()
+
+    @router.post("/translation-provider-config")
+    async def save_translation_provider_config(body: dict[str, Any]):
+        saved = chat_service.save_translation_provider_config(body)
+        return {"ok": True, "config": saved}
+
+    @router.post("/translate")
+    async def translate(body: TranslateRequest):
+        text = str(body.text or "").strip()
+        if not text:
+            return JSONResponse(status_code=400, content={"error": "text_required"})
+        try:
+            result = chat_service.translate_text(
+                text=text,
+                target_lang=str(body.target_lang or "zh"),
+                provider=str(body.provider or "deepseek"),
+                model=str(body.model or "deepseek-v4-flash"),
+                api_key=str(body.api_key or ""),
+                base_url=str(body.base_url or ""),
+                endpoint_url=str(body.endpoint_url or ""),
+            )
+            return result
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"error": "translation_failed", "detail": str(exc)})
 
     return router
