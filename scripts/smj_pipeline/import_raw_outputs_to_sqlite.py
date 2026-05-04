@@ -126,5 +126,66 @@ def main() -> None:
     )
 
 
+def main_inline(*, db_path: str, raw_output_jsonl: Path, apply_schema: bool = False) -> dict[str, Any]:
+    """Programmatic entry point used by pipeline_runtime."""
+    root = Path(__file__).resolve().parent
+    extractor = _load_module("smj_pipeline_extractor_import_inline", root / "extraction" / "extractor.py")
+    repo_mod = _load_module("smj_pipeline_sqlite_repo_import_inline", root / "storage" / "sqlite_repo.py")
+    SqliteRepo = getattr(repo_mod, "SqliteRepo")
+
+    total = 0
+    ok = 0
+    failed = 0
+
+    db = Path(db_path).resolve()
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+
+    repo = SqliteRepo(conn)
+    if apply_schema:
+        repo.apply_schema()
+
+    for row in _iter_jsonl(raw_output_jsonl):
+        total += 1
+        if str(row.get("status", "")).strip() != "ok":
+            failed += 1
+            continue
+        paper_id = str(row.get("paper_id", "") or row.get("doi", "")).strip()
+        if not paper_id:
+            failed += 1
+            continue
+        raw_response = str(row.get("raw_response", "") or "")
+        try:
+            bundle = extractor.parse_extraction_response(raw_response)
+        except Exception:
+            failed += 1
+            continue
+        payload: dict[str, Any] = {
+            "doi": str(row.get("doi", "") or paper_id),
+            "offline_html_path": str(row.get("offline_html_path", "") or row.get("full_html_path", "") or ""),
+            "article_url": str(row.get("article_url", "") or ""),
+            "publication_date": str(row.get("publication_date", "") or row.get("pub_date", "") or ""),
+            "online_date": str(row.get("online_date", "") or ""),
+            "publication_year": _coerce_optional_int(row.get("publication_year") or row.get("pub_year") or row.get("year")),
+            "paper_citation_count": _coerce_optional_int(row.get("paper_citation_count") or row.get("citation_count")),
+            "metadata_source": "raw_output_jsonl",
+            "paper_domains": list(getattr(bundle, "paper_domains", []) or []),
+            "extractability_status": getattr(bundle, "extractability_status", ""),
+            "paper_type": getattr(bundle, "paper_type", ""),
+            "extractability_reason": getattr(bundle, "extractability_reason", ""),
+            "extractability_evidence_section": getattr(bundle, "extractability_evidence_section", ""),
+            "variable_definitions": list(getattr(bundle, "variable_definitions", []) or []),
+            "direct_effects": list(getattr(bundle, "direct_effects", []) or []),
+            "moderations": list(getattr(bundle, "moderations", []) or []),
+            "interactions": list(getattr(bundle, "interactions", []) or []),
+        }
+        repo.replace_paper_bundle(paper_id, payload)
+        ok += 1
+
+    conn.close()
+    return {"total_rows": total, "ok_rows": ok, "failed_rows": failed}
+
+
 if __name__ == "__main__":
     main()
