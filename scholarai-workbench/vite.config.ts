@@ -8,6 +8,7 @@ export default defineConfig(({mode}) => {
   const backendPort = env.KN_GRAPH_PORT || '8013';
   const backendTarget = `http://127.0.0.1:${backendPort}`;
   return {
+    base: './',
     plugins: [react(), tailwindcss()],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
