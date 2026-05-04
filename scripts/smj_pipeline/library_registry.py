@@ -394,9 +394,10 @@ def delete_library(
     deleted_workspace = False
     if delete_workspace_data and workspace_path_text:
         workspace_path = Path(workspace_path_text).resolve()
-        configured_ws = _get_configured_workspace_root()
-        ws_base = (configured_ws.resolve() if configured_ws is not None else workspace_root_base_from_env().resolve())
-        if workspace_path != ws_base and ws_base in workspace_path.parents and workspace_path.exists() and workspace_path.is_dir():
+        # Single-track behavior: if registry points to a real directory, remove it.
+        # Keep a minimal safety check to avoid deleting root-like paths.
+        is_safe_leaf = len(workspace_path.parts) >= 3 and workspace_path.name.strip() not in {"", ".", ".."}
+        if is_safe_leaf and workspace_path.exists() and workspace_path.is_dir():
             shutil.rmtree(workspace_path, ignore_errors=True)
             deleted_workspace = True
 

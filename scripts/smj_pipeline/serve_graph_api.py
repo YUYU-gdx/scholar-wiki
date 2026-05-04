@@ -1183,48 +1183,37 @@ def make_handler(
         global_settings_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
         return out
 
+    _PROVIDER_PRESETS = [
+        {"id": "deepseek", "name": "DeepSeek", "base_url": "https://api.deepseek.com"},
+        {"id": "openai", "name": "OpenAI", "base_url": "https://api.openai.com"},
+        {"id": "anthropic", "name": "Anthropic", "base_url": "https://api.anthropic.com"},
+        {"id": "gemini", "name": "Gemini", "base_url": "https://generativelanguage.googleapis.com"},
+        {"id": "silicon", "name": "SiliconFlow", "base_url": "https://api.siliconflow.cn"},
+        {"id": "dashscope", "name": "????", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/"},
+        {"id": "doubao", "name": "??", "base_url": "https://ark.cn-beijing.volces.com/api/v3/"},
+        {"id": "zhipu", "name": "??", "base_url": "https://open.bigmodel.cn/api/paas/v4/"},
+        {"id": "moonshot", "name": "Moonshot", "base_url": "https://api.moonshot.cn"},
+        {"id": "minimax", "name": "MiniMax", "base_url": "https://api.minimaxi.com/v1/"},
+        {"id": "openrouter", "name": "OpenRouter", "base_url": "https://openrouter.ai/api/v1/"},
+        {"id": "groq", "name": "Groq", "base_url": "https://api.groq.com/openai"},
+        {"id": "ollama", "name": "Ollama", "base_url": "http://localhost:11434"},
+        {"id": "lmstudio", "name": "LM Studio", "base_url": "http://localhost:1234"},
+        {"id": "new-api", "name": "New API", "base_url": "http://localhost:3000"},
+    ]
+    _PROVIDER_MAP = {item["id"]: item for item in _PROVIDER_PRESETS}
+
+    def _endpoint_url(base_url: str) -> str:
+        root = str(base_url or "").strip().rstrip("/")
+        return f"{root}/v1/chat/completions" if root else ""
+
     def _settings_schema_payload() -> dict[str, Any]:
         return {
             "categories": [
-                {
-                    "id": "pipeline",
-                    "title": "流水线",
-                    "restart_required": False,
-                    "fields": [
-                        {"key": "executor", "type": "select", "options": ["inline", "celery"]},
-                        {"key": "job_store_dsn", "type": "text"},
-                        {"key": "redis_url", "type": "text"},
-                        {"key": "mineru_api_key_env", "type": "text"},
-                        {"key": "mineru_base_url", "type": "text"},
-                        {"key": "mineru_model_version", "type": "text"},
-                        {"key": "llm_provider", "type": "text"},
-                        {"key": "llm_model", "type": "text"},
-                        {"key": "llm_api_key_env", "type": "text"},
-                        {"key": "llm_base_url", "type": "text"},
-                        {"key": "max_poll_seconds", "type": "number"},
-                        {"key": "poll_interval_seconds", "type": "number"},
-                        {"key": "max_retries", "type": "number"},
-                        {"key": "retry_delays", "type": "text"},
-                    ],
-                },
-                {"id": "llm_providers", "title": "LLM 提供方", "restart_required": False},
-                {
-                    "id": "translation",
-                    "title": "翻译",
-                    "restart_required": False,
-                    "fields": [
-                        {"key": "provider", "type": "text"},
-                        {"key": "model", "type": "text"},
-                        {"key": "api_key", "type": "password", "sensitive": True},
-                        {"key": "base_url", "type": "text"},
-                        {"key": "endpoint_url", "type": "text"},
-                        {"key": "target_lang", "type": "text"},
-                    ],
-                },
-                {"id": "codex_global", "title": "Codex 全局", "restart_required": True},
-                {"id": "library_defaults", "title": "文献库默认项", "restart_required": False},
+                {"id": "pipeline", "title": "Pipeline", "restart_required": False},
+                {"id": "translation", "title": "??", "restart_required": False},
+                {"id": "agent_settings", "title": "Agent ??", "restart_required": True},
             ],
-            "version": 1,
+            "version": 2,
         }
 
     def _get_pipeline_settings() -> dict[str, Any]:
@@ -1234,56 +1223,51 @@ def make_handler(
         if not isinstance(saved, dict):
             saved = {}
         defaults = {
-            "executor": str(os.getenv("PIPELINE_EXECUTOR", "inline") or "inline"),
-            "job_store_dsn": str(os.getenv("PIPELINE_JOB_STORE_DSN", "sqlite") or "sqlite"),
-            "redis_url": str(os.getenv("PIPELINE_REDIS_URL", "redis://127.0.0.1:6379/0") or "redis://127.0.0.1:6379/0"),
-            "mineru_api_key_env": "MINERU_API_KEY",
-            "mineru_base_url": "https://mineru.net/api/v4",
-            "mineru_model_version": "vlm",
-            "llm_provider": "",
-            "llm_model": "",
-            "llm_api_key_env": "",
-            "llm_base_url": "",
-            "max_poll_seconds": 3600,
-            "poll_interval_seconds": 8.0,
-            "max_retries": 3,
-            "retry_delays": "8,20,60",
+            "mineru_api_key": "",
+            "extraction_mode": "fast",
+            "fast_provider": "deepseek",
+            "fast_model": "deepseek-v4-flash",
+            "fast_api_key": "",
+            "fast_base_url": "https://api.deepseek.com",
+            "fast_endpoint_url": "https://api.deepseek.com/v1/chat/completions",
+            "agent_provider": "",
+            "agent_model": "",
+            "agent_note": "??????? Agent ????",
         }
         out = dict(defaults)
         out.update(saved)
+        provider_id = str(out.get("fast_provider", "") or "").strip().lower()
+        if provider_id in _PROVIDER_MAP and not str(out.get("fast_base_url", "") or "").strip():
+            out["fast_base_url"] = _PROVIDER_MAP[provider_id]["base_url"]
+        if not str(out.get("fast_endpoint_url", "") or "").strip():
+            out["fast_endpoint_url"] = _endpoint_url(str(out.get("fast_base_url", "") or ""))
+        out["provider_presets"] = list(_PROVIDER_PRESETS)
         return out
 
     def _validate_pipeline_settings(payload: dict[str, Any]) -> dict[str, Any]:
         out = dict(payload)
-        executor = str(out.get("executor", "inline") or "inline").strip().lower()
-        if executor not in {"inline", "celery"}:
-            raise ValueError("settings_validation_failed: pipeline.executor")
-        out["executor"] = executor
-        out["job_store_dsn"] = str(out.get("job_store_dsn", "") or "").strip()
-        out["redis_url"] = str(out.get("redis_url", "") or "").strip()
-        out["mineru_api_key_env"] = str(out.get("mineru_api_key_env", "MINERU_API_KEY") or "MINERU_API_KEY").strip()
-        out["mineru_base_url"] = str(out.get("mineru_base_url", "https://mineru.net/api/v4") or "https://mineru.net/api/v4").strip()
-        out["mineru_model_version"] = str(out.get("mineru_model_version", "vlm") or "vlm").strip()
-        out["llm_provider"] = str(out.get("llm_provider", "") or "").strip()
-        out["llm_model"] = str(out.get("llm_model", "") or "").strip()
-        out["llm_api_key_env"] = str(out.get("llm_api_key_env", "") or "").strip()
-        out["llm_base_url"] = str(out.get("llm_base_url", "") or "").strip()
-        try:
-            out["max_poll_seconds"] = max(30, min(86400, int(out.get("max_poll_seconds", 3600) or 3600)))
-            out["poll_interval_seconds"] = max(0.5, min(120.0, float(out.get("poll_interval_seconds", 8.0) or 8.0)))
-            out["max_retries"] = max(0, min(20, int(out.get("max_retries", 3) or 3)))
-        except Exception as exc:
-            raise ValueError("settings_validation_failed: pipeline.numeric_fields") from exc
-        retry_delays = str(out.get("retry_delays", "8,20,60") or "8,20,60").strip()
-        out["retry_delays"] = retry_delays or "8,20,60"
+        out["extraction_mode"] = str(out.get("extraction_mode", "fast") or "fast").strip().lower()
+        if out["extraction_mode"] not in {"fast", "agent"}:
+            raise ValueError("settings_validation_failed: pipeline.extraction_mode")
+        out["mineru_api_key"] = str(out.get("mineru_api_key", "") or "").strip()
+        out["fast_provider"] = str(out.get("fast_provider", "") or "").strip().lower()
+        out["fast_model"] = str(out.get("fast_model", "") or "").strip()
+        out["fast_api_key"] = str(out.get("fast_api_key", "") or "").strip()
+        out["fast_base_url"] = str(out.get("fast_base_url", "") or "").strip()
+        if out["fast_provider"] in _PROVIDER_MAP and not out["fast_base_url"]:
+            out["fast_base_url"] = _PROVIDER_MAP[out["fast_provider"]]["base_url"]
+        out["fast_endpoint_url"] = str(out.get("fast_endpoint_url", "") or "").strip() or _endpoint_url(out["fast_base_url"])
+        out["agent_provider"] = str(out.get("agent_provider", "") or "").strip()
+        out["agent_model"] = str(out.get("agent_model", "") or "").strip()
+        out["agent_note"] = str(out.get("agent_note", "") or "").strip()
         return out
 
     def _save_pipeline_settings(body: dict[str, Any]) -> dict[str, Any]:
         current = _get_pipeline_settings()
         next_payload = dict(current)
-        for k, v in body.items():
-            if k in current:
-                next_payload[k] = v
+        for k in current.keys():
+            if k in body:
+                next_payload[k] = body.get(k)
         next_payload = _validate_pipeline_settings(next_payload)
         store = _read_global_settings_store()
         categories = store.get("categories", {})
@@ -1293,25 +1277,6 @@ def make_handler(
         store["categories"] = categories
         _write_global_settings_store(store)
         return next_payload
-
-    def _get_library_defaults() -> dict[str, Any]:
-        registry = _current_library_registry()
-        return {
-            "default_library_id": str(registry.get("default_library_id", "") or ""),
-            "registry_path": str((libraries_index_root / "registry.json").resolve()),
-            "workspaces_dir": "",
-            "indexes_dir": str(libraries_index_root.resolve()),
-        }
-
-    def _save_library_defaults(body: dict[str, Any]) -> dict[str, Any]:
-        if _library_registry_mod is None:
-            raise RuntimeError("library_registry_unavailable")
-        default_library_id = str(body.get("default_library_id", "") or "").strip()
-        registry = _current_library_registry()
-        registry["default_library_id"] = default_library_id
-        registry_path = _library_registry_mod.registry_path_from_env(legacy_index_root=libraries_index_root)
-        _library_registry_mod.save_registry(registry_path, registry)
-        return _get_library_defaults()
 
     def _load_settings_payload() -> dict[str, Any]:
         store = _read_global_settings_store()
@@ -1325,29 +1290,27 @@ def make_handler(
             translation = {}
         if not isinstance(translation, dict):
             translation = {}
-        translation_defaults = {
-            "provider": "deepseek",
-            "model": "deepseek-v4-flash",
-            "api_key": "",
-            "base_url": "https://api.deepseek.com",
-            "endpoint_url": "https://api.deepseek.com/v1/chat/completions",
-            "target_lang": "zh",
+        translation_cfg = {
+            "provider": str(translation.get("provider", "deepseek") or "deepseek"),
+            "model": str(translation.get("model", "deepseek-v4-flash") or "deepseek-v4-flash"),
+            "api_key": str(translation.get("api_key", "") or ""),
+            "base_url": str(translation.get("base_url", "") or ""),
+            "endpoint_url": str(translation.get("endpoint_url", "") or ""),
+            "target_lang": str(translation.get("target_lang", "zh") or "zh"),
+            "recommendation": "?????? deepseek-v4-flash?",
+            "provider_presets": list(_PROVIDER_PRESETS),
         }
-        translation_cfg = dict(translation_defaults)
-        translation_cfg.update(translation)
-        provider_cfg: dict[str, Any] = {}
-        if provider_registry is not None:
-            provider_registry.reload()
-            provider_cfg = provider_registry.get_config()
-            provider_cfg["config_path"] = str(provider_registry.config_path)
+        provider_id = str(translation_cfg.get("provider", "") or "").strip().lower()
+        if provider_id in _PROVIDER_MAP and not str(translation_cfg.get("base_url", "") or "").strip():
+            translation_cfg["base_url"] = _PROVIDER_MAP[provider_id]["base_url"]
+        if not str(translation_cfg.get("endpoint_url", "") or "").strip():
+            translation_cfg["endpoint_url"] = _endpoint_url(str(translation_cfg.get("base_url", "") or ""))
         return {
             "schema": _settings_schema_payload(),
             "settings": {
                 "pipeline": _get_pipeline_settings(),
-                "llm_providers": provider_cfg,
                 "translation": translation_cfg,
-                "codex_global": _load_codex_config_payload(),
-                "library_defaults": _get_library_defaults(),
+                "agent_settings": _load_codex_config_payload(),
             },
             "updated_at": str(store.get("updated_at", "") or ""),
         }
@@ -1356,26 +1319,23 @@ def make_handler(
         key = str(category or "").strip().lower()
         if key == "pipeline":
             return _save_pipeline_settings(body)
-        if key == "llm_providers":
-            if provider_registry is None:
-                raise RuntimeError("provider_config_unavailable")
-            saved = provider_registry.update_config(body)
-            saved["config_path"] = str(provider_registry.config_path)
-            return saved
         if key == "translation":
             current = _load_settings_payload()["settings"].get("translation", {})
             next_payload = dict(current if isinstance(current, dict) else {})
             for field in ("provider", "model", "api_key", "base_url", "endpoint_url", "target_lang"):
                 if field in body:
                     next_payload[field] = str(body.get(field, "") or "").strip()
+            provider_id = str(next_payload.get("provider", "") or "").strip().lower()
+            if provider_id in _PROVIDER_MAP and not str(next_payload.get("base_url", "") or "").strip():
+                next_payload["base_url"] = _PROVIDER_MAP[provider_id]["base_url"]
+            if not str(next_payload.get("endpoint_url", "") or "").strip():
+                next_payload["endpoint_url"] = _endpoint_url(str(next_payload.get("base_url", "") or ""))
             translation_path = Path("outputs/chat/translation_provider_config.json")
             translation_path.parent.mkdir(parents=True, exist_ok=True)
             translation_path.write_text(json.dumps(next_payload, ensure_ascii=False, indent=2), encoding="utf-8")
             return next_payload
-        if key == "codex_global":
+        if key == "agent_settings":
             return _save_codex_config_payload(body)
-        if key == "library_defaults":
-            return _save_library_defaults(body)
         raise KeyError(f"unknown_settings_category:{key}")
 
     class Handler(BaseHTTPRequestHandler):
