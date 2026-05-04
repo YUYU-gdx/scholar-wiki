@@ -6,6 +6,23 @@ type SectionState = { saving: boolean; message: string };
 type ProviderPreset = { id: string; name: string; base_url: string };
 
 const EMPTY_STATE: SectionState = { saving: false, message: '' };
+const DEFAULT_PROVIDER_PRESETS: ProviderPreset[] = [
+  { id: 'deepseek', name: 'DeepSeek', base_url: 'https://api.deepseek.com' },
+  { id: 'openai', name: 'OpenAI', base_url: 'https://api.openai.com' },
+  { id: 'anthropic', name: 'Anthropic', base_url: 'https://api.anthropic.com' },
+  { id: 'gemini', name: 'Gemini', base_url: 'https://generativelanguage.googleapis.com' },
+  { id: 'silicon', name: 'SiliconFlow', base_url: 'https://api.siliconflow.cn' },
+  { id: 'dashscope', name: '阿里百炼', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/' },
+  { id: 'doubao', name: '豆包', base_url: 'https://ark.cn-beijing.volces.com/api/v3/' },
+  { id: 'zhipu', name: '智谱', base_url: 'https://open.bigmodel.cn/api/paas/v4/' },
+  { id: 'moonshot', name: 'Moonshot', base_url: 'https://api.moonshot.cn' },
+  { id: 'minimax', name: 'MiniMax', base_url: 'https://api.minimaxi.com/v1/' },
+  { id: 'openrouter', name: 'OpenRouter', base_url: 'https://openrouter.ai/api/v1/' },
+  { id: 'groq', name: 'Groq', base_url: 'https://api.groq.com/openai' },
+  { id: 'ollama', name: 'Ollama', base_url: 'http://localhost:11434' },
+  { id: 'lmstudio', name: 'LM Studio', base_url: 'http://localhost:1234' },
+  { id: 'new-api', name: 'New API', base_url: 'http://localhost:3000' },
+];
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -21,13 +38,24 @@ export default function SettingsView() {
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [sectionState, setSectionState] = useState<Record<string, SectionState>>({});
 
-  const categories = useMemo(() => payload?.schema?.categories ?? [], [payload]);
+  const categories = useMemo(() => {
+    const raw = payload?.schema?.categories ?? [];
+    return raw
+      .map((c) => ({ ...c, id: c.id === 'codex_global' ? 'agent_settings' : c.id }))
+      .filter((c) => c.id === 'pipeline' || c.id === 'translation' || c.id === 'agent_settings');
+  }, [payload]);
 
   useEffect(() => {
     api.settings.getAll()
       .then((data) => {
+        const settings = { ...(data.settings ?? {}) } as Record<string, Record<string, unknown>>;
+        if (settings.codex_global && !settings.agent_settings) {
+          settings.agent_settings = settings.codex_global;
+        }
+        delete settings.llm_providers;
+        delete settings.library_defaults;
         setPayload(data);
-        setDrafts(data.settings ?? {});
+        setDrafts(settings);
       })
       .catch((err) => setLoadError((err as Error).message))
       .finally(() => setLoading(false));
@@ -77,7 +105,9 @@ export default function SettingsView() {
           const id = category.id;
           const state = sectionState[id] ?? EMPTY_STATE;
           const values = asRecord(drafts[id]);
-          const presets = ((values.provider_presets as ProviderPreset[]) || []);
+          const presets = (((values.provider_presets as ProviderPreset[]) || []).length > 0
+            ? ((values.provider_presets as ProviderPreset[]) || [])
+            : DEFAULT_PROVIDER_PRESETS);
           return (
             <div key={id} className="bg-surface-container-lowest border border-outline-variant rounded-2xl p-5 space-y-4">
               <div className="flex items-center justify-between gap-4">
