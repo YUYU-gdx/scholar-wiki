@@ -34,30 +34,30 @@ class App:
         self.server_proc: subprocess.Popen[str] | None = None
         self.selected_artifact = DEFAULT_ARTIFACT
 
-        title = tk.Label(root, text="SMJ 图谱桌面启动�?, font=("Microsoft YaHei", 15, "bold"))
+        title = tk.Label(root, text="SMJ Graph Desktop Launcher", font=("Microsoft YaHei", 15, "bold"))
         title.pack(anchor="w", padx=12, pady=(12, 6))
 
-        hint = tk.Label(root, text="流程: 1) 导入文件解析 �?导入SQLite 2) 打开展示", fg="#334")
+        hint = tk.Label(root, text="Flow: 1) Import file & parse  2) Open viewer", fg="#334")
         hint.pack(anchor="w", padx=12, pady=(0, 8))
 
         btn_wrap = tk.Frame(root)
         btn_wrap.pack(anchor="w", padx=12, pady=4)
 
-        self.btn_file = tk.Button(btn_wrap, text="导入文件并解�?, width=18, command=self.import_file)
+        self.btn_file = tk.Button(btn_wrap, text="Import file & parse", width=18, command=self.import_file)
         self.btn_file.grid(row=0, column=0, padx=(0, 8))
 
-        self.btn_open = tk.Button(btn_wrap, text="打开展示", width=18, command=self.open_graph)
+        self.btn_open = tk.Button(btn_wrap, text="Open viewer", width=18, command=self.open_graph)
         self.btn_open.grid(row=0, column=1)
 
         path_wrap = tk.Frame(root)
         path_wrap.pack(fill="x", padx=12, pady=8)
-        tk.Label(path_wrap, text="当前 artifact:").pack(side="left")
+        tk.Label(path_wrap, text="Current artifact:").pack(side="left")
         self.path_var = tk.StringVar(value=str(self.selected_artifact))
         tk.Entry(path_wrap, textvariable=self.path_var).pack(side="left", fill="x", expand=True, padx=(8, 0))
 
         log_frame = tk.Frame(root)
         log_frame.pack(fill="both", expand=True, padx=12, pady=8)
-        tk.Label(log_frame, text="日志").pack(anchor="w")
+        tk.Label(log_frame, text="Log").pack(anchor="w")
         self.log = tk.Text(log_frame, height=20, wrap="word")
         self.log.pack(fill="both", expand=True, pady=(4, 0))
 
@@ -87,13 +87,13 @@ class App:
                 self._append(done_msg)
             except Exception as exc:
                 self._append(f"ERROR: {exc}")
-                messagebox.showerror("执行失败", str(exc))
+                messagebox.showerror("Execution failed", str(exc))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def import_file(self) -> None:
         selected = filedialog.askopenfilename(
-            title="选择 frontend artifact JSON",
+            title="Select frontend artifact JSON",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
             initialdir=str(OUT_DIR),
         )
@@ -111,17 +111,17 @@ class App:
             "--output-json",
             str(DEFAULT_VIEWS),
         ]
-        self._run_cmd(cmd, "文件解析完成: graph_views.json 已更�?)
+        self._run_cmd(cmd, "File parse complete: graph_views.json updated")
 
     def open_graph(self) -> None:
         if self.server_proc and self.server_proc.poll() is None:
-            self._append("服务已在运行，直接打开浏览�?)
+            self._append("Server already running, opening browser...")
             port = int(self.server_proc.args[self.server_proc.args.index("--port") + 1])  # type: ignore[index]
             webbrowser.open(f"http://127.0.0.1:{port}/healthz")
             return
 
         if not DEFAULT_VIEWS.exists():
-            messagebox.showwarning("缺少数据", "未找�?graph_views.json，请先导入文件或数据库�?)
+            messagebox.showwarning("Missing data", "graph_views.json not found, import a file first.")
             return
 
         port = _find_free_port()
@@ -137,7 +137,7 @@ class App:
         ]
         self._append(">>> " + " ".join(cmd))
         self.server_proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        self._append(f"图谱服务已启�? http://127.0.0.1:{port}/healthz")
+        self._append(f"Graph server started at http://127.0.0.1:{port}/healthz")
         webbrowser.open(f"http://127.0.0.1:{port}/healthz")
 
     def on_close(self) -> None:
@@ -149,12 +149,10 @@ class App:
 def main() -> None:
     root = tk.Tk()
     app = App(root)
-    app._append("启动完成�?)
-    app._append("建议先执�? 导入文件并解�?)
+    app._append("Launcher started")
+    app._append("Step 1: Import file & parse")
     root.mainloop()
 
 
 if __name__ == "__main__":
     main()
-
-
