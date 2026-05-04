@@ -70,26 +70,34 @@ export default function SettingsView() {
     setDrafts((prev) => ({ ...prev, [category]: { ...asRecord(prev[category]), [key]: value } }));
   };
 
-  const applyProviderPreset = (category: string, providerId: string) => {
+  const applyProviderPreset = async (category: string, providerId: string) => {
     const values = asRecord(drafts[category]);
     const presets = asPresets(values.provider_presets);
     const hit = presets.find((p) => p.id === providerId);
     if (!hit) return;
+    // Update local fields immediately so the UI reflects the switch
     if (category === 'pipeline') {
       updateField('pipeline', 'fast_provider', providerId);
       updateField('pipeline', 'fast_base_url', hit.base_url);
       updateField('pipeline', 'fast_endpoint_url', `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`);
-      return;
-    }
-    if (category === 'agent_settings') {
+    } else if (category === 'agent_settings') {
       updateField('agent_settings', 'provider', providerId);
       updateField('agent_settings', 'base_url', hit.base_url);
       updateField('agent_settings', 'endpoint_url', `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`);
-      return;
+    } else {
+      updateField('translation', 'provider', providerId);
+      updateField('translation', 'base_url', hit.base_url);
+      updateField('translation', 'endpoint_url', `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`);
     }
-    updateField('translation', 'provider', providerId);
-    updateField('translation', 'base_url', hit.base_url);
-    updateField('translation', 'endpoint_url', `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`);
+    // Auto-save: backend returns the new provider's saved model/api_key
+    const current = asRecord(drafts[category]);
+    const { provider_presets: _drop1, recommendation: _drop2, ...body } = current;
+    try {
+      const res = await api.settings.updateCategory(category, body);
+      setDrafts((prev) => ({ ...prev, [category]: asRecord(res.config) }));
+    } catch (_err) {
+      // If save fails, user can still edit and click Save manually
+    }
   };
 
   const saveCategory = async (category: string) => {
