@@ -75,28 +75,30 @@ export default function SettingsView() {
     const presets = asPresets(values.provider_presets);
     const hit = presets.find((p) => p.id === providerId);
     if (!hit) return;
-    // Update local fields immediately so the UI reflects the switch
+    const endpoint = `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`;
+    // Build the body from current draft values + the new provider info,
+    // so the backend receives a consistent snapshot regardless of React batching.
+    const { provider_presets: _drop1, recommendation: _drop2, ...currentBody } = values;
+    let body: Record<string, unknown>;
     if (category === 'pipeline') {
-      updateField('pipeline', 'fast_provider', providerId);
-      updateField('pipeline', 'fast_base_url', hit.base_url);
-      updateField('pipeline', 'fast_endpoint_url', `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`);
+      body = { ...currentBody, fast_provider: providerId, fast_base_url: hit.base_url, fast_endpoint_url: endpoint };
     } else if (category === 'agent_settings') {
-      updateField('agent_settings', 'provider', providerId);
-      updateField('agent_settings', 'base_url', hit.base_url);
-      updateField('agent_settings', 'endpoint_url', `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`);
+      body = { ...currentBody, provider: providerId, base_url: hit.base_url, endpoint_url: endpoint };
     } else {
-      updateField('translation', 'provider', providerId);
-      updateField('translation', 'base_url', hit.base_url);
-      updateField('translation', 'endpoint_url', `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`);
+      body = { ...currentBody, provider: providerId, base_url: hit.base_url, endpoint_url: endpoint };
     }
-    // Auto-save: backend returns the new provider's saved model/api_key
-    const current = asRecord(drafts[category]);
-    const { provider_presets: _drop1, recommendation: _drop2, ...body } = current;
     try {
       const res = await api.settings.updateCategory(category, body);
       setDrafts((prev) => ({ ...prev, [category]: asRecord(res.config) }));
     } catch (_err) {
-      // If save fails, user can still edit and click Save manually
+      // Fallback: update local fields only, user can click Save manually
+      if (category === 'pipeline') {
+        setDrafts((prev) => ({ ...prev, pipeline: { ...asRecord(prev.pipeline), fast_provider: providerId, fast_base_url: hit.base_url, fast_endpoint_url: endpoint } }));
+      } else if (category === 'agent_settings') {
+        setDrafts((prev) => ({ ...prev, agent_settings: { ...asRecord(prev.agent_settings), provider: providerId, base_url: hit.base_url, endpoint_url: endpoint } }));
+      } else {
+        setDrafts((prev) => ({ ...prev, translation: { ...asRecord(prev.translation), provider: providerId, base_url: hit.base_url, endpoint_url: endpoint } }));
+      }
     }
   };
 
