@@ -294,7 +294,38 @@ def _run_finalize(
     return result
 
 
+def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
+    """Read pipeline fast-mode settings from global_settings.json and inject into options."""
+    import json as _json
+    from pathlib import Path as _Path
+    import os as _os
+    data_dir = _Path(r"D:\KNGraphApp") if _os.name == "nt" else _Path.home() / ".kn_graph"
+    settings_path = data_dir / "settings" / "global_settings.json"
+    if not settings_path.exists():
+        return dict(options)
+    try:
+        store = _json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception:
+        return dict(options)
+    pipeline = store.get("categories", {}).get("pipeline", {})
+    if not isinstance(pipeline, dict):
+        return dict(options)
+    out = dict(options)
+    if not str(out.get("llm_provider", "") or "").strip():
+        out["llm_provider"] = str(pipeline.get("fast_provider", "") or "").strip()
+    if not str(out.get("llm_model", "") or "").strip():
+        out["llm_model"] = str(pipeline.get("fast_model", "") or "").strip()
+    if not str(out.get("llm_api_key", "") or "").strip():
+        out["llm_api_key"] = str(pipeline.get("fast_api_key", "") or "").strip()
+    if not str(out.get("llm_base_url", "") or "").strip():
+        out["llm_base_url"] = str(pipeline.get("fast_base_url", "") or "").strip()
+    if not str(out.get("llm_api_key_env", "") or "").strip() and str(out.get("llm_api_key", "") or "").strip():
+        pass  # api_key is set directly, no env var needed
+    return out
+
+
 def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options: dict[str, Any], runs_root: Path) -> None:
+    options = _inject_pipeline_settings(options)
     job_root_raw = str(options.get("_job_root", "") or "").strip()
     run_dir = (Path(job_root_raw).resolve() / "run") if job_root_raw else (runs_root / job_id)
     run_dir.mkdir(parents=True, exist_ok=True)
