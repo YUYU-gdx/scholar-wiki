@@ -1094,11 +1094,10 @@ class GraphService:
         db_path = ws / "kn_gragh.db"
         if db_path.exists():
             try:
-                from build_graph_views import _build_artifact_from_sqlite, run_build_from_artifact
-                import sys
-                _scripts = str((Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline").resolve())
-                if _scripts not in sys.path:
-                    sys.path.insert(0, _scripts)
+                _scripts_dir = str((Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline").resolve())
+                if _scripts_dir not in sys.path:
+                    sys.path.insert(0, _scripts_dir)
+                from build_graph_views import _build_artifact_from_sqlite, run_build_from_artifact  # noqa: E402
                 artifact = _build_artifact_from_sqlite(db_path)
                 views_out = ws / "graph_views.json"
                 run_build_from_artifact(artifact, views_out)
