@@ -198,19 +198,41 @@ class ChatService:
     def _agent_settings_path(self) -> Path:
         return self._settings.data_dir / "chat" / "agent_settings.json"
 
-    def _default_agent_settings(self) -> dict[str, Any]:
+    def _default_agent_config_path(self, agent_id: str) -> str:
+        """Return the default config file path for a given agent."""
+        home = Path.home()
+        if agent_id == "codex":
+            return str(self._settings.codex_config_path.resolve())
+        if agent_id == "claude_code":
+            return str((home / ".claude").resolve())
+        if agent_id == "gemini_cli":
+            return str((home / ".gemini").resolve())
+        return ""
+
+    def _default_agent_provider_config(self, agent_id: str) -> dict[str, str]:
+        """Return default provider config for a given agent (catalog-based)."""
+        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map  # noqa: F811
+        agent_defaults: dict[str, dict[str, str]] = {
+            "codex":       {"provider": "deepseek", "model": ""},
+            "claude_code": {"provider": "anthropic", "model": ""},
+            "gemini_cli":  {"provider": "gemini", "model": ""},
+            "hermes":      {"provider": "deepseek", "model": ""},
+            "opencode":    {"provider": "deepseek", "model": ""},
+            "openclaw":    {"provider": "deepseek", "model": ""},
+        }
+        defaults = agent_defaults.get(agent_id, {"provider": "deepseek", "model": ""})
+        provider_id = defaults["provider"]
+        base_url = (provider_map().get(provider_id, {})).get("base_url", "")
         return {
-            "current_agent": "codex",
-            "codex_config_path": str(self._settings.codex_config_path.resolve()),
-            "claude_code_config_path": str((Path.home() / ".claude").resolve()),
-            "gemini_cli_config_path": str((Path.home() / ".gemini").resolve()),
-            "hermes_config_path": "",
-            "opencode_config_path": str((Path.home() / ".opencode").resolve()),
-            "openclaw_config_path": str((Path.home() / ".openclaw").resolve()),
+            "provider": provider_id,
+            "model": defaults["model"],
+            "api_key": "",
+            "base_url": base_url,
+            "endpoint_url": default_endpoint_url(base_url),
         }
 
     def get_agent_settings(self) -> dict[str, Any]:
-        defaults = self._default_agent_settings()
+        from kn_graph.services.cherry_provider_catalog import provider_presets  # noqa: F811
         path = self._agent_settings_path()
         data: dict[str, Any] = {}
         if path.exists():
@@ -220,34 +242,60 @@ class ChatService:
                     data = raw
             except Exception:
                 data = {}
-        if "current_agent" not in data:
-            data["current_agent"] = "codex"
-        merged = dict(defaults)
-        merged.update(data)
-        return merged
+        current_agent = str(data.get("current_agent", "") or "codex").strip()
+        known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
+        if current_agent not in known:
+            current_agent = "codex"
+        agents_data = data.get("agents", {}) if isinstance(data.get("agents"), dict) else {}
+        agent_entry = agents_data.get(current_agent, {}) if isinstance(agents_data, dict) else {}
+        defaults = self._default_agent_provider_config(current_agent)
+        return {
+            "current_agent": current_agent,
+            "available_agents": sorted(known),
+            "config_path": str(agent_entry.get("config_path", "") or defaults.get("config_path", self._default_agent_config_path(current_agent))),
+            "provider": str(agent_entry.get("provider", "") or defaults["provider"]),
+            "model": str(agent_entry.get("model", "") or defaults["model"]),
+            "api_key": str(agent_entry.get("api_key", "") or ""),
+            "base_url": str(agent_entry.get("base_url", "") or defaults["base_url"]),
+            "endpoint_url": str(agent_entry.get("endpoint_url", "") or defaults["endpoint_url"]),
+            "provider_presets": provider_presets(),
+        }
 
     def save_agent_settings(self, body: dict[str, Any]) -> dict[str, Any]:
-        current = self.get_agent_settings()
-        next_payload = dict(current)
-        for key in (
-            "current_agent",
-            "codex_config_path",
-            "claude_code_config_path",
-            "gemini_cli_config_path",
-            "hermes_config_path",
-            "opencode_config_path",
-            "openclaw_config_path",
-        ):
-            if key in body:
-                next_payload[key] = str(body.get(key, "") or "").strip()
-        allowed_agents = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
-        current_agent = str(next_payload.get("current_agent", "codex") or "codex").strip()
-        if current_agent not in allowed_agents:
-            raise ValueError("settings_validation_failed: agent_settings.current_agent")
-        next_payload["current_agent"] = current_agent
         path = self._agent_settings_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(next_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        data: dict[str, Any] = {}
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    data = raw
+            except Exception:
+                data = {}
+        data.setdefault("agents", {})
+        if not isinstance(data.get("agents"), dict):
+            data["agents"] = {}
+        requested_agent = str(body.get("current_agent", "") or "").strip()
+        known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
+        if requested_agent and requested_agent in known:
+            data["current_agent"] = requested_agent
+        current_agent = str(data.get("current_agent", "") or "codex").strip()
+        if current_agent not in known:
+            current_agent = "codex"
+            data["current_agent"] = current_agent
+        agent_entry = data["agents"].get(current_agent, {}) if isinstance(data["agents"], dict) else {}
+        if not isinstance(agent_entry, dict):
+            agent_entry = {}
+        from kn_graph.services.cherry_provider_catalog import default_endpoint_url  # noqa: F811
+        for key in ("config_path", "provider", "model", "api_key", "base_url", "endpoint_url"):
+            if key in body:
+                agent_entry[key] = str(body.get(key, "") or "").strip()
+        if not str(agent_entry.get("endpoint_url", "") or "").strip():
+            base_url = str(agent_entry.get("base_url", "") or "").strip()
+            if base_url:
+                agent_entry["endpoint_url"] = default_endpoint_url(base_url)
+        data["agents"][current_agent] = agent_entry
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return self.get_agent_settings()
 
     def save_codex_config(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -317,40 +365,75 @@ class ChatService:
         return self._settings.data_dir / "chat" / "translation_provider_config.json"
 
     def get_translation_provider_config(self) -> dict[str, Any]:
+        """Return the active translation provider's config + presets list."""
+        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map, provider_presets  # noqa: F811
         path = self._translation_config_path()
-        if not path.exists():
-            return {
-                "provider": "deepseek",
-                "model": "deepseek-v4-flash",
-                "api_key": "",
-                "base_url": "https://api.deepseek.com",
-                "endpoint_url": "https://api.deepseek.com/v1/chat/completions",
-                "target_lang": "zh",
-            }
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-        if not isinstance(data, dict):
-            data = {}
+        data: dict[str, Any] = {}
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    data = raw
+            except Exception:
+                data = {}
+        active = str(data.get("active_provider", "") or "").strip()
+        if not active:
+            active = "deepseek"
+        providers = data.get("providers", {}) if isinstance(data.get("providers"), dict) else {}
+        provider_data = providers.get(active, {}) if isinstance(providers, dict) else {}
+        if not isinstance(provider_data, dict):
+            provider_data = {}
+        defaults_base = (provider_map().get(active, {})).get("base_url", "")
         return {
-            "provider": str(data.get("provider", "deepseek") or "deepseek"),
-            "model": str(data.get("model", "deepseek-v4-flash") or "deepseek-v4-flash"),
-            "api_key": str(data.get("api_key", "") or ""),
-            "base_url": str(data.get("base_url", "https://api.deepseek.com") or "https://api.deepseek.com"),
-            "endpoint_url": str(data.get("endpoint_url", "https://api.deepseek.com/v1/chat/completions") or "https://api.deepseek.com/v1/chat/completions"),
-            "target_lang": str(data.get("target_lang", "zh") or "zh"),
+            "active_provider": active,
+            "provider": active,
+            "model": str(provider_data.get("model", "") or ""),
+            "api_key": str(provider_data.get("api_key", "") or ""),
+            "base_url": str(provider_data.get("base_url", "") or defaults_base),
+            "endpoint_url": str(provider_data.get("endpoint_url", "") or default_endpoint_url(defaults_base)),
+            "target_lang": str(data.get("target_lang", "") or "zh"),
+            "provider_presets": provider_presets(),
         }
 
     def save_translation_provider_config(self, body: dict[str, Any]) -> dict[str, Any]:
-        current = self.get_translation_provider_config()
-        next_payload = dict(current)
-        for key in ("provider", "model", "api_key", "base_url", "endpoint_url", "target_lang"):
-            if key in body:
-                next_payload[key] = str(body.get(key, "") or "").strip()
+        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map  # noqa: F811
         path = self._translation_config_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(next_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        data: dict[str, Any] = {}
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    data = raw
+            except Exception:
+                data = {}
+        requested_provider = str(body.get("provider", "") or "").strip()
+        if requested_provider:
+            data["active_provider"] = requested_provider
+        active = str(data.get("active_provider", "") or "deepseek").strip()
+        if not active:
+            active = "deepseek"
+            data["active_provider"] = active
+        data.setdefault("providers", {})
+        if not isinstance(data.get("providers"), dict):
+            data["providers"] = {}
+        provider_data = data["providers"].get(active, {}) if isinstance(data["providers"], dict) else {}
+        if not isinstance(provider_data, dict):
+            provider_data = {}
+        for key in ("model", "api_key", "base_url", "endpoint_url"):
+            if key in body:
+                provider_data[key] = str(body.get(key, "") or "").strip()
+        base_url = str(provider_data.get("base_url", "") or "").strip()
+        if not base_url:
+            base_url = (provider_map().get(active, {})).get("base_url", "")
+            if base_url:
+                provider_data["base_url"] = base_url
+        if not str(provider_data.get("endpoint_url", "") or "").strip():
+            provider_data["endpoint_url"] = default_endpoint_url(base_url)
+        data["providers"][active] = provider_data
+        if "target_lang" in body:
+            data["target_lang"] = str(body.get("target_lang", "") or "zh").strip()
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return self.get_translation_provider_config()
 
     def translate_text(

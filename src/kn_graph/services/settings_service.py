@@ -94,34 +94,10 @@ class SettingsService:
         return next_payload
 
     def _get_translation_category(self) -> dict[str, Any]:
-        cfg = self._chat_service.get_translation_provider_config()
-        defaults = {
-            "provider": "deepseek",
-            "model": "deepseek-v4-flash",
-            "api_key": "",
-            "base_url": "https://api.deepseek.com",
-            "endpoint_url": "https://api.deepseek.com/v1/chat/completions",
-            "target_lang": "zh",
-            "recommendation": "建议优先使用 deepseek-v4-flash。",
-        }
-        out = dict(defaults)
-        if isinstance(cfg, dict):
-            out.update(cfg)
-        return self._normalize_provider_fields(out, provider_key="provider", base_key="base_url", endpoint_key="endpoint_url")
+        return self._chat_service.get_translation_provider_config()
 
     def _save_translation_category(self, body: dict[str, Any]) -> dict[str, Any]:
-        current = self._get_translation_category()
-        next_payload = dict(current)
-        for key in ("provider", "model", "api_key", "base_url", "endpoint_url", "target_lang"):
-            if key in body:
-                next_payload[key] = str(body.get(key, "") or "").strip()
-        next_payload = self._normalize_provider_fields(next_payload, provider_key="provider", base_key="base_url", endpoint_key="endpoint_url")
-        saved = self._chat_service.save_translation_provider_config(next_payload)
-        merged = dict(next_payload)
-        if isinstance(saved, dict):
-            merged.update(saved)
-        merged["recommendation"] = "建议优先使用 deepseek-v4-flash。"
-        return merged
+        return self._chat_service.save_translation_provider_config(body)
 
     def _normalize_provider_fields(self, payload: dict[str, Any], *, provider_key: str, base_key: str, endpoint_key: str) -> dict[str, Any]:
         out = dict(payload)
@@ -141,7 +117,7 @@ class SettingsService:
             "categories": [
                 {"id": "pipeline", "title": "Pipeline", "restart_required": False},
                 {"id": "translation", "title": "翻译", "restart_required": False},
-                {"id": "agent_settings", "title": "Agent设置", "restart_required": True},
+                {"id": "agent_settings", "title": "Agent 设置", "restart_required": True},
             ],
         }
 
