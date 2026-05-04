@@ -76,16 +76,17 @@ export default function SettingsView() {
     const hit = presets.find((p) => p.id === providerId);
     if (!hit) return;
     const endpoint = `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`;
-    // Build the body from current draft values + the new provider info,
-    // so the backend receives a consistent snapshot regardless of React batching.
-    const { provider_presets: _drop1, recommendation: _drop2, ...currentBody } = values;
+    // When switching providers, only send the provider identity + base_url/endpoint_url.
+    // Do NOT include model/api_key from the old provider's drafts — that would pollute
+    // the new provider's saved data. The backend will return the new provider's saved
+    // model/api_key (or empty defaults if never saved).
     let body: Record<string, unknown>;
     if (category === 'pipeline') {
-      body = { ...currentBody, fast_provider: providerId, fast_base_url: hit.base_url, fast_endpoint_url: endpoint };
+      body = { fast_provider: providerId, fast_base_url: hit.base_url, fast_endpoint_url: endpoint };
     } else if (category === 'agent_settings') {
-      body = { ...currentBody, provider: providerId, base_url: hit.base_url, endpoint_url: endpoint };
+      body = { provider: providerId, base_url: hit.base_url, endpoint_url: endpoint };
     } else {
-      body = { ...currentBody, provider: providerId, base_url: hit.base_url, endpoint_url: endpoint };
+      body = { provider: providerId, base_url: hit.base_url, endpoint_url: endpoint };
     }
     try {
       const res = await api.settings.updateCategory(category, body);
