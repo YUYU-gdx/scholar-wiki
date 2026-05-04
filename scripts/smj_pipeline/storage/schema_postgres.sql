@@ -104,6 +104,54 @@ CREATE TABLE IF NOT EXISTS interaction_inputs (
   input_order INTEGER NOT NULL DEFAULT 0
 );
 
+-- Columns that exist in the live database (added by earlier migrations) but are not
+-- part of the canonical DDL.  Declare them here so that apply_schema() can be re-run
+-- safely on an existing database without data loss.
+ALTER TABLE direct_effects ADD COLUMN IF NOT EXISTS direction TEXT NOT NULL DEFAULT '';
+ALTER TABLE direct_effects ADD COLUMN IF NOT EXISTS relation_form TEXT NOT NULL DEFAULT '';
+ALTER TABLE direct_effects ADD COLUMN IF NOT EXISTS relation_form_raw TEXT NOT NULL DEFAULT '';
+ALTER TABLE direct_effects ADD COLUMN IF NOT EXISTS hypothesis_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE direct_effects ADD COLUMN IF NOT EXISTS evidence_section TEXT NOT NULL DEFAULT '';
+ALTER TABLE direct_effects ADD COLUMN IF NOT EXISTS evidence_snippet TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE moderations ADD COLUMN IF NOT EXISTS direction TEXT NOT NULL DEFAULT '';
+ALTER TABLE moderations ADD COLUMN IF NOT EXISTS hypothesis_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE moderations ADD COLUMN IF NOT EXISTS evidence_section TEXT NOT NULL DEFAULT '';
+ALTER TABLE moderations ADD COLUMN IF NOT EXISTS evidence_snippet TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE interactions ADD COLUMN IF NOT EXISTS interaction_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE interactions ADD COLUMN IF NOT EXISTS moderator_var TEXT NOT NULL DEFAULT '';
+ALTER TABLE interactions ADD COLUMN IF NOT EXISTS moderator_canonical_var_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE interactions ADD COLUMN IF NOT EXISTS effect TEXT NOT NULL DEFAULT '';
+ALTER TABLE interactions ADD COLUMN IF NOT EXISTS hypothesis_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE interactions ADD COLUMN IF NOT EXISTS evidence_section TEXT NOT NULL DEFAULT '';
+ALTER TABLE interactions ADD COLUMN IF NOT EXISTS evidence_snippet TEXT NOT NULL DEFAULT '';
+ALTER TABLE interactions ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE variable_definitions ADD COLUMN IF NOT EXISTS evidence_section TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS context_variables (
+  id BIGSERIAL PRIMARY KEY,
+  paper_id TEXT NOT NULL,
+  variable_name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS operationalizations (
+  id BIGSERIAL PRIMARY KEY,
+  paper_id TEXT NOT NULL,
+  variable_name TEXT NOT NULL,
+  operationalized_as_json TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS moderation_targets (
+  id BIGSERIAL PRIMARY KEY,
+  moderation_id BIGINT NOT NULL,
+  source_var TEXT NOT NULL DEFAULT '',
+  target_var TEXT NOT NULL DEFAULT '',
+  source_canonical_var_id TEXT NOT NULL DEFAULT '',
+  target_canonical_var_id TEXT NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_papers_publication_year ON papers(publication_year);
 CREATE INDEX IF NOT EXISTS idx_papers_doi ON papers(doi);
 CREATE INDEX IF NOT EXISTS idx_papers_authors_json_gin ON papers USING GIN (authors_json);

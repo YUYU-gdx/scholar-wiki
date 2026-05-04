@@ -609,15 +609,7 @@ class LiteratureService:
         text = str(value or "").strip()
         if not text:
             return ""
-        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", text):
-            return text
-        try:
-            p = Path(text)
-            if p.is_absolute():
-                return "storage://" + p.as_posix().lstrip("/")
-            return text.replace("\\", "/")
-        except Exception:
-            return text.replace("\\", "/")
+        return text.replace("\\", "/")
 
     def _upsert_paper_metadata(self, metadata: dict[str, Any]) -> None:
         if not self._postgres_dsn or psycopg is None:

@@ -43,10 +43,18 @@ class PostgresRepo:
             self._execute(
                 """
                 INSERT INTO papers (
-                    paper_id, doi, offline_html_path, article_url, publication_date, online_date,
+                    paper_id, doi,
+                    title, authors_json, abstract, journal,
+                    offline_html_path, source_pdf_path, source_md_path, source_html_path,
+                    article_url, publication_date, online_date,
                     publication_year, paper_citation_count, metadata_source,
                     extractability_status, paper_type, extractability_reason, extractability_evidence_section
-                ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                ) VALUES ({p}, {p},
+                    {p}, {p}::jsonb, {p}, {p},
+                    {p}, {p}, {p}, {p},
+                    {p}, {p}, {p},
+                    {p}, {p}, {p},
+                    {p}, {p}, {p}, {p})
                 ON CONFLICT(paper_id) DO UPDATE SET
                     doi=excluded.doi,
                     offline_html_path=excluded.offline_html_path,
@@ -64,7 +72,14 @@ class PostgresRepo:
                 (
                     paper_id,
                     paper_doi,
+                    str(bundle.get("title", "") or ""),
+                    json.dumps(bundle.get("authors_json", []) or [], ensure_ascii=False),
+                    str(bundle.get("abstract", "") or ""),
+                    str(bundle.get("journal", "") or ""),
                     offline_html_path,
+                    str(bundle.get("source_pdf_path", "") or ""),
+                    str(bundle.get("source_md_path", "") or ""),
+                    str(bundle.get("source_html_path", "") or ""),
                     article_url,
                     publication_date,
                     online_date,

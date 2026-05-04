@@ -136,9 +136,12 @@ def main() -> None:
             conn,
             """
             SELECT
-              paper_id, doi, offline_html_path, article_url, publication_date, online_date,
+              paper_id, doi, title, authors_json, abstract, journal,
+              offline_html_path, source_pdf_path, source_md_path, source_html_path,
+              article_url, publication_date, online_date,
               publication_year, paper_citation_count,
-              extractability_status, paper_type, extractability_reason, extractability_evidence_section
+              extractability_status, paper_type, extractability_reason, extractability_evidence_section,
+              created_at, updated_at
             FROM papers
             ORDER BY paper_id
             """,
@@ -215,7 +218,14 @@ def main() -> None:
         papers_map[pid] = {
             "paper_id": pid,
             "doi": str(p.get("doi", "") or pid),
+            "title": str(p.get("title", "") or ""),
+            "authors_json": p.get("authors_json") if isinstance(p.get("authors_json"), list) else [],
+            "abstract": str(p.get("abstract", "") or ""),
+            "journal": str(p.get("journal", "") or ""),
             "offline_html_path": str(p.get("offline_html_path", "") or ""),
+            "source_pdf_path": str(p.get("source_pdf_path", "") or ""),
+            "source_md_path": str(p.get("source_md_path", "") or ""),
+            "source_html_path": str(p.get("source_html_path", "") or ""),
             "article_url": str(p.get("article_url", "") or ""),
             "publication_date": str(p.get("publication_date", "") or ""),
             "online_date": str(p.get("online_date", "") or ""),

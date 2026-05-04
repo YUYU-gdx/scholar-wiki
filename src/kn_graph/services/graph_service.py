@@ -11,6 +11,15 @@ from typing import Any
 
 from kn_graph.config import Settings
 
+
+def _resolve_storage_uri(uri: str) -> str:
+    """Strip legacy storage:// prefix if present, returning a clean filesystem path."""
+    text = str(uri or "").strip()
+    if text.startswith("storage://"):
+        return text[len("storage://"):]
+    return text
+
+
 _SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
 
 def _load_module(name: str, relative_path: str):
@@ -977,9 +986,9 @@ class GraphService:
         if paper is None:
             return None
 
-        source_pdf = str(paper.get("source_pdf_path", "") or "").strip()
-        source_md = str(paper.get("source_md_path", "") or "").strip()
-        offline_html = str(paper.get("offline_html_path", "") or "").strip()
+        source_pdf = _resolve_storage_uri(paper.get("source_pdf_path", "") or "")
+        source_md = _resolve_storage_uri(paper.get("source_md_path", "") or "")
+        offline_html = _resolve_storage_uri(paper.get("offline_html_path", "") or "")
 
         files: dict[str, dict[str, Any]] = {}
         default_view = "none"

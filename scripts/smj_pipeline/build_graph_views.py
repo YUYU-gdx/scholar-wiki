@@ -36,7 +36,7 @@ def _build_artifact_from_postgres_compat(dsn: str, output_json: Path) -> Path:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT paper_id, doi, title, abstract, journal, source_html_path, article_url,
+                SELECT paper_id, doi, title, authors_json, abstract, journal, source_html_path, article_url,
                        source_pdf_path, source_md_path, publication_date, online_date, publication_year, paper_citation_count
                 FROM papers
                 ORDER BY paper_id
