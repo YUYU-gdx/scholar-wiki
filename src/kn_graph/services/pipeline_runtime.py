@@ -227,40 +227,12 @@ def _run_finalize(
     if imported_count <= 0:
         raise RuntimeError("import_noop:imported_count_is_zero")
 
+    # Graph rebuild is handled separately via build_graph_views.py and
+    # is no longer part of the per-job finalize step (SQLite-only path).
     graph_warning = ""
-    if library_id and workspace_path:
-        try:
-            build_mod = _load_script_module("smj_pipeline_build_graph_views_for_kn_graph_runtime", "build_graph_views.py")
-            run_build_from_dsn = build_mod.run_build_from_dsn
-            dsn = str(options.get("papers_postgres_dsn", "") or "").strip()
-            if not dsn:
-                dsn = str(os.getenv("KN_PAPERS_POSTGRES_DSN", "") or "").strip()
-            if not dsn:
-                graph_warning = "postgres_dsn_missing_for_graph_rebuild"
-            else:
-                _stage_update(store, job_id, "finalize", 98, "graph_rebuild_started", status="running")
-                ws_path = Path(workspace_path)
-                graph_output = ws_path / "graph_views.json"
-                graph_output_path = str(graph_output.resolve())
-                before_mtime = graph_output.stat().st_mtime if graph_output.exists() else 0.0
-                build_result = run_build_from_dsn(dsn, graph_output)
-                exists_after = graph_output.exists()
-                after_mtime = graph_output.stat().st_mtime if exists_after else 0.0
-                graph_output_size = int(graph_output.stat().st_size) if exists_after else 0
-                graph_updated = bool(
-                    build_result and exists_after and graph_output_size > 0 and (after_mtime >= before_mtime)
-                )
-                if graph_updated:
-                    _stage_update(store, job_id, "finalize", 99, "graph_rebuilt", status="running")
-                else:
-                    graph_warning = "build_graph_views_result_invalid"
-        except Exception as exc:
-            graph_warning = f"graph_rebuild_error: {exc}"
-    else:
-        graph_warning = "graph_rebuild_skipped_workspace_missing"
-
-    if graph_warning:
-        raise RuntimeError(f"graph_not_updated:{graph_warning}")
+    graph_output_path = ""
+    graph_updated = False
+    graph_output_size = 0
 
     result = {
         "job_id": job_id,

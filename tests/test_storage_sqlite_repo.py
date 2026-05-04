@@ -7,15 +7,15 @@ import sys
 import unittest
 
 
-_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "smj_pipeline" / "storage" / "postgres_repo.py"
-_SPEC = importlib.util.spec_from_file_location("smj_pipeline_storage_postgres_repo", _SCRIPT_PATH)
+_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "smj_pipeline" / "storage" / "sqlite_repo.py"
+_SPEC = importlib.util.spec_from_file_location("smj_pipeline_storage_sqlite_repo", _SCRIPT_PATH)
 if _SPEC is None or _SPEC.loader is None:
     raise RuntimeError(f"Unable to load script module: {_SCRIPT_PATH}")
 _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _MOD
 _SPEC.loader.exec_module(_MOD)
 
-PostgresRepo = _MOD.PostgresRepo
+SqliteRepo = _MOD.SqliteRepo
 
 
 def _bundle(target: str = "B") -> dict[str, object]:
@@ -66,11 +66,11 @@ def _bundle(target: str = "B") -> dict[str, object]:
     }
 
 
-class PostgresRepoTest(unittest.TestCase):
+class SqliteRepoTest(unittest.TestCase):
     def setUp(self) -> None:
         self.connection = sqlite3.connect(":memory:")
         self.connection.row_factory = sqlite3.Row
-        self.repo = PostgresRepo(self.connection)
+        self.repo = SqliteRepo(self.connection)
 
     def tearDown(self) -> None:
         self.connection.close()

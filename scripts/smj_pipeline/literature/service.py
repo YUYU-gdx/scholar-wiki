@@ -10,17 +10,13 @@ import os
 from pathlib import Path
 import re
 import shutil
-import subprocess
+import sys
 import tempfile
 import time
 import uuid
 from typing import Any
 
 import requests
-try:
-    import psycopg
-except Exception:  # pragma: no cover
-    psycopg = None
 
 
 def _load_zhipu_client_class():
@@ -54,6 +50,28 @@ def _load_runtime_conventions_module():
 
 
 _RUNTIME_CONVENTIONS = _load_runtime_conventions_module()
+
+# Ensure the parent scripts directory is on sys.path so that module-level
+# imports inside mineru_single_pdf_runner.py (e.g. "from mineru_agent_common
+# import safe_id") resolve correctly.
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+_MINERU_SINGLE_MOD = None
+
+
+def _get_mineru_single_mod():
+    """Lazy-load the mineru_single_pdf_runner module (cloud API)."""
+    global _MINERU_SINGLE_MOD
+    if _MINERU_SINGLE_MOD is None:
+        module_path = Path(__file__).resolve().parent.parent / "mineru_single_pdf_runner.py"
+        spec = importlib.util.spec_from_file_location("smj_pipeline_mineru_single_for_literature", module_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"unable to load module: {module_path}")
+        _MINERU_SINGLE_MOD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_MINERU_SINGLE_MOD)
+    return _MINERU_SINGLE_MOD
 
 
 _SENTENCE_END_RE = re.compile(r"[^。！？!?\.]+[。！？!?\.]?")
@@ -603,72 +621,12 @@ class LiteratureService:
         self._paragraph_by_id: dict[str, dict[str, Any]] = {}
         self._document_by_id: dict[str, dict[str, Any]] = {}
         self._workspace_root_cache: dict[str, Path] = {}
-        self._postgres_dsn = (os.getenv("KN_PAPERS_POSTGRES_DSN", "") or "").strip()
 
     def _normalize_storage_path(self, value: str) -> str:
         text = str(value or "").strip()
         if not text:
             return ""
         return text.replace("\\", "/")
-
-    def _upsert_paper_metadata(self, metadata: dict[str, Any]) -> None:
-        if not self._postgres_dsn or psycopg is None:
-            return
-        with psycopg.connect(self._postgres_dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO papers (
-                      paper_id, doi, title, authors_json, abstract, journal,
-                      offline_html_path, source_pdf_path, source_md_path, source_html_path,
-                      article_url, publication_date, online_date, publication_year, paper_citation_count,
-                      metadata_source, extractability_status, paper_type, extractability_reason, extractability_evidence_section
-                    ) VALUES (
-                      %s, %s, %s, %s::jsonb, %s, %s,
-                      %s, %s, %s, %s,
-                      %s, %s, %s, %s, %s,
-                      %s, %s, %s, %s, %s
-                    )
-                    ON CONFLICT (paper_id) DO UPDATE SET
-                      doi = EXCLUDED.doi,
-                      title = EXCLUDED.title,
-                      authors_json = EXCLUDED.authors_json,
-                      abstract = EXCLUDED.abstract,
-                      journal = EXCLUDED.journal,
-                      offline_html_path = EXCLUDED.offline_html_path,
-                      source_pdf_path = EXCLUDED.source_pdf_path,
-                      source_md_path = EXCLUDED.source_md_path,
-                      source_html_path = EXCLUDED.source_html_path,
-                      article_url = EXCLUDED.article_url,
-                      publication_date = EXCLUDED.publication_date,
-                      online_date = EXCLUDED.online_date,
-                      publication_year = EXCLUDED.publication_year,
-                      paper_citation_count = EXCLUDED.paper_citation_count,
-                      metadata_source = EXCLUDED.metadata_source
-                    """,
-                    (
-                        str(metadata.get("paper_id", "") or ""),
-                        str(metadata.get("doi", "") or ""),
-                        str(metadata.get("title", "") or ""),
-                        json.dumps(metadata.get("authors_json", []), ensure_ascii=False),
-                        str(metadata.get("abstract", "") or ""),
-                        str(metadata.get("journal", "") or ""),
-                        self._normalize_storage_path(str(metadata.get("offline_html_path", "") or "")),
-                        self._normalize_storage_path(str(metadata.get("source_pdf_path", "") or "")),
-                        self._normalize_storage_path(str(metadata.get("source_md_path", "") or "")),
-                        self._normalize_storage_path(str(metadata.get("source_html_path", "") or "")),
-                        str(metadata.get("article_url", "") or ""),
-                        str(metadata.get("publication_date", "") or ""),
-                        str(metadata.get("online_date", "") or ""),
-                        metadata.get("publication_year"),
-                        metadata.get("paper_citation_count"),
-                        str(metadata.get("metadata_source", "") or "literature_import"),
-                        str(metadata.get("extractability_status", "") or ""),
-                        str(metadata.get("paper_type", "") or ""),
-                        str(metadata.get("extractability_reason", "") or ""),
-                        str(metadata.get("extractability_evidence_section", "") or ""),
-                    ),
-                )
 
     def _default_library_id(self) -> str:
         return (os.getenv("LITERATURE_DEFAULT_LIBRARY_ID", "") or "").strip()
@@ -774,48 +732,69 @@ class LiteratureService:
             for paper_key in sorted(existing.keys()):
                 f.write(json.dumps(existing[paper_key], ensure_ascii=False) + "\n")
 
-    def _run_mineru_to_dir(self, source_pdf: Path, out_dir: Path) -> dict[str, Any]:
+    def _run_mineru_cloud_to_dir(self, source_pdf: Path, out_dir: Path) -> dict[str, Any]:
+        """Run Mineru cloud API to parse a single PDF, placing outputs in *out_dir*."""
         if out_dir.exists():
             shutil.rmtree(out_dir, ignore_errors=True)
         out_dir.mkdir(parents=True, exist_ok=True)
-        cmd_tpl = os.getenv("MINERU_CMD", "mineru -i {input} -o {output}").strip()
-        cmd = [
-            part.replace("{input}", str(source_pdf)).replace("{output}", str(out_dir))
-            for part in cmd_tpl.split()
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if proc.returncode != 0:
-            raise RuntimeError(f"mineru failed: {proc.stderr.strip() or proc.stdout.strip()}")
+
+        mod = _get_mineru_single_mod()
+
+        # parse_single_pdf creates parse/ inside the run_dir, so we use an
+        # intermediate work directory and then copy results into out_dir.
+        work_dir = out_dir.parent / "_mineru_cloud_work"
+        if work_dir.exists():
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+        try:
+            result = mod.parse_single_pdf(source_pdf, work_dir, options={})
+        except Exception as exc:
+            raise RuntimeError(f"mineru_cloud_failed: {exc}") from exc
+
+        markdown_path = Path(str(result.get("markdown_path", "") or ""))
+        if not markdown_path.exists():
+            raise RuntimeError("mineru_cloud_produced_no_markdown")
+
+        md_text = markdown_path.read_text(encoding="utf-8", errors="ignore")
+        md_title = _extract_first_md_h1(md_text)
+
+        # Name the canonical markdown file by the first H1 heading (same
+        # behaviour the old local-mineru path had via _safe_windows_filename).
+        md_name = _safe_windows_filename(md_title, fallback=markdown_path.stem) + ".md"
+        target_md = out_dir / md_name
+        shutil.copy2(str(markdown_path), str(target_md))
+
+        html_text = f"<html><body><pre>{html.escape(md_text)}</pre></body></html>"
+        target_html = out_dir / f"{_safe_windows_filename(md_title, fallback='parsed')}.html"
+        target_html.write_text(html_text, encoding="utf-8")
+
+        # Copy unpacked zip contents (images, supplementary files) into out_dir
+        # so that _sync_md_library_bundle can later capture the full output.
+        zip_unpacked = work_dir / "parse" / "mineru_zip_unpacked"
+        if zip_unpacked.exists():
+            for item in zip_unpacked.iterdir():
+                dest = out_dir / item.name
+                if item.is_dir():
+                    if dest.exists():
+                        shutil.rmtree(dest, ignore_errors=True)
+                    shutil.copytree(str(item), str(dest))
+                else:
+                    shutil.copy2(str(item), str(dest))
+
+        # Clean up intermediate work directory.
+        shutil.rmtree(work_dir, ignore_errors=True)
+
         html_files = list(out_dir.rglob("*.html"))
         md_files = list(out_dir.rglob("*.md"))
-        source_kind = ""
-        html_text = ""
-        main_md_path = ""
-        md_title = ""
-        if html_files:
-            source_kind = "html"
-            html_text = html_files[0].read_text(encoding="utf-8", errors="ignore")
-        if md_files:
-            source_kind = "md"
-            content = md_files[0].read_text(encoding="utf-8", errors="ignore")
-            md_title = _extract_first_md_h1(content)
-            md_name = _safe_windows_filename(md_title, fallback=md_files[0].stem) + ".md"
-            canonical_md = out_dir / md_name
-            if md_files[0].resolve() != canonical_md.resolve():
-                shutil.copy2(str(md_files[0]), str(canonical_md))
-            main_md_path = str(canonical_md.resolve())
-            if not html_text:
-                html_text = f"<html><body><pre>{html.escape(content)}</pre></body></html>"
-        if not html_files and not md_files:
-            raise RuntimeError("mineru produced no html/md output")
+
         return {
             "html_text": html_text,
-            "source_kind": source_kind,
+            "source_kind": "html",
             "html_files": [str(x.resolve()) for x in html_files],
             "md_files": [str(x.resolve()) for x in md_files],
-            "main_md_path": main_md_path,
+            "main_md_path": str(target_md.resolve()),
             "md_title": md_title,
-            "command": cmd,
+            "command": ["mineru_cloud_api"],
         }
 
     def _materialize_workspace_assets(
@@ -858,7 +837,7 @@ class LiteratureService:
             parser_name = "mineru"
             parser_version = str(os.getenv("MINERU_VERSION", "") or "").strip() or "unknown"
             parser_run_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            mineru = self._run_mineru_to_dir(source_pdf, mineru_latest_dir)
+            mineru = self._run_mineru_cloud_to_dir(source_pdf, mineru_latest_dir)
             html_text = str(mineru.get("html_text", "") or "")
             mineru_main_md_path = str(mineru.get("main_md_path", "") or "")
             md_library_path = self._sync_md_library_bundle(
@@ -1055,7 +1034,6 @@ class LiteratureService:
             "sentence_count": sent_count,
             "paragraph_count": para_count,
             "document_count": doc_count,
-            "db_upsert_enabled": bool(self._postgres_dsn and psycopg is not None),
             "workspace_path": workspace_path,
             "materialized_papers": materialized_rows,
         }
@@ -1108,28 +1086,6 @@ class LiteratureService:
         mat_payload = materialized.get("materialized") if isinstance(materialized, dict) else None
         if isinstance(mat_payload, dict) and mat_payload:
             paper["metadata"]["paper_key"] = str(mat_payload.get("paper_key", "") or "")
-
-        # Persist metadata in Postgres first; Weaviate remains a rebuildable search index.
-        self._upsert_paper_metadata(
-            {
-                "paper_id": paper_id,
-                "doi": doi,
-                "title": title,
-                "authors_json": row_for_import.get("authors", []) or row_for_import.get("authors_json", []) or [],
-                "abstract": str(row_for_import.get("abstract", "") or ""),
-                "journal": str(row_for_import.get("journal", "") or ""),
-                "offline_html_path": source_html,
-                "source_pdf_path": str((mat_payload or {}).get("source_pdf_path", "") or ""),
-                "source_md_path": str((mat_payload or {}).get("md_path", "") or ""),
-                "source_html_path": str((mat_payload or {}).get("html_path", "") or ""),
-                "article_url": str(row_for_import.get("article_url", "") or ""),
-                "publication_date": str(row_for_import.get("publication_date", "") or ""),
-                "online_date": str(row_for_import.get("online_date", "") or ""),
-                "publication_year": row_for_import.get("publication_year"),
-                "paper_citation_count": row_for_import.get("paper_citation_count"),
-                "metadata_source": "literature_import",
-            }
-        )
 
         sentence_vectors = self.embedding.embed_texts([str(s.get("text", "")) for s in sentences])
         paragraph_vectors = self.embedding.embed_texts([str(p.get("text", "")) for p in paragraphs])
@@ -1188,32 +1144,21 @@ class LiteratureService:
             return "<html><body></body></html>"
         ext = source_path.suffix.lower()
         if ext == ".pdf":
-            return self._pdf_to_html_with_mineru(source_path)
+            return self._pdf_to_html_cloud(source_path)
         raw = source_path.read_text(encoding="utf-8", errors="ignore")
         if ext in {".html", ".htm"}:
             return raw
         escaped = html.escape(raw)
         return f"<html><body><pre>{escaped}</pre></body></html>"
 
-    def _pdf_to_html_with_mineru(self, source_path: Path) -> str:
-        cmd_tpl = os.getenv("MINERU_CMD", "mineru -i {input} -o {output}").strip()
-        with tempfile.TemporaryDirectory(prefix="mineru_pdf_") as tmp_dir:
-            out_dir = Path(tmp_dir)
-            cmd = [
-                part.replace("{input}", str(source_path)).replace("{output}", str(out_dir))
-                for part in cmd_tpl.split()
-            ]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            if proc.returncode != 0:
-                raise RuntimeError(f"mineru failed: {proc.stderr.strip() or proc.stdout.strip()}")
-            html_files = list(out_dir.rglob("*.html"))
-            if not html_files:
-                md_files = list(out_dir.rglob("*.md"))
-                if md_files:
-                    content = md_files[0].read_text(encoding="utf-8", errors="ignore")
-                    return f"<html><body><pre>{html.escape(content)}</pre></body></html>"
-                raise RuntimeError("mineru produced no html/md output")
-            return html_files[0].read_text(encoding="utf-8", errors="ignore")
+    def _pdf_to_html_cloud(self, source_pdf: Path) -> str:
+        """Convert a PDF to HTML using the Mineru cloud API (fallback path
+        used when no workspace root is available)."""
+        mod = _get_mineru_single_mod()
+        with tempfile.TemporaryDirectory(prefix="mineru_cloud_normalize_") as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            result = mod.parse_single_pdf(source_pdf, tmp_path, options={})
+            return Path(str(result.get("html_path", "") or "")).read_text(encoding="utf-8", errors="ignore")
 
     def search(
         self,

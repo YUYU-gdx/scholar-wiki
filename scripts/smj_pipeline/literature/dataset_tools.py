@@ -3,16 +3,37 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 from typing import Any
 import shutil
 
-import psycopg
+# Ensure the parent scripts directory is on sys.path so that module-level
+# imports inside mineru_single_pdf_runner.py resolve correctly.
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+_MINERU_SINGLE_MOD = None
+
+
+def _get_mineru_single_mod():
+    """Lazy-load the mineru_single_pdf_runner module (cloud API)."""
+    global _MINERU_SINGLE_MOD
+    if _MINERU_SINGLE_MOD is None:
+        module_path = Path(__file__).resolve().parent.parent / "mineru_single_pdf_runner.py"
+        spec = importlib.util.spec_from_file_location("smj_pipeline_mineru_single_for_dataset_tools", module_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"unable to load module: {module_path}")
+        _MINERU_SINGLE_MOD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_MINERU_SINGLE_MOD)
+    return _MINERU_SINGLE_MOD
 
 
 _TAG_RE = re.compile(r"(?s)<[^>]+>")
@@ -91,7 +112,6 @@ def _guess_doi_from_path(path: Path) -> str:
 def normalize_to_html(
     row: dict[str, Any],
     normalized_dir: Path,
-    mineru_cmd_template: str = "mineru -i {input} -o {output}",
     max_source_bytes: int = 8_000_000,
 ) -> tuple[str, Path]:
     paper_id = str(row.get("paper_id") or row.get("doi") or "unknown").strip() or "unknown"
@@ -122,7 +142,7 @@ def normalize_to_html(
         return data, out_html
 
     if ext == ".pdf":
-        mineru_data, mineru_format = _pdf_to_html_with_mineru(source, mineru_cmd_template)
+        mineru_data, mineru_format = _pdf_to_html_with_mineru(source, "")
         if mineru_format == "html":
             out_html.write_text(mineru_data, encoding="utf-8")
             return mineru_data, out_html
@@ -138,28 +158,20 @@ def normalize_to_html(
     return raw, source
 
 
-def _pdf_to_html_with_mineru(source_path: Path, mineru_cmd_template: str) -> tuple[str, str]:
-    first = mineru_cmd_template.split()[0] if mineru_cmd_template.split() else "mineru"
-    if shutil.which(first) is None:
-        raise RuntimeError(f"mineru_not_installed:{first}")
-    with tempfile.TemporaryDirectory(prefix="literature_mineru_") as tmp_dir:
-        out_dir = Path(tmp_dir)
-        cmd = [
-            part.replace("{input}", str(source_path)).replace("{output}", str(out_dir))
-            for part in mineru_cmd_template.split()
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if proc.returncode != 0:
-            detail = proc.stderr.strip() or proc.stdout.strip() or "unknown error"
-            raise RuntimeError(f"mineru_failed:{detail}")
-        html_files = list(out_dir.rglob("*.html"))
-        if html_files:
-            return html_files[0].read_text(encoding="utf-8", errors="ignore"), "html"
-        md_files = list(out_dir.rglob("*.md"))
-        if md_files:
-            md_text = md_files[0].read_text(encoding="utf-8", errors="ignore")
-            return md_text, "md"
-        raise RuntimeError("mineru_no_output")
+def _pdf_to_html_with_mineru(source_path: Path, _mineru_cmd_template: str = "") -> tuple[str, str]:
+    """Convert a PDF to HTML using the Mineru cloud API.
+
+    The second parameter is kept for backward compatibility but is ignored
+    (the cloud API is always used).
+    """
+    mod = _get_mineru_single_mod()
+    with tempfile.TemporaryDirectory(prefix="literature_mineru_cloud_") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        result = mod.parse_single_pdf(source_path, tmp_path, options={})
+        html_path = Path(str(result.get("html_path", "") or ""))
+        if not html_path.exists():
+            raise RuntimeError("mineru_cloud_produced_no_html")
+        return html_path.read_text(encoding="utf-8", errors="ignore"), "html"
 
 
 def html_to_text(raw_html: str) -> str:
@@ -220,12 +232,10 @@ def build_base_dataset(
     output_dir: Path,
     input_root: Path | None = None,
     garble_threshold: float = 0.02,
-    mineru_cmd_template: str | None = None,
     cny_per_million_tokens: float = 2.0,
     budget_cny: float = 100.0,
     max_source_bytes: int = 8_000_000,
 ) -> dict[str, Any]:
-    mineru_cmd_template = mineru_cmd_template or os.getenv("MINERU_CMD", "mineru -i {input} -o {output}")
     rows: list[dict[str, Any]] = []
     if manifest_path is not None:
         rows.extend(iter_jsonl(manifest_path))
@@ -252,7 +262,6 @@ def build_base_dataset(
             html_text, html_path = normalize_to_html(
                 row=row,
                 normalized_dir=normalized_dir,
-                mineru_cmd_template=mineru_cmd_template,
                 max_source_bytes=max_source_bytes,
             )
             normalized_path = str(html_path)
@@ -520,74 +529,6 @@ LIMIT 3;
     return out
 
 
-def check_postgres_fulltext(dsn: str) -> dict[str, Any]:
-    if not str(dsn or "").strip():
-        return {"engine": "postgres", "status": "skipped", "reason": "dsn_missing", "candidate_columns": []}
-    candidates: list[dict[str, Any]] = []
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT table_schema, table_name, column_name, data_type
-                FROM information_schema.columns
-                WHERE table_schema NOT IN ('pg_catalog','information_schema')
-                  AND (
-                    LOWER(column_name) LIKE '%text%' OR
-                    LOWER(column_name) LIKE '%html%' OR
-                    LOWER(column_name) LIKE '%content%' OR
-                    LOWER(column_name) LIKE '%full%' OR
-                    LOWER(data_type) = 'text'
-                  )
-                ORDER BY table_schema, table_name, ordinal_position
-                """
-            )
-            rows = cur.fetchall()
-            for schema, table, column, data_type in rows:
-                cur.execute(
-                    f"""
-                    SELECT
-                      COUNT(*) AS total_rows,
-                      SUM(CASE WHEN COALESCE(LENGTH({column}),0) > 0 THEN 1 ELSE 0 END) AS non_empty_rows,
-                      AVG(NULLIF(LENGTH({column}),0)) AS avg_char_length
-                    FROM {schema}.{table}
-                    """
-                )
-                total_rows, non_empty_rows, avg_char_length = cur.fetchone()
-                candidates.append(
-                    {
-                        "schema": str(schema),
-                        "table": str(table),
-                        "column": str(column),
-                        "data_type": str(data_type),
-                        "total_rows": int(total_rows or 0),
-                        "non_empty_rows": int(non_empty_rows or 0),
-                        "avg_char_length": float(avg_char_length or 0.0),
-                    }
-                )
-    return {"engine": "postgres", "status": "ok", "candidate_columns": candidates}
-
-
-def summarize_db_fulltext(mysql_payload: dict[str, Any], postgres_payload: dict[str, Any]) -> dict[str, Any]:
-    def _engine_summary(payload: dict[str, Any]) -> dict[str, Any]:
-        cols = payload.get("candidate_columns", [])
-        if not isinstance(cols, list):
-            cols = []
-        non_empty_candidates = [
-            c for c in cols if int(float(c.get("non_empty_rows", 0) or 0)) > 0
-        ]
-        return {
-            "status": str(payload.get("status", "ok")),
-            "candidate_column_count": len(cols),
-            "has_fulltext_candidate": bool(non_empty_candidates),
-            "non_empty_candidate_count": len(non_empty_candidates),
-        }
-
-    return {
-        "mysql": _engine_summary(mysql_payload),
-        "postgres": _engine_summary(postgres_payload),
-    }
-
-
 def _render_cost_estimate_md(cost: dict[str, Any]) -> str:
     lines = [
         "# Embedding Cost Estimate",
@@ -606,38 +547,13 @@ def _normalize_reject_reason(detail: str) -> str:
     text = str(detail or "").strip().lower()
     if "source_too_large" in text:
         return "source_too_large"
-    if "mineru_not_installed" in text:
-        return "pdf_mineru_unavailable"
-    if "mineru_failed" in text:
+    if "mineru_cloud" in text or "mineru" in text:
         return "pdf_mineru_failed"
     if "missing_source_path" in text:
         return "missing_source_path"
     if "source_not_found" in text:
         return "source_not_found"
     return "normalize_error"
-
-
-def _render_db_summary_md(summary: dict[str, Any]) -> str:
-    mysql = summary.get("mysql", {})
-    pg = summary.get("postgres", {})
-    return "\n".join(
-        [
-            "# DB Fulltext Check Summary",
-            "",
-            "## MySQL",
-            f"- status: {mysql.get('status', 'unknown')}",
-            f"- candidate_column_count: {mysql.get('candidate_column_count', 0)}",
-            f"- has_fulltext_candidate: {mysql.get('has_fulltext_candidate', False)}",
-            f"- non_empty_candidate_count: {mysql.get('non_empty_candidate_count', 0)}",
-            "",
-            "## PostgreSQL",
-            f"- status: {pg.get('status', 'unknown')}",
-            f"- candidate_column_count: {pg.get('candidate_column_count', 0)}",
-            f"- has_fulltext_candidate: {pg.get('has_fulltext_candidate', False)}",
-            f"- non_empty_candidate_count: {pg.get('non_empty_candidate_count', 0)}",
-            "",
-        ]
-    )
 
 
 def build_cli() -> argparse.ArgumentParser:
@@ -666,14 +582,6 @@ def build_cli() -> argparse.ArgumentParser:
     ap_mysql.add_argument("--user", required=True)
     ap_mysql.add_argument("--password", required=True)
 
-    ap_pg = sub.add_parser("db-check-pg")
-    ap_pg.add_argument("--dsn", default="")
-    ap_pg.add_argument("--output-json", type=Path, required=True)
-
-    ap_summary = sub.add_parser("db-check-summary")
-    ap_summary.add_argument("--mysql-json", type=Path, required=True)
-    ap_summary.add_argument("--pg-json", type=Path, required=True)
-    ap_summary.add_argument("--output-md", type=Path, required=True)
     return p
 
 
@@ -706,20 +614,6 @@ def main() -> None:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
         args.output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return
-    if args.command == "db-check-pg":
-        payload = check_postgres_fulltext(dsn=args.dsn)
-        args.output_json.parent.mkdir(parents=True, exist_ok=True)
-        args.output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return
-    if args.command == "db-check-summary":
-        mysql_payload = json.loads(args.mysql_json.read_text(encoding="utf-8"))
-        pg_payload = json.loads(args.pg_json.read_text(encoding="utf-8"))
-        summary = summarize_db_fulltext(mysql_payload, pg_payload)
-        args.output_md.parent.mkdir(parents=True, exist_ok=True)
-        args.output_md.write_text(_render_db_summary_md(summary), encoding="utf-8")
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
         return
 
 

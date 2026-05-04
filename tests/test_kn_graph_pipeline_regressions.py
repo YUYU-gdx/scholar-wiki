@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from kn_graph.config import Settings
 from kn_graph.routers import pipeline as pipeline_router
-from kn_graph.services.pipeline_service import PipelineService
+from kn_graph.services.pipeline_service import PipelineService, _SQLiteJobStore
 
 
 class _FakePipelineService:
@@ -79,16 +79,17 @@ class TestPipelineRouterRegressions(unittest.TestCase):
 
 
 class TestPipelineServiceRegressions(unittest.TestCase):
-    def test_postgres_dsn_does_not_silently_fallback_to_inmemory(self) -> None:
+    def test_unknown_dsn_falls_back_to_sqlite(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             svc = PipelineService(
                 Settings(
                     data_dir=Path(tmp),
-                    pipeline_job_store_dsn="postgresql://user:pass@127.0.0.1:5432/kn_graph",
+                    pipeline_job_store_dsn="unknown://some/thing",
                 )
             )
-            with self.assertRaises(RuntimeError):
-                svc._ensure_store()
+            store = svc._ensure_store()
+            self.assertIsNotNone(store)
+            self.assertIsInstance(store, _SQLiteJobStore)
 
 
 if __name__ == "__main__":

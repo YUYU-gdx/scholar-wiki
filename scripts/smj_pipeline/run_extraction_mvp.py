@@ -90,7 +90,7 @@ def run(
     input_manifest: Path | str | Iterable[dict[str, object]],
     sample_size: int = 100,
     llm_client: LLMClient | None = None,
-    postgres_repo: object | None = None,
+    db_repo: object | None = None,
     neo4j_repo: object | None = None,
     project_root: Path | str | None = None,
     review_queue_jsonl: Path | str | None = None,
@@ -140,7 +140,7 @@ def run(
         if doc_class == "A":
             class_a_used += 1
             try:
-                bundle, rejected, raw_record = _process_class_a_record(row, html, llm, postgres_repo, neo4j_repo)
+                bundle, rejected, raw_record = _process_class_a_record(row, html, llm, db_repo, neo4j_repo)
                 rejected_records_acc.extend(rejected)
                 _accumulate_stats(stats, bundle)
                 raw_outputs.append(raw_record)
@@ -198,7 +198,7 @@ def _process_class_a_record(
     row: dict[str, object],
     html: str,
     llm_client: LLMClient,
-    postgres_repo: object | None,
+    db_repo: object | None,
     neo4j_repo: object | None,
 ) -> tuple[object, list[object], dict[str, Any]]:
     evidence_spans = locate_main_model_evidence(html)
@@ -227,8 +227,8 @@ def _process_class_a_record(
         "moderations": bundle.moderations,
         "interactions": bundle.interactions,
     }
-    if paper_id and postgres_repo is not None:
-        getattr(postgres_repo, "replace_paper_bundle")(paper_id, payload)
+    if paper_id and db_repo is not None:
+        getattr(db_repo, "replace_paper_bundle")(paper_id, payload)
     if paper_id and neo4j_repo is not None:
         getattr(neo4j_repo, "project_bundle")(paper_id, payload)
 

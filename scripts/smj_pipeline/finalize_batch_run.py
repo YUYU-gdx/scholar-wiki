@@ -17,7 +17,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--runs-root", type=Path, default=DEFAULT_RUNS_ROOT)
     p.add_argument("--batch-id", default="")
     p.add_argument("--api-key-env", default="ZHIPU_API_KEY")
-    p.add_argument("--dsn", default="", help="PostgreSQL DSN (required for graph build).")
+    p.add_argument("--db-path", type=Path, help="Path to SQLite database (required for graph build).")
     p.add_argument("--activate", action="store_true")
     return p.parse_args()
 
@@ -79,24 +79,35 @@ def main() -> None:
         Path.cwd(),
     )
 
-    dsn = str(args.dsn or "").strip() or str(os.getenv("KN_PAPERS_POSTGRES_DSN", "")).strip()
-    if not dsn:
-        raise RuntimeError("dsn_required_for_graph_build")
+    # Import extraction results into SQLite (single source of truth for paper data)
+    raw_output_jsonl = rdir / "extract" / "raw_llm_outputs.jsonl"
+    if raw_output_jsonl.exists() and args.db_path:
+        db_path = Path(args.db_path).resolve()
+        _run(
+            [
+                "uv", "run", "python",
+                "scripts/smj_pipeline/import_raw_outputs_to_sqlite.py",
+                "--db-path", str(db_path),
+                "--raw-output-jsonl", str(raw_output_jsonl),
+            ],
+            Path.cwd(),
+        )
 
+    # Build graph views from SQLite (single source of truth)
     views_out = rdir / "graph_views.json"
-    _run(
-        [
-            "uv",
-            "run",
-            "python",
-            "scripts/smj_pipeline/build_graph_views.py",
-            "--dsn",
-            dsn,
-            "--output-json",
-            str(views_out),
-        ],
-        Path.cwd(),
-    )
+    if args.db_path:
+        db_path = Path(args.db_path).resolve()
+        _run(
+            [
+                "uv", "run", "python",
+                "scripts/smj_pipeline/build_graph_views.py",
+                "--db-path", str(db_path),
+                "--output-json", str(views_out),
+            ],
+            Path.cwd(),
+        )
+    else:
+        views_out.write_text("{}", encoding="utf-8")
 
     meta_path = rdir / "run_meta.json"
     meta = {}

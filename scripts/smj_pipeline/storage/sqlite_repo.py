@@ -6,27 +6,16 @@ import re
 from typing import Any
 
 
-class PostgresRepo:
-    """Source-of-truth repo backed by PostgreSQL (with sqlite fallback for tests)."""
+class SqliteRepo:
+    """Source-of-truth repo backed by SQLite."""
 
     def __init__(self, connection: Any) -> None:
         self.connection = connection
-        mod = type(connection).__module__.lower()
-        self._dialect = "sqlite" if "sqlite3" in mod else "postgres"
 
     def apply_schema(self) -> None:
-        schema_file = "schema_postgres.sql" if self._dialect == "postgres" else "schema.sql"
-        schema_path = Path(__file__).with_name(schema_file)
+        schema_path = Path(__file__).with_name("schema.sql")
         schema_sql = schema_path.read_text(encoding="utf-8")
-        if self._dialect == "sqlite":
-            self.connection.executescript(schema_sql)
-        else:
-            with self.connection:
-                with self.connection.cursor() as cur:
-                    for statement in schema_sql.split(";"):
-                        stmt = statement.strip()
-                        if stmt:
-                            cur.execute(stmt)
+        self.connection.executescript(schema_sql)
         self.connection.commit()
 
     def replace_paper_bundle(self, paper_id: str, bundle: dict[str, object]) -> None:
@@ -42,32 +31,19 @@ class PostgresRepo:
         with self.connection:
             self._execute(
                 """
-                INSERT INTO papers (
+                INSERT OR REPLACE INTO papers (
                     paper_id, doi,
                     title, authors_json, abstract, journal,
                     offline_html_path, source_pdf_path, source_md_path, source_html_path,
                     article_url, publication_date, online_date,
                     publication_year, paper_citation_count, metadata_source,
                     extractability_status, paper_type, extractability_reason, extractability_evidence_section
-                ) VALUES ({p}, {p},
-                    {p}, {p}::jsonb, {p}, {p},
-                    {p}, {p}, {p}, {p},
-                    {p}, {p}, {p},
-                    {p}, {p}, {p},
-                    {p}, {p}, {p}, {p})
-                ON CONFLICT(paper_id) DO UPDATE SET
-                    doi=excluded.doi,
-                    offline_html_path=excluded.offline_html_path,
-                    article_url=excluded.article_url,
-                    publication_date=excluded.publication_date,
-                    online_date=excluded.online_date,
-                    publication_year=excluded.publication_year,
-                    paper_citation_count=excluded.paper_citation_count,
-                    metadata_source=excluded.metadata_source,
-                    extractability_status=excluded.extractability_status,
-                    paper_type=excluded.paper_type,
-                    extractability_reason=excluded.extractability_reason,
-                    extractability_evidence_section=excluded.extractability_evidence_section
+                ) VALUES (?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?, ?)
                 """,
                 (
                     paper_id,
@@ -93,12 +69,12 @@ class PostgresRepo:
                 ),
             )
 
-            self._execute("DELETE FROM paper_domains WHERE paper_id = {p}", (paper_id,))
-            self._execute("DELETE FROM variable_aliases WHERE paper_id = {p}", (paper_id,))
-            self._execute("DELETE FROM variable_definitions WHERE paper_id = {p}", (paper_id,))
-            self._execute("DELETE FROM direct_effects WHERE paper_id = {p}", (paper_id,))
-            self._execute("DELETE FROM moderations WHERE paper_id = {p}", (paper_id,))
-            self._execute("DELETE FROM interactions WHERE paper_id = {p}", (paper_id,))
+            self._execute("DELETE FROM paper_domains WHERE paper_id = ?", (paper_id,))
+            self._execute("DELETE FROM variable_aliases WHERE paper_id = ?", (paper_id,))
+            self._execute("DELETE FROM variable_definitions WHERE paper_id = ?", (paper_id,))
+            self._execute("DELETE FROM direct_effects WHERE paper_id = ?", (paper_id,))
+            self._execute("DELETE FROM moderations WHERE paper_id = ?", (paper_id,))
+            self._execute("DELETE FROM interactions WHERE paper_id = ?", (paper_id,))
 
             self._execute(
                 "DELETE FROM interaction_inputs WHERE interaction_id NOT IN (SELECT id FROM interactions)",
@@ -110,7 +86,7 @@ class PostgresRepo:
                 if not domain_text:
                     continue
                 self._execute(
-                    "INSERT INTO paper_domains (paper_id, domain, source) VALUES ({p}, {p}, {p})",
+                    "INSERT INTO paper_domains (paper_id, domain, source) VALUES (?, ?, ?)",
                     (paper_id, domain_text, "metadata_or_model"),
                 )
 
@@ -121,7 +97,7 @@ class PostgresRepo:
                     """
                     INSERT INTO variable_definitions (
                         paper_id, variable_name, aliases_json, definition_text, measurement_text
-                    ) VALUES ({p}, {p}, {p}, {p}, {p})
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     (
                         paper_id,
@@ -143,17 +119,15 @@ class PostgresRepo:
 
                 self._execute(
                     """
-                    INSERT INTO canonical_variables (canonical_var_id, canonical_name)
-                    VALUES ({p}, {p})
-                    ON CONFLICT(canonical_var_id) DO UPDATE SET canonical_name=excluded.canonical_name
+                    INSERT OR REPLACE INTO canonical_variables (canonical_var_id, canonical_name)
+                    VALUES (?, ?)
                     """,
                     (source_canonical, source_var),
                 )
                 self._execute(
                     """
-                    INSERT INTO canonical_variables (canonical_var_id, canonical_name)
-                    VALUES ({p}, {p})
-                    ON CONFLICT(canonical_var_id) DO UPDATE SET canonical_name=excluded.canonical_name
+                    INSERT OR REPLACE INTO canonical_variables (canonical_var_id, canonical_name)
+                    VALUES (?, ?)
                     """,
                     (target_canonical, target_var),
                 )
@@ -169,7 +143,7 @@ class PostgresRepo:
                         paper_id, source_var, target_var, source_canonical_var_id, target_canonical_var_id,
                         source_alias_json, target_alias_json, effect_form, theory_name,
                         verification, evidence_text
-                    ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         paper_id,
@@ -197,9 +171,8 @@ class PostgresRepo:
 
                 self._execute(
                     """
-                    INSERT INTO canonical_variables (canonical_var_id, canonical_name)
-                    VALUES ({p}, {p})
-                    ON CONFLICT(canonical_var_id) DO UPDATE SET canonical_name=excluded.canonical_name
+                    INSERT OR REPLACE INTO canonical_variables (canonical_var_id, canonical_name)
+                    VALUES (?, ?)
                     """,
                     (moderator_canonical, moderator_var),
                 )
@@ -209,18 +182,16 @@ class PostgresRepo:
                 if source_var:
                     self._execute(
                         """
-                        INSERT INTO canonical_variables (canonical_var_id, canonical_name)
-                        VALUES ({p}, {p})
-                        ON CONFLICT(canonical_var_id) DO UPDATE SET canonical_name=excluded.canonical_name
+                        INSERT OR REPLACE INTO canonical_variables (canonical_var_id, canonical_name)
+                        VALUES (?, ?)
                         """,
                         (source_canonical, source_var),
                     )
                 if target_var:
                     self._execute(
                         """
-                        INSERT INTO canonical_variables (canonical_var_id, canonical_name)
-                        VALUES ({p}, {p})
-                        ON CONFLICT(canonical_var_id) DO UPDATE SET canonical_name=excluded.canonical_name
+                        INSERT OR REPLACE INTO canonical_variables (canonical_var_id, canonical_name)
+                        VALUES (?, ?)
                         """,
                         (target_canonical, target_var),
                     )
@@ -231,7 +202,7 @@ class PostgresRepo:
                         paper_id, moderator_var, moderator_canonical_var_id, moderator_alias_json,
                         source_var, target_var, source_canonical_var_id, target_canonical_var_id,
                         effect_form, theory_name, verification, evidence_text
-                    ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         paper_id,
@@ -256,9 +227,8 @@ class PostgresRepo:
                 if output_var:
                     self._execute(
                         """
-                        INSERT INTO canonical_variables (canonical_var_id, canonical_name)
-                        VALUES ({p}, {p})
-                        ON CONFLICT(canonical_var_id) DO UPDATE SET canonical_name=excluded.canonical_name
+                        INSERT OR REPLACE INTO canonical_variables (canonical_var_id, canonical_name)
+                        VALUES (?, ?)
                         """,
                         (output_canonical, output_var),
                     )
@@ -268,8 +238,7 @@ class PostgresRepo:
                     INSERT INTO interactions (
                         paper_id, output_var, output_canonical_var_id, effect_form, theory_name,
                         verification, evidence_text
-                    ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p})
-                    RETURNING id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         paper_id,
@@ -281,8 +250,7 @@ class PostgresRepo:
                         str(row.get("evidence_text", "") or ""),
                     ),
                 )
-                fetched = cursor.fetchone()
-                interaction_id = int(fetched[0]) if fetched else 0
+                interaction_id = cursor.lastrowid or 0
 
                 inputs = row.get("inputs", []) or []
                 for idx, raw_input in enumerate(inputs):
@@ -292,9 +260,8 @@ class PostgresRepo:
                     input_canonical = _canonical_var_id(input_var)
                     self._execute(
                         """
-                        INSERT INTO canonical_variables (canonical_var_id, canonical_name)
-                        VALUES ({p}, {p})
-                        ON CONFLICT(canonical_var_id) DO UPDATE SET canonical_name=excluded.canonical_name
+                        INSERT OR REPLACE INTO canonical_variables (canonical_var_id, canonical_name)
+                        VALUES (?, ?)
                         """,
                         (input_canonical, input_var),
                     )
@@ -302,7 +269,7 @@ class PostgresRepo:
                         """
                         INSERT INTO interaction_inputs (
                             interaction_id, input_var, input_canonical_var_id, input_order
-                        ) VALUES ({p}, {p}, {p}, {p})
+                        ) VALUES (?, ?, ?, ?)
                         """,
                         (interaction_id, input_var, input_canonical, idx),
                     )
@@ -311,21 +278,19 @@ class PostgresRepo:
         alias_norm = _normalize_alias(alias)
         self._execute(
             """
-            INSERT INTO variable_aliases (canonical_var_id, alias_text, alias_norm, source, paper_id)
-            VALUES ({p}, {p}, {p}, {p}, {p})
-            ON CONFLICT(canonical_var_id, alias_norm) DO NOTHING
+            INSERT OR IGNORE INTO variable_aliases (canonical_var_id, alias_text, alias_norm, source, paper_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (canonical_var_id, alias, alias_norm, "model", paper_id),
         )
 
     def _execute(self, sql: str, params: tuple[object, ...] = ()) -> Any:
-        q = sql.replace("{p}", "?") if self._dialect == "sqlite" else sql.replace("{p}", "%s")
-        return self.connection.execute(q, params)
+        return self.connection.execute(sql, params)
 
 
 def _normalize_alias(text: str) -> str:
     t = re.sub(r"\s+", " ", str(text or "").strip().lower())
-    t = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", t).strip("-")
+    t = re.sub(r"[^a-z0-9一-鿿]+", "-", t).strip("-")
     return t or "unknown"
 
 

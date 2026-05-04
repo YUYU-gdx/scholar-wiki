@@ -19,7 +19,6 @@ _SPEC.loader.exec_module(_MOD)
 build_base_dataset = _MOD.build_base_dataset
 estimate_embedding_cost = _MOD.estimate_embedding_cost
 normalize_doi = _MOD.normalize_doi
-summarize_db_fulltext = _MOD.summarize_db_fulltext
 safe_float = _MOD._safe_float
 normalize_reject_reason = _MOD._normalize_reject_reason
 
@@ -77,19 +76,6 @@ class LiteratureDatasetToolsTest(unittest.TestCase):
         self.assertIn("within_budget", report)
         self.assertTrue(report["within_budget"])
 
-    def test_summarize_db_fulltext(self) -> None:
-        mysql_payload = {
-            "engine": "mysql",
-            "candidate_columns": [
-                {"schema": "a", "table": "papers", "column": "full_text", "non_empty_rows": 10, "total_rows": 10}
-            ],
-        }
-        pg_payload = {"engine": "postgres", "status": "skipped", "reason": "dsn_missing"}
-        summary = summarize_db_fulltext(mysql_payload, pg_payload)
-        self.assertIn("mysql", summary)
-        self.assertIn("postgres", summary)
-        self.assertIn("has_fulltext_candidate", summary["mysql"])
-
     def test_safe_float_handles_null(self) -> None:
         self.assertEqual(safe_float("NULL"), 0.0)
         self.assertEqual(safe_float(""), 0.0)
@@ -98,7 +84,7 @@ class LiteratureDatasetToolsTest(unittest.TestCase):
 
     def test_normalize_reject_reason(self) -> None:
         self.assertEqual(normalize_reject_reason("source_too_large:123"), "source_too_large")
-        self.assertEqual(normalize_reject_reason("mineru_not_installed:mineru"), "pdf_mineru_unavailable")
+        self.assertEqual(normalize_reject_reason("mineru_cloud_failed:timeout"), "pdf_mineru_failed")
 
 
 if __name__ == "__main__":

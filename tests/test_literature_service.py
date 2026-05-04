@@ -252,7 +252,7 @@ class LiteratureServiceTest(unittest.TestCase):
                         "command": ["mineru"],
                     }
 
-                service._run_mineru_to_dir = _fake_mineru  # type: ignore[method-assign]
+                service._run_mineru_cloud_to_dir = _fake_mineru  # type: ignore[method-assign]
 
                 pdf_path = tmp / "demo.pdf"
                 pdf_path.write_bytes(b"%PDF-1.4 fake")
@@ -290,25 +290,36 @@ class LiteratureServiceTest(unittest.TestCase):
             embedding_client=_FakeEmbeddingClient(),
             generator_client=_FakeGenerator(),
         )
-        original_run = _MOD.subprocess.run
+        original_mod = _MOD._MINERU_SINGLE_MOD
         try:
-            def _fake_run(cmd, capture_output, text, check):  # noqa: ANN001
-                out_idx = cmd.index("-o") + 1
-                out_dir = Path(cmd[out_idx])
-                out_dir.mkdir(parents=True, exist_ok=True)
-                (out_dir / "raw.md").write_text("# My Great Paper\n\nBody", encoding="utf-8")
-                return types.SimpleNamespace(returncode=0, stderr="", stdout="")
+            def _fake_parse_single_pdf(pdf_path, run_dir, options=None, progress_cb=None, cancel_cb=None):
+                parse_dir = run_dir / "parse"
+                parse_dir.mkdir(parents=True, exist_ok=True)
+                md_path = parse_dir / "parsed.md"
+                md_path.write_text("# My Great Paper\n\nBody", encoding="utf-8")
+                html_path = parse_dir / "parsed.html"
+                html_path.write_text(
+                    "<html><body><pre># My Great Paper\n\nBody</pre></body></html>",
+                    encoding="utf-8",
+                )
+                return {
+                    "markdown_path": str(md_path),
+                    "html_path": str(html_path),
+                    "zip_path": "",
+                    "page_count": 1,
+                    "batch_id": "fake",
+                }
 
-            _MOD.subprocess.run = _fake_run  # type: ignore[assignment]
+            _MOD._MINERU_SINGLE_MOD = types.SimpleNamespace(parse_single_pdf=_fake_parse_single_pdf)
             with tempfile.TemporaryDirectory() as tmp_dir:
                 src_pdf = Path(tmp_dir) / "a.pdf"
                 src_pdf.write_bytes(b"%PDF-1.4 test")
                 out_dir = Path(tmp_dir) / "mineru_out"
-                result = service._run_mineru_to_dir(src_pdf, out_dir)
+                result = service._run_mineru_cloud_to_dir(src_pdf, out_dir)
                 self.assertTrue(str(result["main_md_path"]).endswith("My Great Paper.md"))
                 self.assertTrue(Path(str(result["main_md_path"])).exists())
         finally:
-            _MOD.subprocess.run = original_run  # type: ignore[assignment]
+            _MOD._MINERU_SINGLE_MOD = original_mod
 
 
 if __name__ == "__main__":

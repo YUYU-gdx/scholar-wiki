@@ -155,7 +155,7 @@ class RunExtractionMvpTest(unittest.TestCase):
                     manifest_path,
                     sample_size=1,
                     llm_client=_FakeLLM(),
-                    postgres_repo=db_repo,
+                    db_repo=db_repo,
                     neo4j_repo=graph_repo,
                     project_root=Path.cwd(),
                 )
