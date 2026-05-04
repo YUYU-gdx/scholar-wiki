@@ -848,12 +848,8 @@ class LiteratureService:
             mineru = self._run_mineru_cloud_to_dir(source_pdf, mineru_latest_dir)
             html_text = str(mineru.get("html_text", "") or "")
             mineru_main_md_path = str(mineru.get("main_md_path", "") or "")
-            md_library_path = self._sync_md_library_bundle(
-                workspace_root=workspace_root,
-                paper_key=paper_key,
-                mineru_output_root=mineru_latest_dir,
-                mineru_main_md_path=mineru_main_md_path,
-            )
+            # MD library path points into the same paper directory (derived/mineru/latest)
+            md_library_path = str(mineru_latest_dir.resolve())
         elif isinstance(source_path, Path) and source_path.exists() and source_path.is_file() and ext == ".md":
             md_raw = source_path.read_text(encoding="utf-8", errors="ignore")
             md_h1 = _extract_first_md_h1(md_raw)
@@ -944,26 +940,6 @@ class LiteratureService:
                 "meta_path": str(meta_path.resolve()),
             },
         }
-
-    def _sync_md_library_bundle(self, workspace_root: Path, paper_key: str, mineru_output_root: Path, mineru_main_md_path: str) -> str:
-        if not mineru_output_root.exists():
-            return ""
-        md_root = workspace_root / "corpus" / "md_library" / str(paper_key).strip()
-        if md_root.exists():
-            shutil.rmtree(md_root, ignore_errors=True)
-        shutil.copytree(mineru_output_root, md_root)
-        entry_md = ""
-        main_src = Path(str(mineru_main_md_path or "")).resolve() if str(mineru_main_md_path or "").strip() else None
-        if isinstance(main_src, Path) and main_src.exists():
-            for candidate in md_root.rglob("*.md"):
-                if candidate.name == main_src.name:
-                    entry_md = str(candidate.resolve())
-                    break
-        if not entry_md:
-            md_candidates = sorted(md_root.rglob("*.md"))
-            if md_candidates:
-                entry_md = str(md_candidates[0].resolve())
-        return entry_md
 
     @staticmethod
     def _filter_rows_by_paper_ids(rows: list[dict[str, Any]], allowed_paper_ids: set[str]) -> list[dict[str, Any]]:
