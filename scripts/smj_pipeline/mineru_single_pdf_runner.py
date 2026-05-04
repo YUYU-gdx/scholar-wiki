@@ -23,6 +23,47 @@ class MinerUSinglePdfError(RuntimeError):
         super().__init__(f"{self.code}:{self.detail}" if self.detail else self.code)
 
 
+def _parse_dotenv_value(raw: str) -> str:
+    text = str(raw).strip()
+    if not text:
+        return ""
+    if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+        return text[1:-1]
+    return text
+
+
+def _read_env_key_from_dotenv(dotenv_path: Path, key: str) -> str:
+    if not dotenv_path.exists():
+        return ""
+    try:
+        for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+            row = line.strip()
+            if not row or row.startswith("#") or "=" not in row:
+                continue
+            name, value = row.split("=", 1)
+            if name.strip() == key:
+                return _parse_dotenv_value(value)
+    except Exception:
+        return ""
+    return ""
+
+
+def _resolve_api_key(env_name: str) -> str:
+    key = str(os.getenv(env_name, "")).strip()
+    if key:
+        return key
+    candidates = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parents[2] / ".env",
+    ]
+    for dotenv_path in candidates:
+        val = _read_env_key_from_dotenv(dotenv_path, env_name).strip()
+        if val:
+            os.environ[env_name] = val
+            return val
+    return ""
+
+
 def _load_batch_module():
     module_path = Path(__file__).resolve().parent / "run_mineru_v4_precise_batch.py"
     spec = importlib.util.spec_from_file_location("smj_pipeline_run_mineru_v4_precise_batch_for_single", module_path)
@@ -102,7 +143,7 @@ def parse_single_pdf(
         raise MinerUSinglePdfError("pdf_unreadable", str(pdf_path))
 
     api_key_env = str(opts.get("api_key_env", "MINERU_API_KEY")).strip() or "MINERU_API_KEY"
-    api_key = str(os.getenv(api_key_env, "")).strip()
+    api_key = _resolve_api_key(api_key_env)
     if not api_key:
         raise MinerUSinglePdfError("mineru_api_key_missing", api_key_env)
 
@@ -167,4 +208,3 @@ def parse_single_pdf(
     if progress_cb is not None:
         progress_cb(45, "parse_done")
     return result
-

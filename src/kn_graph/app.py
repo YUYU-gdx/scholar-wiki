@@ -9,8 +9,9 @@ from kn_graph.services.chat_service import ChatService
 from kn_graph.services.literature_service import LiteratureService
 from kn_graph.services.pipeline_service import PipelineService
 from kn_graph.services.workspace_service import WorkspaceService
+from kn_graph.services.settings_service import SettingsService
 
-from kn_graph.routers import graph, chat, literature, pipeline, workspace
+from kn_graph.routers import graph, chat, literature, pipeline, workspace, settings as settings_router
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     literature_service = LiteratureService(settings)
     pipeline_service = PipelineService(settings)
     workspace_service = WorkspaceService(settings)
+    settings_service = SettingsService(settings, chat_service)
 
     app.include_router(graph.create_router(graph_service))
     app.include_router(graph.create_paper_router(graph_service))
@@ -46,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(literature.create_router(literature_service))
     app.include_router(pipeline.create_router(pipeline_service))
     app.include_router(workspace.create_router(workspace_service))
+    app.include_router(settings_router.create_router(settings_service))
 
     @app.get("/healthz")
     async def healthz():

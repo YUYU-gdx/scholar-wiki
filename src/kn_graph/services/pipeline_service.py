@@ -291,6 +291,23 @@ def _public_job_payload(job: dict[str, Any]) -> dict[str, Any]:
     out["stage_label"] = stage_label_map.get(stage, stage or "")
     out["can_cancel"] = status in {"queued", "running"}
     out["can_retry"] = status in {"failed", "cancelled"}
+    result_obj = out.get("result")
+    if isinstance(result_obj, dict):
+        out["final_verdict"] = str(result_obj.get("final_verdict", "") or "")
+        out["imported_paper_count"] = int(result_obj.get("imported_paper_count", 0) or 0)
+        out["graph_updated"] = bool(result_obj.get("graph_updated", False))
+        out["graph_output_path"] = str(result_obj.get("graph_output_path", "") or "")
+        out["workspace_path"] = str(result_obj.get("workspace_path", out.get("workspace_path", "")) or "")
+        out["library_id"] = str(result_obj.get("library_id", out.get("library_id", "")) or "")
+        out["failure_stage"] = str(result_obj.get("failure_stage", "") or "")
+        out["failure_code"] = str(result_obj.get("failure_code", out.get("error_code", "")) or "")
+    else:
+        out["final_verdict"] = "success" if status == "completed" else ("failed" if status == "failed" else "")
+        out["imported_paper_count"] = 0
+        out["graph_updated"] = False
+        out["graph_output_path"] = ""
+        out["failure_stage"] = ""
+        out["failure_code"] = str(out.get("error_code", "") or "")
     return out
 
 
@@ -358,14 +375,31 @@ class PipelineService:
         row = store.get_job(job_id)
         if row is None:
             return None
-        if str(row.get("status", "")) != "completed":
-            return {"error": "result_not_ready", "job_id": job_id, "status": row.get("status", "")}
         raw_result = str(row.get("result_json", "") or "{}")
         try:
             result = json.loads(raw_result)
         except Exception:
             result = {"raw": raw_result}
-        return {"job_id": job_id, "status": "completed", "result": result}
+        if str(row.get("status", "")) != "completed":
+            return {
+                "error": "result_not_ready",
+                "job_id": job_id,
+                "status": row.get("status", ""),
+                "final_verdict": str(result.get("final_verdict", "failed") or "failed"),
+                "failure_stage": str(result.get("failure_stage", row.get("stage", "")) or ""),
+                "failure_code": str(result.get("failure_code", row.get("error_code", "")) or ""),
+                "result": result,
+            }
+        return {
+            "job_id": job_id,
+            "status": "completed",
+            "final_verdict": str(result.get("final_verdict", "success") or "success"),
+            "imported_paper_count": int(result.get("imported_paper_count", 0) or 0),
+            "graph_updated": bool(result.get("graph_updated", False)),
+            "workspace_path": str(result.get("workspace_path", "") or ""),
+            "library_id": str(result.get("library_id", "") or ""),
+            "result": result,
+        }
 
     def create_job(self, payload: dict[str, Any]) -> dict[str, Any]:
         store = self._ensure_store()

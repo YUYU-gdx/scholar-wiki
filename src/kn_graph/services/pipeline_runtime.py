@@ -200,6 +200,9 @@ def _run_finalize(
     workspace_path = str(options.get("_workspace_path", "") or "").strip()
     import_result: dict[str, Any] = {}
     import_warning = ""
+    graph_output_path = ""
+    graph_updated = False
+    graph_output_size = 0
     if library_id:
         try:
             _stage_update(store, job_id, "finalize", 97, "stage_progress", status="running")
@@ -215,6 +218,13 @@ def _run_finalize(
             workspace_path = str(import_result.get("workspace_path", "") or workspace_path)
         except Exception as exc:
             import_warning = str(exc)
+            raise RuntimeError(f"import_failed:{import_warning}") from exc
+    else:
+        raise RuntimeError("import_failed:library_id_missing")
+
+    imported_count = int(import_result.get("imported_count", 0) or 0)
+    if imported_count <= 0:
+        raise RuntimeError("import_noop:imported_count_is_zero")
 
     graph_warning = ""
     if library_id and workspace_path:
@@ -236,15 +246,28 @@ def _run_finalize(
                     if artifact_result and artifact_result.exists():
                         ws_path = Path(workspace_path)
                         graph_output = ws_path / "graph_views.json"
+                        graph_output_path = str(graph_output.resolve())
+                        before_mtime = graph_output.stat().st_mtime if graph_output.exists() else 0.0
                         build_result = run_build(artifact_json=artifact_result, output_json=graph_output)
-                        if build_result:
+                        exists_after = graph_output.exists()
+                        after_mtime = graph_output.stat().st_mtime if exists_after else 0.0
+                        graph_output_size = int(graph_output.stat().st_size) if exists_after else 0
+                        graph_updated = bool(
+                            build_result and exists_after and graph_output_size > 0 and (after_mtime >= before_mtime)
+                        )
+                        if graph_updated:
                             _stage_update(store, job_id, "finalize", 99, "graph_rebuilt", status="running")
                         else:
-                            graph_warning = "build_graph_views failed"
+                            graph_warning = "build_graph_views_result_invalid"
                     else:
                         graph_warning = "export_frontend_artifact failed"
         except Exception as exc:
             graph_warning = f"graph_rebuild_error: {exc}"
+    else:
+        graph_warning = "graph_rebuild_skipped_workspace_missing"
+
+    if graph_warning:
+        raise RuntimeError(f"graph_not_updated:{graph_warning}")
 
     result = {
         "job_id": job_id,
@@ -256,6 +279,11 @@ def _run_finalize(
         "import_result": import_result,
         "import_warning": import_warning,
         "graph_warning": graph_warning,
+        "imported_paper_count": imported_count,
+        "graph_updated": bool(graph_updated),
+        "graph_output_path": graph_output_path,
+        "graph_output_size": int(graph_output_size),
+        "final_verdict": "success",
         "finished_at": _now_iso(),
     }
     out_path = run_dir / "result.json"
@@ -296,7 +324,28 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
             first = detail.split(":", 1)[0].strip()
             if first:
                 code = first
-        job_store.update_job(job_id, {"status": "failed", "error_code": code, "error_detail": detail, "last_event": "failed"})
+        cur = job_store.get_job(job_id) or {}
+        failed_stage = str(cur.get("stage", "") or "unknown")
+        job_store.update_job(
+            job_id,
+            {
+                "status": "failed",
+                "error_code": code,
+                "error_detail": detail,
+                "stage": failed_stage,
+                "last_event": "failed",
+                "result_json": _safe_json_dumps(
+                    {
+                        "job_id": job_id,
+                        "final_verdict": "failed",
+                        "failure_stage": failed_stage,
+                        "failure_code": code,
+                        "failure_detail": detail,
+                        "finished_at": _now_iso(),
+                    }
+                ),
+            },
+        )
 
 
 def dispatch_inline(job_store: JobStore, job_id: str, input_path: str, options: dict[str, Any], runs_root: Path) -> None:
