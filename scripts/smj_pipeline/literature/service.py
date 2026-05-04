@@ -850,6 +850,7 @@ class LiteratureService:
             mineru_main_md_path = str(mineru.get("main_md_path", "") or "")
             # MD library path points into the same paper directory (derived/mineru/latest)
             md_library_path = str(mineru_latest_dir.resolve())
+            source_md_path = md_library_path
         elif isinstance(source_path, Path) and source_path.exists() and source_path.is_file() and ext == ".md":
             md_raw = source_path.read_text(encoding="utf-8", errors="ignore")
             md_h1 = _extract_first_md_h1(md_raw)
