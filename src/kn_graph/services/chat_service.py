@@ -252,7 +252,6 @@ class ChatService:
         return {
             "current_agent": current_agent,
             "available_agents": sorted(known),
-            "config_path": str(agent_entry.get("config_path", "") or defaults.get("config_path", self._default_agent_config_path(current_agent))),
             "provider": str(agent_entry.get("provider", "") or defaults["provider"]),
             "model": str(agent_entry.get("model", "") or defaults["model"]),
             "api_key": str(agent_entry.get("api_key", "") or ""),
