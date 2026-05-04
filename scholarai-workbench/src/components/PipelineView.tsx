@@ -207,15 +207,15 @@ export default function PipelineView() {
 
       <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-hidden glass-shadow mb-8">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full text-left border-collapse table-fixed">
             <thead>
               <tr className="bg-surface-container-low/10 text-[10px] font-mono font-black text-outline uppercase tracking-widest border-b border-outline-variant/10">
-                <th className="px-6 py-4">Job ID</th>
+                <th className="px-6 py-4 w-[90px]">Job ID</th>
                 <th className="px-6 py-4">Filename</th>
-                <th className="px-6 py-4">Stage</th>
-                <th className="px-6 py-4">Progress</th>
-                <th className="px-6 py-4 text-center">Status</th>
-                <th className="px-6 py-4 text-right">Actions</th>
+                <th className="px-6 py-4 w-[80px]">Stage</th>
+                <th className="px-6 py-4 w-[150px]">Progress</th>
+                <th className="px-6 py-4 text-center w-[80px]">Status</th>
+                <th className="px-6 py-4 text-right w-[80px]">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant/10">
