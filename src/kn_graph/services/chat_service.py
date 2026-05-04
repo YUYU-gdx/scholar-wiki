@@ -198,19 +198,51 @@ class ChatService:
     def _agent_settings_path(self) -> Path:
         return self._settings.data_dir / "chat" / "agent_settings.json"
 
-    def _default_agent_config_path(self, agent_id: str) -> str:
-        """Return the default config file path for a given agent."""
-        home = Path.home()
+    def _agent_config_path(self, agent_id: str) -> Path:
+        """Return the config file path for a given agent."""
         if agent_id == "codex":
-            return str(self._settings.codex_config_path.resolve())
-        if agent_id == "claude_code":
-            return str((home / ".claude").resolve())
-        if agent_id == "gemini_cli":
-            return str((home / ".gemini").resolve())
-        return ""
+            return self._settings.codex_config_path
+        return self._settings.data_dir / "chat" / f"{agent_id}_config.json"
+
+    def _read_agent_config(self, agent_id: str) -> dict[str, Any]:
+        """Read the agent's actual config file."""
+        path = self._agent_config_path(agent_id)
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_agent_config(self, agent_id: str, updates: dict[str, Any]) -> None:
+        """Merge updates into the agent's config file."""
+        path = self._agent_config_path(agent_id)
+        existing = self._read_agent_config(agent_id)
+        existing.update(updates)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _get_current_agent(self) -> str:
+        """Read current_agent from agent_settings.json."""
+        path = self._agent_settings_path()
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    agent = str(data.get("current_agent", "") or "").strip()
+                    if agent:
+                        return agent
+            except Exception:
+                pass
+        return "codex"
+
+    def _set_current_agent(self, agent_id: str) -> None:
+        path = self._agent_settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"current_agent": agent_id}, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _default_agent_provider_config(self, agent_id: str) -> dict[str, str]:
-        """Return default provider config for a given agent (catalog-based)."""
         from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map  # noqa: F811
         agent_defaults: dict[str, dict[str, str]] = {
             "codex":       {"provider": "deepseek", "model": ""},
@@ -232,69 +264,63 @@ class ChatService:
         }
 
     def get_agent_settings(self) -> dict[str, Any]:
-        from kn_graph.services.cherry_provider_catalog import provider_presets  # noqa: F811
-        path = self._agent_settings_path()
-        data: dict[str, Any] = {}
-        if path.exists():
-            try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    data = raw
-            except Exception:
-                data = {}
-        current_agent = str(data.get("current_agent", "") or "codex").strip()
+        """Read agent settings from the active agent's config file."""
+        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map, provider_presets  # noqa: F811
         known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
+        current_agent = self._get_current_agent()
         if current_agent not in known:
             current_agent = "codex"
-        agents_data = data.get("agents", {}) if isinstance(data.get("agents"), dict) else {}
-        agent_entry = agents_data.get(current_agent, {}) if isinstance(agents_data, dict) else {}
+        config = self._read_agent_config(current_agent)
         defaults = self._default_agent_provider_config(current_agent)
+        provider_id = str(config.get("provider", "") or defaults["provider"]).strip()
+        base_url = str(config.get("base_url", "") or "").strip()
+        if not base_url:
+            base_url = (provider_map().get(provider_id, {})).get("base_url", "")
         return {
             "current_agent": current_agent,
             "available_agents": sorted(known),
-            "provider": str(agent_entry.get("provider", "") or defaults["provider"]),
-            "model": str(agent_entry.get("model", "") or defaults["model"]),
-            "api_key": str(agent_entry.get("api_key", "") or ""),
-            "base_url": str(agent_entry.get("base_url", "") or defaults["base_url"]),
-            "endpoint_url": str(agent_entry.get("endpoint_url", "") or defaults["endpoint_url"]),
+            "provider": provider_id,
+            "model": str(config.get("model", "") or defaults["model"]),
+            "api_key": str(config.get("api_key", "") or ""),
+            "base_url": base_url,
+            "endpoint_url": str(config.get("endpoint_url", "") or default_endpoint_url(base_url)),
             "provider_presets": provider_presets(),
         }
 
     def save_agent_settings(self, body: dict[str, Any]) -> dict[str, Any]:
-        path = self._agent_settings_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data: dict[str, Any] = {}
-        if path.exists():
-            try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    data = raw
-            except Exception:
-                data = {}
-        data.setdefault("agents", {})
-        if not isinstance(data.get("agents"), dict):
-            data["agents"] = {}
-        requested_agent = str(body.get("current_agent", "") or "").strip()
+        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map  # noqa: F811
         known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
+        # Handle agent switch
+        requested_agent = str(body.get("current_agent", "") or "").strip()
         if requested_agent and requested_agent in known:
-            data["current_agent"] = requested_agent
-        current_agent = str(data.get("current_agent", "") or "codex").strip()
+            self._set_current_agent(requested_agent)
+        current_agent = self._get_current_agent()
         if current_agent not in known:
             current_agent = "codex"
-            data["current_agent"] = current_agent
-        agent_entry = data["agents"].get(current_agent, {}) if isinstance(data["agents"], dict) else {}
-        if not isinstance(agent_entry, dict):
-            agent_entry = {}
-        from kn_graph.services.cherry_provider_catalog import default_endpoint_url  # noqa: F811
-        for key in ("config_path", "provider", "model", "api_key", "base_url", "endpoint_url"):
-            if key in body:
-                agent_entry[key] = str(body.get(key, "") or "").strip()
-        if not str(agent_entry.get("endpoint_url", "") or "").strip():
-            base_url = str(agent_entry.get("base_url", "") or "").strip()
-            if base_url:
-                agent_entry["endpoint_url"] = default_endpoint_url(base_url)
-        data["agents"][current_agent] = agent_entry
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._set_current_agent(current_agent)
+        # Build updates for agent config file
+        updates: dict[str, Any] = {}
+        if "provider" in body:
+            updates["provider"] = str(body.get("provider", "") or "").strip()
+        if "model" in body:
+            updates["model"] = str(body.get("model", "") or "").strip()
+        if "api_key" in body:
+            updates["api_key"] = str(body.get("api_key", "") or "").strip()
+        if "base_url" in body:
+            updates["base_url"] = str(body.get("base_url", "") or "").strip()
+        if "endpoint_url" in body:
+            updates["endpoint_url"] = str(body.get("endpoint_url", "") or "").strip()
+        # Auto-fill base_url from provider if switching
+        new_provider = str(updates.get("provider", "") or "").strip()
+        if new_provider and "base_url" not in updates:
+            catalog_base = (provider_map().get(new_provider, {})).get("base_url", "")
+            if catalog_base:
+                updates["base_url"] = catalog_base
+        if updates:
+            base = str(updates.get("base_url", "") or "").strip()
+            if not str(updates.get("endpoint_url", "") or "").strip():
+                updates["endpoint_url"] = default_endpoint_url(base)
+            self._write_agent_config(current_agent, updates)
         return self.get_agent_settings()
 
     def save_codex_config(self, body: dict[str, Any]) -> dict[str, Any]:

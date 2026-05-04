@@ -70,7 +70,7 @@ export default function SettingsView() {
     setDrafts((prev) => ({ ...prev, [category]: { ...asRecord(prev[category]), [key]: value } }));
   };
 
-  const applyProviderPreset = (category: 'pipeline' | 'translation', providerId: string) => {
+  const applyProviderPreset = (category: string, providerId: string) => {
     const values = asRecord(drafts[category]);
     const presets = asPresets(values.provider_presets);
     const hit = presets.find((p) => p.id === providerId);
@@ -79,6 +79,12 @@ export default function SettingsView() {
       updateField('pipeline', 'fast_provider', providerId);
       updateField('pipeline', 'fast_base_url', hit.base_url);
       updateField('pipeline', 'fast_endpoint_url', `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`);
+      return;
+    }
+    if (category === 'agent_settings') {
+      updateField('agent_settings', 'provider', providerId);
+      updateField('agent_settings', 'base_url', hit.base_url);
+      updateField('agent_settings', 'endpoint_url', `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`);
       return;
     }
     updateField('translation', 'provider', providerId);
@@ -155,20 +161,16 @@ export default function SettingsView() {
                   <label>
                     <div className="mb-1">当前应用 Agent</div>
                     <select className="w-full px-3 py-2 rounded border" value={str(values.current_agent || 'codex')} onChange={(e) => updateField(id, 'current_agent', e.target.value)}>
-                      <option value="codex">codex</option>
-                      <option value="claude_code">claude code</option>
-                      <option value="gemini_cli">gemini cli</option>
-                      <option value="hermes">hermes</option>
-                      <option value="opencode">opencode</option>
-                      <option value="openclaw">openclaw</option>
+                      {(values.available_agents as string[] || ['codex', 'claude_code', 'gemini_cli', 'hermes', 'opencode', 'openclaw']).map((a) => (
+                        <option key={a} value={a}>{a.replace(/_/g, ' ')}</option>
+                      ))}
                     </select>
                   </label>
-                  <label><div className="mb-1">Codex 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.codex_config_path)} onChange={(e) => updateField(id, 'codex_config_path', e.target.value)} /></label>
-                  <label><div className="mb-1">Claude Code 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.claude_code_config_path)} onChange={(e) => updateField(id, 'claude_code_config_path', e.target.value)} /></label>
-                  <label><div className="mb-1">Gemini CLI 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.gemini_cli_config_path)} onChange={(e) => updateField(id, 'gemini_cli_config_path', e.target.value)} /></label>
-                  <label><div className="mb-1">Hermes 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.hermes_config_path)} onChange={(e) => updateField(id, 'hermes_config_path', e.target.value)} /></label>
-                  <label><div className="mb-1">OpenCode 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.opencode_config_path)} onChange={(e) => updateField(id, 'opencode_config_path', e.target.value)} /></label>
-                  <label><div className="mb-1">OpenClaw 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.openclaw_config_path)} onChange={(e) => updateField(id, 'openclaw_config_path', e.target.value)} /></label>
+                  <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('agent_settings', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
+                  <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
+                  <label><div className="mb-1">API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} /></label>
+                  <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField(id, 'base_url', e.target.value)} /></label>
+                  <label><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField(id, 'endpoint_url', e.target.value)} /></label>
                 </div>
               )}
 
