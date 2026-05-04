@@ -79,6 +79,11 @@ class ChatService:
 
     def _ensure_chat(self) -> Any:
         if self._chat is not None:
+            # Keep agent_backend in sync with the persisted setting so the
+            # frontend agent selector takes effect without a restart.
+            current = self._get_current_agent()
+            if current:
+                self._chat._agent_backend = current
             return self._chat
         ChatServiceCls, _ = _load_chat_service_class()
 
@@ -106,6 +111,10 @@ class ChatService:
             library_workspace_resolver_fn=self._resolve_library_workspace,
             library_codex_config_resolver_fn=self._resolve_library_codex_config,
         )
+        # Set the initial backend from persisted settings.
+        current = self._get_current_agent()
+        if current:
+            self._chat._agent_backend = current
         return self._chat
 
     def _resolve_library_workspace(self, library_id: str) -> str:

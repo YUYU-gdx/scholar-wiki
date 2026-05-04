@@ -77,7 +77,11 @@ def create_router(chat_service: ChatService) -> APIRouter:
         except Exception as exc:
             detail = str(exc)
             error_code = detail.split(":", 1)[0] if ":" in detail else (detail or "chat_submit_failed")
-            backend = "codex" if error_code.startswith("codex_") else ("hermes" if error_code.startswith("hermes_") else "")
+            backend = (
+                "codex" if error_code.startswith("codex_") else
+                ("hermes" if error_code.startswith("hermes_") else
+                 ("claude_code" if error_code.startswith("claude_code_") else ""))
+            )
             return JSONResponse(
                 status_code=500,
                 content={"error": "chat_submit_failed", "detail": detail, "error_code": error_code, "backend": backend},

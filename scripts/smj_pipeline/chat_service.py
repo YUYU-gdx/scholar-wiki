@@ -331,20 +331,22 @@ class ChatService:
     def create_session(self, title: str = "", default_mode: str = "agent", library_id: str = "") -> dict[str, Any]:
         _ = default_mode
         lib = self._effective_library_id(library_id)
-        if self._agent_backend == "codex":
+        backend = self._agent_backend
+        if backend in ("codex", "claude_code"):
             local = self._store.create_session(title=title, default_mode="agent", library_id=self._session_scope_id())
             workspace = self._resolve_workspace_path(lib)
             library_workspace = str(self._resolve_library_workspace_path(lib))
-            runner = self._runner_factory.build("codex")
+            runner = self._runner_factory.build(backend)
+            overrides = self._build_codex_runtime_overrides(library_workspace, lib)
             thread_res = runner.thread_start(
                 workdir=workspace,
                 library_id=lib,
-                runtime_overrides=self._build_codex_runtime_overrides(library_workspace, lib),
+                runtime_overrides=overrides,
             )
             thread = thread_res.get("thread") if isinstance(thread_res.get("thread"), dict) else {}
             thread_id = str(thread.get("id", "") or "").strip()
             if not thread_id:
-                raise RuntimeError("codex_thread_start_failed")
+                raise RuntimeError(f"{backend}_thread_start_failed")
             self._session_thread_by_session_id[str(local.get("session_id", ""))] = thread_id
             title_text = str(title or "").strip()
             if title_text:
@@ -353,7 +355,7 @@ class ChatService:
                         thread_id=thread_id,
                         name=title_text,
                         workdir=workspace,
-                        runtime_overrides=self._build_codex_runtime_overrides(library_workspace, lib),
+                        runtime_overrides=overrides,
                     )
                 except Exception:
                     pass
@@ -366,29 +368,31 @@ class ChatService:
                 "created_at": str(local.get("created_at", "") or now),
                 "updated_at": str(local.get("updated_at", "") or now),
                 "deleted_at": local.get("deleted_at"),
-                "source": "codex",
+                "source": backend,
             }
         return self._store.create_session(title=title, default_mode="agent", library_id=self._session_scope_id())
 
     def list_sessions(self, library_id: str = "") -> list[dict[str, Any]]:
         self._cleanup_restore_deadlines()
         lib = self._effective_library_id(library_id)
-        if self._agent_backend == "codex":
+        backend = self._agent_backend
+        if backend in ("codex", "claude_code"):
             out = self._store.list_sessions(library_id=self._session_scope_id())
             for row in out:
-                row["source"] = "codex"
+                row["source"] = backend
                 row["library_id"] = ""
             return out
         return self._store.list_sessions(library_id=self._session_scope_id())
 
     def delete_session(self, session_id: str, undo_window_seconds: int = 5, library_id: str = "") -> dict[str, Any]:
         lib = self._effective_library_id(library_id)
-        if self._agent_backend == "codex":
+        backend = self._agent_backend
+        if backend in ("codex", "claude_code"):
             thread_id = self._session_thread_by_session_id.get(str(session_id), "").strip()
             if thread_id and self._sync_codex_thread_on_session_ops():
                 workspace = self._resolve_workspace_path(lib)
                 library_workspace = str(self._resolve_library_workspace_path(lib))
-                runner = self._runner_factory.build("codex")
+                runner = self._runner_factory.build(backend)
                 try:
                     runner.thread_archive(
                         thread_id=thread_id,
@@ -405,7 +409,7 @@ class ChatService:
                 "deleted_at": now.isoformat(),
                 "undo_window_seconds": int(max(1, undo_window_seconds)),
                 "undo_deadline": (now + timedelta(seconds=max(1, int(undo_window_seconds)))).isoformat(),
-                "source": "codex",
+                "source": backend,
             }
         sess = self._store.get_session(session_id, library_id=self._session_scope_id())
         if sess is None:
@@ -427,12 +431,13 @@ class ChatService:
 
     def restore_session(self, session_id: str, library_id: str = "") -> dict[str, Any]:
         lib = self._effective_library_id(library_id)
-        if self._agent_backend == "codex":
+        backend = self._agent_backend
+        if backend in ("codex", "claude_code"):
             thread_id = self._session_thread_by_session_id.get(str(session_id), "").strip()
             if thread_id and self._sync_codex_thread_on_session_ops():
                 workspace = self._resolve_workspace_path(lib)
                 library_workspace = str(self._resolve_library_workspace_path(lib))
-                runner = self._runner_factory.build("codex")
+                runner = self._runner_factory.build(backend)
                 try:
                     runner.thread_unarchive(
                         thread_id=thread_id,
@@ -442,7 +447,7 @@ class ChatService:
                 except Exception:
                     pass
             self._store.restore_session(session_id=session_id, library_id=self._session_scope_id())
-            return {"session_id": str(session_id), "library_id": "", "restored": True, "source": "codex"}
+            return {"session_id": str(session_id), "library_id": "", "restored": True, "source": backend}
         self._cleanup_restore_deadlines()
         restore_key = f"{lib}:{str(session_id)}"
         deadline_ts = self._restore_deadline_by_session.get(restore_key)
@@ -465,13 +470,14 @@ class ChatService:
 
     def get_session_with_messages(self, session_id: str, library_id: str = "") -> dict[str, Any] | None:
         lib = self._effective_library_id(library_id)
-        if self._agent_backend == "codex":
+        backend = self._agent_backend
+        if backend in ("codex", "claude_code"):
             matched = self._store.get_session(str(session_id), library_id=self._session_scope_id())
             if not isinstance(matched, dict):
                 return None
             matched = dict(matched)
             matched["library_id"] = ""
-            matched["source"] = "codex"
+            matched["source"] = backend
             local_messages = [self._hydrate_message(m) for m in self._store.list_messages(str(session_id))]
             return {"session": matched, "messages": local_messages}
         sess = self._store.get_session(session_id, library_id=self._session_scope_id())
@@ -652,11 +658,16 @@ class ChatService:
     def _extract_backend(detail: str) -> str:
         text = str(detail or "").strip()
         if text.startswith("agent_backend_unavailable:"):
-            return text.split(":", 1)[1].strip()
+            parts = text.split(":")
+            if len(parts) >= 2:
+                return parts[1].strip()
+            return ""
         if text.startswith("codex_"):
             return "codex"
         if text.startswith("hermes_"):
             return "hermes"
+        if text.startswith("claude_code_"):
+            return "claude_code"
         return ""
 
     def _call_literature_search(self, query: str, top_k: int, library_id: str = "") -> dict[str, Any]:
@@ -963,20 +974,25 @@ class ChatService:
         library_id: str = "",
         thread_id: str = "",
     ) -> dict[str, Any]:
-        _ = provider, model
+        _ = model
         if not str(library_id or "").strip():
             raise RuntimeError("library_id_required")
-        backend = self._agent_backend
+        # Respect the provider parameter from the request as an agent-backend override.
+        requested_backend = str(provider or "").strip().lower()
+        if requested_backend in ("codex", "claude_code", "hermes"):
+            backend = requested_backend
+        else:
+            backend = self._agent_backend
         if backend == "hermes":
-            runner = self._runner_factory.build("hermes")
-            _ = runner
+            _runner = self._runner_factory.build("hermes")
             raise RuntimeError("agent_backend_unavailable:hermes")
-        if backend != "codex":
+        if backend not in ("codex", "claude_code"):
             raise RuntimeError(f"agent_backend_invalid:{backend}")
 
         workspace = self._resolve_workspace_path(library_id)
-        runner = self._runner_factory.build("codex")
-        self._emit(message_id, "status", {"stage": "retrieve", "label": "正在由 Codex 进行工具调用与分析"})
+        runner = self._runner_factory.build(backend)
+        backend_label = "Claude Code" if backend == "claude_code" else "Codex"
+        self._emit(message_id, "status", {"stage": "retrieve", "label": f"正在由 {backend_label} 进行工具调用与分析"})
 
         tool_trace: list[dict[str, Any]] = []
         citations: list[dict[str, Any]] = []
@@ -1015,7 +1031,7 @@ class ChatService:
                     message_id,
                     "agent_item_started",
                     {
-                        "backend": "codex",
+                        "backend": backend,
                         "step_id": step_id,
                         "item": item_type or "unknown",
                         "state": "started",
@@ -1024,18 +1040,18 @@ class ChatService:
                         "detail": _clip(json.dumps(item, ensure_ascii=False), 640),
                     },
                 )
-                if item_type in {"mcpToolCall", "commandExecution", "fileChange"}:
+                if item_type in {"mcpToolCall", "commandExecution", "fileChange", "toolCall", "serverToolCall"}:
                     label = summary
                     kind = "tool" if item_type == "mcpToolCall" else ("command" if item_type == "commandExecution" else "file_change")
                     self._emit_tool_call(
                         message_id,
-                        "codex",
+                        backend,
                         step_id,
                         "started",
                         label,
                         {
                             "tool": label,
-                            "backend": "codex",
+                            "backend": backend,
                             "kind": kind,
                             "args_preview": _clip(json.dumps(item.get("arguments", {}), ensure_ascii=False), 260),
                             "detail": _clip(json.dumps(item, ensure_ascii=False), 640),
@@ -1054,7 +1070,7 @@ class ChatService:
                     message_id,
                     "agent_item_delta",
                     {
-                        "backend": "codex",
+                        "backend": backend,
                         "step_id": "agent-message",
                         "kind": "message",
                         "state": "streaming",
@@ -1077,7 +1093,7 @@ class ChatService:
                         message_id,
                         "agent_item_completed",
                         {
-                            "backend": "codex",
+                            "backend": backend,
                             "step_id": step_id,
                             "item": "agentMessage",
                             "kind": "message",
@@ -1146,7 +1162,7 @@ class ChatService:
                     args_preview = _clip(json.dumps(arguments, ensure_ascii=False), 240)
                     detail_text = _clip(json.dumps({"arguments": arguments, "result": result, "output": output}, ensure_ascii=False), 900)
                     trace_row = {
-                        "backend": "codex",
+                        "backend": backend,
                         "step": len(tool_trace) + 1,
                         "step_id": step_id,
                         "state": "completed" if status in {"completed", "ok", "success"} else "failed",
@@ -1162,13 +1178,13 @@ class ChatService:
                     tool_trace.append(trace_row)
                     self._emit_tool_call(
                         message_id,
-                        "codex",
+                        backend,
                         step_id,
                         trace_row["state"],
                         summary,
                         {
                             "tool": trace_row["tool"],
-                            "backend": "codex",
+                            "backend": backend,
                             "kind": "tool",
                             "summary": summary,
                             "state": trace_row["state"],
@@ -1183,7 +1199,7 @@ class ChatService:
                         message_id,
                         "agent_item_completed",
                         {
-                            "backend": "codex",
+                            "backend": backend,
                             "step_id": step_id,
                             "item": "mcpToolCall",
                             "kind": "tool",
@@ -1198,7 +1214,7 @@ class ChatService:
                     message_id,
                     "agent_item_completed",
                     {
-                        "backend": "codex",
+                        "backend": backend,
                         "step_id": step_id,
                         "item": item_type or "unknown",
                         "kind": "agent_item",
@@ -1217,12 +1233,12 @@ class ChatService:
                     detail = f"{detail}:{error}" if detail else error
                 self._emit_tool_call(
                     message_id,
-                    "codex",
+                    backend,
                     f"mcp-{len(tool_trace)+1}",
                     "completed" if status == "ready" else "started",
                     "mcp.startup",
                     {
-                        "backend": "codex",
+                        "backend": backend,
                         "kind": "system",
                         "summary": detail,
                         "state": status,
@@ -1250,20 +1266,20 @@ class ChatService:
             out_trace = list(tool_trace)
             out_trace.append(
                 {
-                    "backend": "codex",
+                    "backend": backend,
                     "step": len(out_trace) + 1,
                     "state": "failed",
                     "kind": "tool",
-                    "tool": "codex.run_turn",
+                    "tool": f"{backend}.run_turn",
                     "args": {"library_id": library_id},
-                    "summary": "codex.run_turn timeout/failure",
+                    "summary": f"{backend}.run_turn timeout/failure",
                     "result": {"error": str(exc)},
                 }
             )
             fallback_flag = str(os.getenv("CHAT_AGENT_FALLBACK_TO_FAST", "0") or "0").strip().lower()
             allow_fallback = fallback_flag in {"1", "true", "yes", "on"}
             if not allow_fallback:
-                raise RuntimeError(f"agent_backend_unavailable:codex:{exc}")
+                raise RuntimeError(f"agent_backend_unavailable:{backend}:{exc}")
             self._emit(message_id, "citation", {"phase": "agent_degraded", "reason": str(exc)})
             degraded = self._run_fast(
                 message_id=message_id,
@@ -1275,7 +1291,7 @@ class ChatService:
             )
             out_trace.extend(list(degraded.get("tool_trace", [])))
             retrieval_trace = degraded.get("retrieval_trace", {}) if isinstance(degraded.get("retrieval_trace"), dict) else {}
-            retrieval_trace["backend"] = "codex_degraded_to_fast"
+            retrieval_trace["backend"] = f"{backend}_degraded_to_fast"
             retrieval_trace["degraded_reason"] = str(exc)
             return {
                 "answer": str(degraded.get("answer", "") or "").strip(),
@@ -1283,13 +1299,13 @@ class ChatService:
                 "retrieval_trace": retrieval_trace,
                 "tool_trace": out_trace,
             }
-        self._emit(message_id, "status", {"stage": "generate", "label": "正在由 Codex 生成回答"})
+        self._emit(message_id, "status", {"stage": "generate", "label": f"正在由 {backend_label} 生成回答"})
 
         answer = str(result.get("answer", "") or "").strip()
         if not answer:
             answer = "".join(answer_parts).strip()
         if not answer:
-            raise RuntimeError("agent_backend_unavailable:codex:empty_output")
+            raise RuntimeError(f"agent_backend_unavailable:{backend}:empty_output")
 
         if not stream:
             self._emit(message_id, "delta", {"text": answer})
@@ -1320,7 +1336,7 @@ class ChatService:
                 "answer": answer,
                 "citations": [],
                 "retrieval_trace": {
-                    "backend": "codex",
+                    "backend": backend,
                     "library_id": str(library_id or "").strip(),
                     "workspace_path": workspace,
                     "paragraph_context_applied": False,
@@ -1338,7 +1354,7 @@ class ChatService:
             "answer": answer,
             "citations": citations[:8],
             "retrieval_trace": {
-                "backend": "codex",
+                "backend": backend,
                 "library_id": str(library_id or "").strip(),
                 "workspace_path": workspace,
                 "paragraph_context_applied": True,

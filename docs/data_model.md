@@ -102,7 +102,93 @@
   - `paper_map`（以 `paper_id` 和 `doi` 双 key 索引）
   - 节点侧统计：`paper_profile`、`paper_count_mentions`、`dominant_paper_id`、`paper_entropy`
 
-## 5. L4 API 层字段映射
+## 5. Chat 数据模型（对话服务）
+
+Chat 数据模型定义在 `src/kn_graph/models/chat.py`。
+
+### 5.1 会话 (ChatSession)
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `session_id` | string | 会话唯一标识 |
+| `title` | string | 会话标题 |
+| `default_mode` | string | 默认模式：`"agent"` / `"fast"` |
+| `library_id` | string | 关联文献库 |
+| `created_at` | string | 创建时间 (ISO 8601) |
+| `updated_at` | string | 更新时间 |
+| `deleted_at` | string? | 软删除时间 |
+
+### 5.2 消息 (ChatMessage)
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `message_id` | string | 消息唯一标识 |
+| `session_id` | string | 所属会话 |
+| `role` | string | `"user"` / `"assistant"` |
+| `mode` | string | `"agent"` / `"fast"` |
+| `provider` | string | Agent 后端：`"codex"` / `"claude_code"` / `"hermes"` |
+| `model` | string | 模型标识 |
+| `content` | string | 消息文本 |
+| `citations_json` | string | 引用 JSON（存储用） |
+| `retrieval_json` | string | 检索追踪 JSON（存储用） |
+| `tool_trace_json` | string | 工具调用追踪 JSON（存储用） |
+| `status` | string | `"running"` / `"completed"` / `"failed"` |
+| `error_detail` | string | 错误详情 |
+| `citations` | list | 引用（内存态，JSON 反序列化） |
+| `retrieval` | dict | 检索追踪（内存态） |
+| `tool_trace` | list | 工具调用追踪（内存态） |
+
+### 5.3 工具追踪条目 (tool_trace item)
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `backend` | string | 后端标识 |
+| `step` | int | 步骤序号 |
+| `step_id` | string | 步骤唯一 ID |
+| `state` | string | `"started"` / `"completed"` / `"failed"` |
+| `kind` | string | `"tool"` / `"command"` / `"file_change"` / `"system"` |
+| `tool` | string | 工具名称 |
+| `args` | dict | 工具参数 |
+| `summary` | string | 操作摘要 |
+| `args_preview` | string | 参数截断预览 |
+| `output_summary` | string | 输出截断预览 |
+| `detail` | string | 详细 JSON（截断） |
+| `raw` | dict | 完整原始数据 |
+| `result` | dict | 执行结果 |
+
+### 5.4 发送消息请求 (SendMessageRequest)
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `content` | string | 消息内容（必填） |
+| `mode` | string | `"agent"`（默认）/ `"fast"` |
+| `stream` | bool | 是否流式（默认 `true`） |
+| `library_id` | string | 文献库标识（agent 模式必填） |
+| `provider` | string | 后端标识（默认 `"codex"`） |
+| `model` | string | 模型标识（默认 `"codex-local"`） |
+
+### 5.5 Agent 配置 (CodexConfig)
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `app_server_command` | string | Codex CLI 命令（默认 `"codex"`） |
+| `app_server_args` | list | 启动参数 |
+| `healthcheck_args` | list | 健康检查参数 |
+| `timeout_seconds` | int | 超时时间 |
+| `install_command` | string | 安装命令 |
+| `model` | string | 模型名称 |
+| `approval_policy` | string | 审批策略（默认 `"never"`） |
+| `sandbox_mode` | string | 沙箱模式（默认 `"workspace-write"`） |
+| `personality` | string | 个性化模式 |
+| `mcp_servers` | list | MCP 服务器列表 |
+
+### 5.6 Agent 设置 (agent_settings)
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `current_agent` | string | 当前 Agent：`"codex"` / `"claude_code"` / `"hermes"` 等 |
+| `available_agents` | list | 可用 Agent 列表 |
+| `provider` | string | LLM 提供商（如 `"deepseek"`） |
+| `model` | string | 模型（如 `"deepseek-v4-flash"`） |
+| `api_key` | string | API 密钥 |
+| `base_url` | string | API 基础 URL |
+| `endpoint_url` | string | 完整 API 端点 URL |
+
+## 6. L4 API 层字段映射
 - `/paper/{id}` 直接返回 `paper_map` 对象。
 - `/variable/{id}`：
   - `concepts` 来自 `variable_definitions` 过滤匹配该变量名。
