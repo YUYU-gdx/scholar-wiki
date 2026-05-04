@@ -23,7 +23,7 @@ function appUrl() {
   // Load built frontend from disk (no Vite dev server needed)
   const distIndex = path.join(__dirname, "..", "dist", "index.html");
   if (fs.existsSync(distIndex)) {
-    return `file://${distIndex.replace(/\\/g, "/")}`;
+    return `file:///${distIndex.replace(/\\/g, "/")}`;
   }
   // Fallback: try Vite dev server for development
   const devUrl = process.env.VITE_DEV_SERVER_URL;
