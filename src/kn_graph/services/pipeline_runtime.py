@@ -320,7 +320,10 @@ def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
     if not str(out.get("llm_base_url", "") or "").strip():
         out["llm_base_url"] = str(pipeline.get("fast_base_url", "") or "").strip()
     if not str(out.get("llm_api_key_env", "") or "").strip() and str(out.get("llm_api_key", "") or "").strip():
-        pass  # api_key is set directly, no env var needed
+        pass
+    # Default to 300s timeout for long papers
+    if not out.get("llm_timeout_seconds"):
+        out["llm_timeout_seconds"] = 300
     return out
 
 

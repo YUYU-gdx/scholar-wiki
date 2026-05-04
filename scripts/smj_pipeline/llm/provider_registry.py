@@ -327,7 +327,7 @@ class ProviderRegistry:
         api_key_env = str(options_map.get("api_key_env") or item.get("api_key_env", "")).strip()
         api_key_value = str(options_map.get("api_key") or os.getenv(api_key_env, "")).strip()
         base_url = str(options_map.get("base_url") or item.get("base_url", "")).strip()
-        timeout_seconds = _as_int(options_map.get("timeout_seconds", item.get("timeout_seconds", 90)), 90)
+        timeout_seconds = _as_int(options_map.get("timeout_seconds", item.get("timeout_seconds", 300)), 300)
         temperature = _as_float(options_map.get("temperature", item.get("temperature", 0.2)), 0.2)
         max_retries = _as_int(options_map.get("max_retries", item.get("max_retries", 3)), 3)
         if not api_key_value:
