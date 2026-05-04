@@ -374,4 +374,29 @@ export interface TranslateResponse {
   latency_ms: number;
 }
 
+export interface SettingsCategorySchemaField {
+  key: string;
+  type?: string;
+  sensitive?: boolean;
+  options?: string[];
+}
+
+export interface SettingsCategorySchema {
+  id: string;
+  title: string;
+  restart_required?: boolean;
+  fields?: SettingsCategorySchemaField[];
+}
+
+export interface GlobalSettingsSchema {
+  version: number;
+  categories: SettingsCategorySchema[];
+}
+
+export interface GlobalSettingsPayload {
+  schema: GlobalSettingsSchema;
+  settings: Record<string, Record<string, unknown>>;
+  updated_at: string;
+}
+
 export type View = 'library' | 'graph' | 'chat' | 'reader' | 'pipeline' | 'settings';

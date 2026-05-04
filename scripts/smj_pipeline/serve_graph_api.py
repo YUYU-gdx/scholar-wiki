@@ -266,8 +266,16 @@ def _extract_theories(paper: dict[str, Any]) -> list[str]:
     return out
 
 
+def _resolve_storage_uri(uri: str) -> str:
+    """Strip legacy storage:// prefix if present."""
+    text = str(uri or "").strip()
+    if text.startswith("storage://"):
+        return text[len("storage://"):]
+    return text
+
+
 def _paper_links(p: dict[str, Any], pid: str) -> tuple[str, str]:
-    local_html = str(p.get("offline_html_path", "") or "").strip()
+    local_html = _resolve_storage_uri(p.get("offline_html_path", "") or "")
     online_url = str(p.get("article_url", "") or "").strip()
     doi = str(p.get("doi", "") or pid).strip()
     if not online_url and doi:
@@ -664,7 +672,7 @@ def make_handler(
             "doi": str(paper.get("doi", "") or pid),
             "paper_id": pid,
             "publication_year": paper.get("publication_year"),
-            "open_local_html": str(paper.get("offline_html_path", "") or ""),
+            "open_local_html": _resolve_storage_uri(paper.get("offline_html_path", "") or ""),
             "open_online_url": str(paper.get("article_url", "") or (f"https://sms.onlinelibrary.wiley.com/doi/full/{paper.get('doi')}" if paper.get("doi") else "")),
             "relations": rel_snippets[:6],
         }
@@ -892,7 +900,7 @@ def make_handler(
         if _agent_runner_mod is None:
             payload["code"] = "agent_runner_module_unavailable"
             payload["detail"] = "agent runner module unavailable"
-            payload["suggestion"] = "检�?scripts/smj_pipeline/agent_runner.py 是否存在且可导入"
+            payload["suggestion"] = "check scripts/smj_pipeline/agent_runner.py exists and is importable"
             return payload
         try:
             cfg = _agent_runner_mod.load_codex_config(codex_config_path)
@@ -905,12 +913,12 @@ def make_handler(
                 payload["code"] = "ok"
             else:
                 payload["code"] = str(health.get("reason", "codex_unavailable") or "codex_unavailable")
-                payload["suggestion"] = "确认 OpenAI 鉴权环境变量、Codex CLI 安装与网络可达�?
+                payload["suggestion"] = "check OpenAI auth env, Codex CLI install, and network connectivity"
             return payload
         except Exception as exc:
             payload["code"] = "codex_healthcheck_failed"
             payload["detail"] = str(exc)
-            payload["suggestion"] = "检�?codex 配置文件与可执行命令"
+            payload["suggestion"] = "check codex config file and executable command"
             return payload
 
     def _check_workspace_and_library_config(library_id: str) -> list[dict[str, Any]]:
@@ -1016,7 +1024,7 @@ def make_handler(
         if not probe_script.exists():
             row["code"] = "mcp_probe_script_missing"
             row["detail"] = str(probe_script)
-            row["suggestion"] = "确认 scripts/smj_pipeline/mcp_probe.py 已存�?
+            row["suggestion"] = "check scripts/smj_pipeline/mcp_probe.py exists"
             return row
         cmd = [
             sys.executable,
@@ -1047,11 +1055,11 @@ def make_handler(
                 row["code"] = "ok"
             else:
                 row["code"] = f"mcp_probe_failed:{int(proc.returncode)}"
-                row["suggestion"] = "检�?kn_mcp_server、文献检索接口与 library_id 是否可用"
+                row["suggestion"] = "check kn_mcp_server, literature endpoints, and library_id"
         except Exception as exc:
             row["code"] = "mcp_probe_exception"
             row["detail"] = str(exc)
-            row["suggestion"] = "检�?Python 运行环境�?mcp_probe.py 可执行�?
+            row["suggestion"] = "check Python runtime and mcp_probe.py execution"
         return row
 
     def _build_preflight_payload(library_id: str, base_url: str) -> dict[str, Any]:
@@ -1146,6 +1154,229 @@ def make_handler(
             out["degraded"] = True
             out["degraded_reason"] = workspace_store_degraded_reason
         return out
+
+    global_settings_path = Path("outputs/workbench/global_settings.json")
+
+    def _read_global_settings_store() -> dict[str, Any]:
+        if not global_settings_path.exists():
+            return {"version": 1, "updated_at": "", "categories": {}}
+        try:
+            payload = json.loads(global_settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"version": 1, "updated_at": "", "categories": {}}
+        if not isinstance(payload, dict):
+            return {"version": 1, "updated_at": "", "categories": {}}
+        categories = payload.get("categories", {})
+        if not isinstance(categories, dict):
+            categories = {}
+        return {
+            "version": int(payload.get("version", 1) or 1),
+            "updated_at": str(payload.get("updated_at", "") or ""),
+            "categories": categories,
+        }
+
+    def _write_global_settings_store(payload: dict[str, Any]) -> dict[str, Any]:
+        global_settings_path.parent.mkdir(parents=True, exist_ok=True)
+        out = dict(payload)
+        out["version"] = int(out.get("version", 1) or 1)
+        out["updated_at"] = datetime.now(timezone.utc).isoformat()
+        global_settings_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+        return out
+
+    def _settings_schema_payload() -> dict[str, Any]:
+        return {
+            "categories": [
+                {
+                    "id": "pipeline",
+                    "title": "Pipeline",
+                    "restart_required": False,
+                    "fields": [
+                        {"key": "executor", "type": "select", "options": ["inline", "celery"]},
+                        {"key": "job_store_dsn", "type": "text"},
+                        {"key": "redis_url", "type": "text"},
+                        {"key": "mineru_api_key_env", "type": "text"},
+                        {"key": "mineru_base_url", "type": "text"},
+                        {"key": "mineru_model_version", "type": "text"},
+                        {"key": "llm_provider", "type": "text"},
+                        {"key": "llm_model", "type": "text"},
+                        {"key": "llm_api_key_env", "type": "text"},
+                        {"key": "llm_base_url", "type": "text"},
+                        {"key": "max_poll_seconds", "type": "number"},
+                        {"key": "poll_interval_seconds", "type": "number"},
+                        {"key": "max_retries", "type": "number"},
+                        {"key": "retry_delays", "type": "text"},
+                    ],
+                },
+                {"id": "llm_providers", "title": "LLM Providers", "restart_required": False},
+                {
+                    "id": "translation",
+                    "title": "Translation",
+                    "restart_required": False,
+                    "fields": [
+                        {"key": "provider", "type": "text"},
+                        {"key": "model", "type": "text"},
+                        {"key": "api_key", "type": "password", "sensitive": True},
+                        {"key": "base_url", "type": "text"},
+                        {"key": "endpoint_url", "type": "text"},
+                        {"key": "target_lang", "type": "text"},
+                    ],
+                },
+                {"id": "codex_global", "title": "Codex Global", "restart_required": True},
+                {"id": "library_defaults", "title": "Library Defaults", "restart_required": False},
+            ],
+            "version": 1,
+        }
+
+    def _get_pipeline_settings() -> dict[str, Any]:
+        store = _read_global_settings_store()
+        categories = store.get("categories", {})
+        saved = categories.get("pipeline", {}) if isinstance(categories, dict) else {}
+        if not isinstance(saved, dict):
+            saved = {}
+        defaults = {
+            "executor": str(os.getenv("PIPELINE_EXECUTOR", "inline") or "inline"),
+            "job_store_dsn": str(os.getenv("PIPELINE_JOB_STORE_DSN", "sqlite") or "sqlite"),
+            "redis_url": str(os.getenv("PIPELINE_REDIS_URL", "redis://127.0.0.1:6379/0") or "redis://127.0.0.1:6379/0"),
+            "mineru_api_key_env": "MINERU_API_KEY",
+            "mineru_base_url": "https://mineru.net/api/v4",
+            "mineru_model_version": "vlm",
+            "llm_provider": "",
+            "llm_model": "",
+            "llm_api_key_env": "",
+            "llm_base_url": "",
+            "max_poll_seconds": 3600,
+            "poll_interval_seconds": 8.0,
+            "max_retries": 3,
+            "retry_delays": "8,20,60",
+        }
+        out = dict(defaults)
+        out.update(saved)
+        return out
+
+    def _validate_pipeline_settings(payload: dict[str, Any]) -> dict[str, Any]:
+        out = dict(payload)
+        executor = str(out.get("executor", "inline") or "inline").strip().lower()
+        if executor not in {"inline", "celery"}:
+            raise ValueError("settings_validation_failed: pipeline.executor")
+        out["executor"] = executor
+        out["job_store_dsn"] = str(out.get("job_store_dsn", "") or "").strip()
+        out["redis_url"] = str(out.get("redis_url", "") or "").strip()
+        out["mineru_api_key_env"] = str(out.get("mineru_api_key_env", "MINERU_API_KEY") or "MINERU_API_KEY").strip()
+        out["mineru_base_url"] = str(out.get("mineru_base_url", "https://mineru.net/api/v4") or "https://mineru.net/api/v4").strip()
+        out["mineru_model_version"] = str(out.get("mineru_model_version", "vlm") or "vlm").strip()
+        out["llm_provider"] = str(out.get("llm_provider", "") or "").strip()
+        out["llm_model"] = str(out.get("llm_model", "") or "").strip()
+        out["llm_api_key_env"] = str(out.get("llm_api_key_env", "") or "").strip()
+        out["llm_base_url"] = str(out.get("llm_base_url", "") or "").strip()
+        try:
+            out["max_poll_seconds"] = max(30, min(86400, int(out.get("max_poll_seconds", 3600) or 3600)))
+            out["poll_interval_seconds"] = max(0.5, min(120.0, float(out.get("poll_interval_seconds", 8.0) or 8.0)))
+            out["max_retries"] = max(0, min(20, int(out.get("max_retries", 3) or 3)))
+        except Exception as exc:
+            raise ValueError("settings_validation_failed: pipeline.numeric_fields") from exc
+        retry_delays = str(out.get("retry_delays", "8,20,60") or "8,20,60").strip()
+        out["retry_delays"] = retry_delays or "8,20,60"
+        return out
+
+    def _save_pipeline_settings(body: dict[str, Any]) -> dict[str, Any]:
+        current = _get_pipeline_settings()
+        next_payload = dict(current)
+        for k, v in body.items():
+            if k in current:
+                next_payload[k] = v
+        next_payload = _validate_pipeline_settings(next_payload)
+        store = _read_global_settings_store()
+        categories = store.get("categories", {})
+        if not isinstance(categories, dict):
+            categories = {}
+        categories["pipeline"] = next_payload
+        store["categories"] = categories
+        _write_global_settings_store(store)
+        return next_payload
+
+    def _get_library_defaults() -> dict[str, Any]:
+        registry = _current_library_registry()
+        return {
+            "default_library_id": str(registry.get("default_library_id", "") or ""),
+            "registry_path": str((libraries_index_root / "registry.json").resolve()),
+            "workspaces_dir": "",
+            "indexes_dir": str(libraries_index_root.resolve()),
+        }
+
+    def _save_library_defaults(body: dict[str, Any]) -> dict[str, Any]:
+        if _library_registry_mod is None:
+            raise RuntimeError("library_registry_unavailable")
+        default_library_id = str(body.get("default_library_id", "") or "").strip()
+        registry = _current_library_registry()
+        registry["default_library_id"] = default_library_id
+        registry_path = _library_registry_mod.registry_path_from_env(legacy_index_root=libraries_index_root)
+        _library_registry_mod.save_registry(registry_path, registry)
+        return _get_library_defaults()
+
+    def _load_settings_payload() -> dict[str, Any]:
+        store = _read_global_settings_store()
+        translation_path = Path("outputs/chat/translation_provider_config.json")
+        if translation_path.exists():
+            try:
+                translation = json.loads(translation_path.read_text(encoding="utf-8"))
+            except Exception:
+                translation = {}
+        else:
+            translation = {}
+        if not isinstance(translation, dict):
+            translation = {}
+        translation_defaults = {
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "api_key": "",
+            "base_url": "https://api.deepseek.com",
+            "endpoint_url": "https://api.deepseek.com/v1/chat/completions",
+            "target_lang": "zh",
+        }
+        translation_cfg = dict(translation_defaults)
+        translation_cfg.update(translation)
+        provider_cfg: dict[str, Any] = {}
+        if provider_registry is not None:
+            provider_registry.reload()
+            provider_cfg = provider_registry.get_config()
+            provider_cfg["config_path"] = str(provider_registry.config_path)
+        return {
+            "schema": _settings_schema_payload(),
+            "settings": {
+                "pipeline": _get_pipeline_settings(),
+                "llm_providers": provider_cfg,
+                "translation": translation_cfg,
+                "codex_global": _load_codex_config_payload(),
+                "library_defaults": _get_library_defaults(),
+            },
+            "updated_at": str(store.get("updated_at", "") or ""),
+        }
+
+    def _update_settings_category(category: str, body: dict[str, Any]) -> dict[str, Any]:
+        key = str(category or "").strip().lower()
+        if key == "pipeline":
+            return _save_pipeline_settings(body)
+        if key == "llm_providers":
+            if provider_registry is None:
+                raise RuntimeError("provider_config_unavailable")
+            saved = provider_registry.update_config(body)
+            saved["config_path"] = str(provider_registry.config_path)
+            return saved
+        if key == "translation":
+            current = _load_settings_payload()["settings"].get("translation", {})
+            next_payload = dict(current if isinstance(current, dict) else {})
+            for field in ("provider", "model", "api_key", "base_url", "endpoint_url", "target_lang"):
+                if field in body:
+                    next_payload[field] = str(body.get(field, "") or "").strip()
+            translation_path = Path("outputs/chat/translation_provider_config.json")
+            translation_path.parent.mkdir(parents=True, exist_ok=True)
+            translation_path.write_text(json.dumps(next_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            return next_payload
+        if key == "codex_global":
+            return _save_codex_config_payload(body)
+        if key == "library_defaults":
+            return _save_library_defaults(body)
+        raise KeyError(f"unknown_settings_category:{key}")
 
     class Handler(BaseHTTPRequestHandler):
         def _read_json_body(self) -> dict[str, Any]:
@@ -1468,7 +1699,7 @@ def make_handler(
                         return _json(
                             self,
                             {
-                                "answer": "文献服务暂不可用，当前无法基于文献库给出可靠回答�?,
+                                "answer": "literature service unavailable; cannot provide grounded answer now",
                                 "citations": [],
                                 "retrieval": {
                                     "keyword_hits": [],
@@ -1507,6 +1738,25 @@ def make_handler(
                 except Exception as exc:
                     return _json(self, {"error": "workspace_layout_save_failed", "detail": str(exc)}, status=500)
 
+            self.send_error(404, "Not Found")
+
+        def do_PUT(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path.startswith("/settings/"):
+                category = str(path[len("/settings/") :]).strip().strip("/")
+                if not category:
+                    return _json(self, {"error": "category_required"}, status=400)
+                try:
+                    body = self._read_json_body()
+                    if not isinstance(body, dict):
+                        return _json(self, {"error": "invalid_payload"}, status=400)
+                    saved = _update_settings_category(category, body)
+                    return _json(self, {"ok": True, "category": category, "config": saved}, status=200)
+                except KeyError as exc:
+                    return _json(self, {"error": str(exc)}, status=404)
+                except Exception as exc:
+                    return _json(self, {"error": "settings_update_failed", "detail": str(exc)}, status=400)
             self.send_error(404, "Not Found")
 
         def do_DELETE(self) -> None:  # noqa: N802
@@ -1611,6 +1861,15 @@ def make_handler(
             parsed = urlparse(self.path)
             path = parsed.path
             qs = parse_qs(parsed.query)
+
+            if path == "/settings":
+                try:
+                    return _json(self, _load_settings_payload(), status=200)
+                except Exception as exc:
+                    return _json(self, {"error": "settings_load_failed", "detail": str(exc)}, status=500)
+
+            if path == "/settings/schema":
+                return _json(self, _settings_schema_payload(), status=200)
 
             if path == "/chat/sessions":
                 if chat is None:
@@ -1935,6 +2194,9 @@ def make_handler(
                     payload["article_url"] = f"https://sms.onlinelibrary.wiley.com/doi/full/{doi}"
                 if "offline_html_path" not in payload:
                     payload["offline_html_path"] = ""
+                for key in ("offline_html_path", "source_pdf_path", "source_md_path", "source_html_path"):
+                    if key in payload:
+                        payload[key] = _resolve_storage_uri(payload.get(key, ""))
                 return _json(self, payload)
 
             if path.startswith("/variable/"):

@@ -95,6 +95,7 @@ class SettingsService:
             if k not in allowed:
                 continue
             next_payload[k] = v
+        next_payload = self._validate_pipeline_category(next_payload)
         store = self._read_store()
         categories = store.get("categories", {})
         if not isinstance(categories, dict):
@@ -103,6 +104,33 @@ class SettingsService:
         store["categories"] = categories
         self._write_store(store)
         return next_payload
+
+    def _validate_pipeline_category(self, payload: dict[str, Any]) -> dict[str, Any]:
+        out = dict(payload)
+        executor = str(out.get("executor", "inline") or "inline").strip().lower()
+        if executor not in {"inline", "celery"}:
+            raise ValueError("settings_validation_failed: pipeline.executor")
+        out["executor"] = executor
+        out["job_store_dsn"] = str(out.get("job_store_dsn", "") or "").strip()
+        out["redis_url"] = str(out.get("redis_url", "") or "").strip()
+        out["mineru_api_key_env"] = str(out.get("mineru_api_key_env", "MINERU_API_KEY") or "MINERU_API_KEY").strip()
+        out["mineru_base_url"] = str(out.get("mineru_base_url", "https://mineru.net/api/v4") or "https://mineru.net/api/v4").strip()
+        out["mineru_model_version"] = str(out.get("mineru_model_version", "vlm") or "vlm").strip()
+        out["llm_provider"] = str(out.get("llm_provider", "") or "").strip()
+        out["llm_model"] = str(out.get("llm_model", "") or "").strip()
+        out["llm_api_key_env"] = str(out.get("llm_api_key_env", "") or "").strip()
+        out["llm_base_url"] = str(out.get("llm_base_url", "") or "").strip()
+        try:
+            out["max_poll_seconds"] = max(30, min(86400, int(out.get("max_poll_seconds", 3600) or 3600)))
+            out["poll_interval_seconds"] = max(0.5, min(120.0, float(out.get("poll_interval_seconds", 8.0) or 8.0)))
+            out["max_retries"] = max(0, min(20, int(out.get("max_retries", 3) or 3)))
+        except Exception as exc:
+            raise ValueError("settings_validation_failed: pipeline.numeric_fields") from exc
+        retry_delays = str(out.get("retry_delays", "8,20,60") or "8,20,60").strip()
+        if not retry_delays:
+            retry_delays = "8,20,60"
+        out["retry_delays"] = retry_delays
+        return out
 
     def _get_library_defaults(self) -> dict[str, Any]:
         reg_mod = _load_library_registry_module()
@@ -125,9 +153,41 @@ class SettingsService:
     def get_schema(self) -> dict[str, Any]:
         return {
             "categories": [
-                {"id": "pipeline", "title": "Pipeline", "restart_required": False},
+                {
+                    "id": "pipeline",
+                    "title": "Pipeline",
+                    "restart_required": False,
+                    "fields": [
+                        {"key": "executor", "type": "select", "options": ["inline", "celery"]},
+                        {"key": "job_store_dsn", "type": "text"},
+                        {"key": "redis_url", "type": "text"},
+                        {"key": "mineru_api_key_env", "type": "text"},
+                        {"key": "mineru_base_url", "type": "text"},
+                        {"key": "mineru_model_version", "type": "text"},
+                        {"key": "llm_provider", "type": "text"},
+                        {"key": "llm_model", "type": "text"},
+                        {"key": "llm_api_key_env", "type": "text"},
+                        {"key": "llm_base_url", "type": "text"},
+                        {"key": "max_poll_seconds", "type": "number"},
+                        {"key": "poll_interval_seconds", "type": "number"},
+                        {"key": "max_retries", "type": "number"},
+                        {"key": "retry_delays", "type": "text"},
+                    ],
+                },
                 {"id": "llm_providers", "title": "LLM Providers", "restart_required": False},
-                {"id": "translation", "title": "Translation", "restart_required": False},
+                {
+                    "id": "translation",
+                    "title": "Translation",
+                    "restart_required": False,
+                    "fields": [
+                        {"key": "provider", "type": "text"},
+                        {"key": "model", "type": "text"},
+                        {"key": "api_key", "type": "password", "sensitive": True},
+                        {"key": "base_url", "type": "text"},
+                        {"key": "endpoint_url", "type": "text"},
+                        {"key": "target_lang", "type": "text"},
+                    ],
+                },
                 {"id": "codex_global", "title": "Codex Global", "restart_required": True},
                 {"id": "library_defaults", "title": "Library Defaults", "restart_required": False},
             ],

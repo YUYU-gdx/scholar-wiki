@@ -1,92 +1,184 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { TranslationProviderConfig } from '../types';
+import type { GlobalSettingsPayload } from '../types';
 
-const DEFAULT_CFG: TranslationProviderConfig = {
-  provider: 'deepseek',
-  model: 'deepseek-v4-flash',
-  api_key: '',
-  base_url: 'https://api.deepseek.com',
-  endpoint_url: 'https://api.deepseek.com/v1/chat/completions',
-  target_lang: 'zh',
+type SectionState = {
+  saving: boolean;
+  message: string;
 };
 
+const EMPTY_STATE: SectionState = { saving: false, message: '' };
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function toText(value: unknown): string {
+  if (Array.isArray(value) || (value && typeof value === 'object')) {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '';
+    }
+  }
+  return String(value ?? '');
+}
+
+function toTypedValue(raw: string, original: unknown): unknown {
+  if (typeof original === 'number') {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : original;
+  }
+  if (Array.isArray(original) || (original && typeof original === 'object')) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return original;
+    }
+  }
+  return raw;
+}
+
+function labelFromKey(key: string): string {
+  return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export default function SettingsView() {
-  const [cfg, setCfg] = useState<TranslationProviderConfig>(DEFAULT_CFG);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [payload, setPayload] = useState<GlobalSettingsPayload | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
+  const [sectionState, setSectionState] = useState<Record<string, SectionState>>({});
+  const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
+
+  const categories = useMemo(() => payload?.schema?.categories ?? [], [payload]);
 
   useEffect(() => {
-    api.chat.getTranslationProviderConfig()
-      .then((data) => setCfg({ ...DEFAULT_CFG, ...data }))
-      .catch(() => setCfg(DEFAULT_CFG));
+    api.settings.getAll()
+      .then((data) => {
+        setPayload(data);
+        setDrafts(data.settings ?? {});
+      })
+      .catch((err) => setLoadError((err as Error).message))
+      .finally(() => setLoading(false));
   }, []);
 
-  const save = async () => {
-    setSaving(true);
-    setMessage('');
+  const updateField = (category: string, key: string, value: unknown) => {
+    setDrafts((prev) => {
+      const next = { ...prev };
+      const section = { ...asRecord(next[category]) };
+      section[key] = value;
+      next[category] = section;
+      return next;
+    });
+  };
+
+  const saveCategory = async (category: string) => {
+    const current = asRecord(drafts[category]);
+    setSectionState((prev) => ({ ...prev, [category]: { saving: true, message: '' } }));
     try {
-      const res = await api.chat.saveTranslationProviderConfig(cfg);
-      setCfg({ ...DEFAULT_CFG, ...res.config });
-      setMessage('翻译配置已保存');
-    } catch (e) {
-      setMessage(`保存失败：${(e as Error).message}`);
-    } finally {
-      setSaving(false);
+      const res = await api.settings.updateCategory(category, current);
+      setDrafts((prev) => ({ ...prev, [category]: asRecord(res.config) }));
+      setSectionState((prev) => ({ ...prev, [category]: { saving: false, message: 'Saved.' } }));
+    } catch (err) {
+      setSectionState((prev) => ({ ...prev, [category]: { saving: false, message: `Save failed: ${(err as Error).message}` } }));
     }
   };
 
-  const test = async () => {
-    setTesting(true);
-    setMessage('');
-    try {
-      const res = await api.chat.translate('This is a translation test.', cfg);
-      setMessage(`测试成功：${res.translated_text}`);
-    } catch (e) {
-      setMessage(`测试失败：${(e as Error).message}`);
-    } finally {
-      setTesting(false);
-    }
-  };
+  if (loading) {
+    return <div className="flex-1 overflow-auto p-8 bg-surface-container-low">Loading settings...</div>;
+  }
+
+  if (loadError) {
+    return <div className="flex-1 overflow-auto p-8 bg-surface-container-low text-error">Failed to load settings: {loadError}</div>;
+  }
 
   return (
     <div className="flex-1 overflow-auto p-8 bg-surface-container-low">
-      <div className="max-w-3xl mx-auto bg-surface-container-lowest border border-outline-variant rounded-2xl p-6 space-y-5">
-        <h2 className="text-lg font-semibold text-on-surface">Settings / 翻译设置</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <label className="text-sm">
-            <div className="mb-1 text-on-surface-variant">Provider</div>
-            <input className="w-full px-3 py-2 rounded border border-outline-variant bg-surface-container" value={cfg.provider} onChange={(e) => setCfg((p) => ({ ...p, provider: e.target.value }))} />
-          </label>
-          <label className="text-sm">
-            <div className="mb-1 text-on-surface-variant">Model</div>
-            <input className="w-full px-3 py-2 rounded border border-outline-variant bg-surface-container" value={cfg.model} onChange={(e) => setCfg((p) => ({ ...p, model: e.target.value }))} />
-          </label>
-          <label className="text-sm md:col-span-2">
-            <div className="mb-1 text-on-surface-variant">API Key</div>
-            <input className="w-full px-3 py-2 rounded border border-outline-variant bg-surface-container" type="password" value={cfg.api_key} onChange={(e) => setCfg((p) => ({ ...p, api_key: e.target.value }))} />
-          </label>
-          <label className="text-sm">
-            <div className="mb-1 text-on-surface-variant">Base URL</div>
-            <input className="w-full px-3 py-2 rounded border border-outline-variant bg-surface-container" value={cfg.base_url} onChange={(e) => setCfg((p) => ({ ...p, base_url: e.target.value }))} />
-          </label>
-          <label className="text-sm">
-            <div className="mb-1 text-on-surface-variant">Endpoint URL</div>
-            <input className="w-full px-3 py-2 rounded border border-outline-variant bg-surface-container" value={cfg.endpoint_url} onChange={(e) => setCfg((p) => ({ ...p, endpoint_url: e.target.value }))} />
-          </label>
-          <label className="text-sm">
-            <div className="mb-1 text-on-surface-variant">Target Language</div>
-            <input className="w-full px-3 py-2 rounded border border-outline-variant bg-surface-container" value={cfg.target_lang} onChange={(e) => setCfg((p) => ({ ...p, target_lang: e.target.value }))} />
-          </label>
-        </div>
-        <div className="flex items-center gap-3">
-          <button disabled={saving} onClick={save} className="px-4 py-2 rounded bg-secondary text-on-secondary disabled:opacity-50">保存</button>
-          <button disabled={testing} onClick={test} className="px-4 py-2 rounded border border-outline-variant hover:bg-surface-container disabled:opacity-50">测试翻译</button>
-          {message && <div className="text-sm text-on-surface-variant">{message}</div>}
-        </div>
+      <div className="max-w-5xl mx-auto space-y-4">
+        <h2 className="text-lg font-semibold text-on-surface">Global Settings</h2>
+        {categories.length === 0 ? (
+          <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl p-5 text-sm text-on-surface-variant">
+            No settings categories returned by backend.
+            <pre className="mt-3 whitespace-pre-wrap break-all text-xs">{JSON.stringify(payload, null, 2)}</pre>
+          </div>
+        ) : null}
+        {categories.map((category) => {
+          const id = category.id;
+          const state = sectionState[id] ?? EMPTY_STATE;
+          const values = asRecord(drafts[id]);
+          const fieldDefs = Array.isArray(category.fields) ? category.fields : [];
+          const fieldKeys = fieldDefs.length > 0
+            ? fieldDefs.map((f) => f.key)
+            : Object.keys(values);
+          return (
+            <div key={id} className="bg-surface-container-lowest border border-outline-variant rounded-2xl p-5 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-base font-semibold text-on-surface">{category.title}</div>
+                  {category.restart_required ? (
+                    <div className="text-xs text-on-surface-variant">Restart required after update.</div>
+                  ) : null}
+                </div>
+                <button
+                  disabled={state.saving}
+                  onClick={() => saveCategory(id)}
+                  className="px-4 py-2 rounded bg-secondary text-on-secondary disabled:opacity-50"
+                >
+                  {state.saving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {fieldKeys.map((key) => {
+                  const meta = fieldDefs.find((f) => f.key === key);
+                  const value = values[key];
+                  const secretKey = `${id}.${key}`;
+                  const isSensitive = Boolean(meta?.sensitive || key.toLowerCase().includes('api_key'));
+                  const inputType = isSensitive && !visibleSecrets[secretKey] ? 'password' : 'text';
+                  const textValue = toText(value);
+                  return (
+                    <label key={key} className="text-sm md:col-span-1">
+                      <div className="mb-1 text-on-surface-variant flex items-center gap-2">
+                        <span>{labelFromKey(key)}</span>
+                        {isSensitive ? (
+                          <button
+                            type="button"
+                            className="text-xs underline"
+                            onClick={() => setVisibleSecrets((prev) => ({ ...prev, [secretKey]: !prev[secretKey] }))}
+                          >
+                            {visibleSecrets[secretKey] ? 'Hide' : 'Edit'}
+                          </button>
+                        ) : null}
+                      </div>
+                      {meta?.type === 'select' && Array.isArray(meta.options) ? (
+                        <select
+                          className="w-full px-3 py-2 rounded border border-outline-variant bg-surface-container"
+                          value={textValue}
+                          onChange={(e) => updateField(id, key, e.target.value)}
+                        >
+                          {meta.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                        </select>
+                      ) : (
+                        <input
+                          className="w-full px-3 py-2 rounded border border-outline-variant bg-surface-container"
+                          type={inputType}
+                          value={textValue}
+                          onChange={(e) => updateField(id, key, toTypedValue(e.target.value, value))}
+                        />
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+              {state.message ? <div className="text-sm text-on-surface-variant">{state.message}</div> : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
-

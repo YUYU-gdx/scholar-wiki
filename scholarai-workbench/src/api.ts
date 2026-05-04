@@ -16,6 +16,7 @@ import type {
   WorkspaceLayout,
   TranslationProviderConfig,
   TranslateResponse,
+  GlobalSettingsPayload,
 } from './types';
 
 const API_BASE = '';
@@ -249,6 +250,21 @@ export const api = {
       return jsonFetch('/api/v2/workspace/layout', {
         method: 'POST',
         body: JSON.stringify({ name, layout }),
+      });
+    },
+  },
+
+  settings: {
+    getAll(): Promise<GlobalSettingsPayload> {
+      return jsonFetch('/settings');
+    },
+    getSchema(): Promise<GlobalSettingsPayload['schema']> {
+      return jsonFetch('/settings/schema');
+    },
+    updateCategory(category: string, payload: Record<string, unknown>): Promise<{ ok: boolean; category: string; config: Record<string, unknown> }> {
+      return jsonFetch(`/settings/${encodeURIComponent(category)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
       });
     },
   },

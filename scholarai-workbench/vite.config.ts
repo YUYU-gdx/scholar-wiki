@@ -27,6 +27,7 @@ export default defineConfig(({mode}) => {
         '/chat': { target: backendTarget, changeOrigin: true },
         '/literature': { target: backendTarget, changeOrigin: true },
         '/v1': { target: backendTarget, changeOrigin: true },
+        '/settings': { target: backendTarget, changeOrigin: true },
         '/api': { target: backendTarget, changeOrigin: true },
         '/healthz': { target: backendTarget, changeOrigin: true },
       },
