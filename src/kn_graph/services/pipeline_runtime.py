@@ -213,7 +213,14 @@ def _run_finalize(
             paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
             doi = str(options.get("doi", "") or f"job::{job_id}").strip()
             title = str(options.get("title", "") or input_pdf.stem or job_id).strip()
-            row = {"paper_id": paper_id, "doi": doi, "title": title, "source_path": str(input_pdf.resolve())}
+            parsed_html = parse_meta.get("html_path", "") or ""
+            row = {
+                "paper_id": paper_id,
+                "doi": doi,
+                "title": title,
+                "offline_html_path": str(parsed_html),
+                "source_path": str(input_pdf.resolve()),
+            }
             manifest_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
             import_result = literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id})
             workspace_path = str(import_result.get("workspace_path", "") or workspace_path)
