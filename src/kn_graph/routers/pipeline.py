@@ -16,7 +16,7 @@ from kn_graph.services.pipeline_service import PipelineService
 from kn_graph.services import pipeline_runtime
 
 
-def _resolve_library_workspace(library_id: str) -> Path:
+def _resolve_library_workspace(library_id: str, registry_path: str = "") -> Path:
     import importlib.util
     import sys
 
@@ -29,7 +29,8 @@ def _resolve_library_workspace(library_id: str) -> Path:
     if spec.name not in sys.modules:
         sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
-    registry = mod.ensure_registry()
+    registry_path_arg = Path(registry_path) if registry_path else None
+    registry = mod.ensure_registry(registry_path=registry_path_arg)
     root = str(mod.resolve_workspace_root(registry, library_id) or "").strip()
     if not root:
         raise RuntimeError(f"library_workspace_missing:{library_id}")
@@ -93,7 +94,7 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             return JSONResponse(status_code=400, content={"error": "pdf_only"})
 
         try:
-            workspace_root = _resolve_library_workspace(lib)
+            workspace_root = _resolve_library_workspace(lib, str(pipeline_service._settings.registry_path))
         except Exception as exc:
             return JSONResponse(status_code=400, content={"error": "library_workspace_missing", "detail": str(exc)})
 

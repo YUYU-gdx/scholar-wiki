@@ -122,17 +122,17 @@ export default function App() {
   const [graphData, setGraphData] = useState<GraphFull | null>(null);
   const [graphLoading, setGraphLoading] = useState(true);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [selectedNodeLibraryId, setSelectedNodeLibraryId] = useState<string>('supply_chain');
+  const [selectedNodeLibraryId, setSelectedNodeLibraryId] = useState<string>('');
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
-  const [selectedPaperLibraryId, setSelectedPaperLibraryId] = useState<string>('supply_chain');
+  const [selectedPaperLibraryId, setSelectedPaperLibraryId] = useState<string>('');
   const [selectedPaperPreferredType, setSelectedPaperPreferredType] = useState<'pdf' | 'markdown' | 'html' | null>(null);
   const [selectedPaperRawId, setSelectedPaperRawId] = useState<string | null>(null);
   const [readerReturnView, setReaderReturnView] = useState<'library' | 'graph'>('library');
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [libraries, setLibraries] = useState<LiteratureLibrary[]>([]);
-  const [activeLibraryId, setActiveLibraryId] = useState('supply_chain');
-  const [selectedLibraryIds, setSelectedLibraryIds] = useState<string[]>(['supply_chain']);
+  const [activeLibraryId, setActiveLibraryId] = useState('');
+  const [selectedLibraryIds, setSelectedLibraryIds] = useState<string[]>(['']);
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([]);
   const [paperFileCache, setPaperFileCache] = useState<Record<string, { pdf: boolean; markdown: boolean; html: boolean; loaded: boolean }>>({});
   const [creatingLibrary, setCreatingLibrary] = useState(false);
@@ -141,7 +141,7 @@ export default function App() {
   const refreshLibraries = () => {
     api.literature.listLibraries().then((res) => {
       setLibraries(res.libraries);
-      const fallback = res.default_library_id || res.libraries[0]?.library_id || 'supply_chain';
+      const fallback = res.default_library_id || res.libraries[0]?.library_id || '';
       setActiveLibraryId(fallback);
       setSelectedLibraryIds([fallback]);
       setSelectedNodeLibraryId(fallback);
