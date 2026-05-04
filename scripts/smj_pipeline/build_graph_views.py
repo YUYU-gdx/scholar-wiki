@@ -4,7 +4,9 @@ import argparse
 import json
 import logging
 import math
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,7 @@ def parse_args() -> argparse.Namespace:
         default=Path("outputs/smj_supply_chain_batch/supply_chain_merged_20260414_113031/graph_views.json"),
     )
     p.add_argument("--overview-limit", type=int, default=700)
+    p.add_argument("--dsn", type=str, default="", help="Optional Postgres DSN. If set, build from Postgres as source-of-truth.")
     return p.parse_args()
 
 
@@ -252,10 +255,36 @@ def run_build(artifact_json: Path, output_json: Path | None = None) -> Path | No
 
 def main() -> None:
     args = parse_args()
-    result = run_build(
-        artifact_json=args.input_json,
-        output_json=args.output_json,
-    )
+    artifact_path = args.input_json
+    if str(args.dsn or "").strip():
+        with tempfile.TemporaryDirectory(prefix="kn_graph_views_") as tmpd:
+            artifact_path = Path(tmpd) / "frontend_artifact.json"
+            cmd = [
+                "uv",
+                "run",
+                "python",
+                "scripts/smj_pipeline/export_frontend_artifact_from_postgres.py",
+                "--dsn",
+                str(args.dsn).strip(),
+                "--output-json",
+                str(artifact_path),
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if proc.returncode != 0:
+                if proc.stdout.strip():
+                    logger.error(proc.stdout.strip())
+                if proc.stderr.strip():
+                    logger.error(proc.stderr.strip())
+                sys.exit(proc.returncode)
+            result = run_build(
+                artifact_json=artifact_path,
+                output_json=args.output_json,
+            )
+    else:
+        result = run_build(
+            artifact_json=artifact_path,
+            output_json=args.output_json,
+        )
     if result is None:
         sys.exit(1)
 

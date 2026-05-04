@@ -17,6 +17,10 @@ import uuid
 from typing import Any
 
 import requests
+try:
+    import psycopg
+except Exception:  # pragma: no cover
+    psycopg = None
 
 
 def _load_zhipu_client_class():
@@ -599,6 +603,80 @@ class LiteratureService:
         self._paragraph_by_id: dict[str, dict[str, Any]] = {}
         self._document_by_id: dict[str, dict[str, Any]] = {}
         self._workspace_root_cache: dict[str, Path] = {}
+        self._postgres_dsn = (os.getenv("KN_PAPERS_POSTGRES_DSN", "") or "").strip()
+
+    def _normalize_storage_path(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", text):
+            return text
+        try:
+            p = Path(text)
+            if p.is_absolute():
+                return "storage://" + p.as_posix().lstrip("/")
+            return text.replace("\\", "/")
+        except Exception:
+            return text.replace("\\", "/")
+
+    def _upsert_paper_metadata(self, metadata: dict[str, Any]) -> None:
+        if not self._postgres_dsn or psycopg is None:
+            return
+        with psycopg.connect(self._postgres_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO papers (
+                      paper_id, doi, title, authors_json, abstract, journal,
+                      offline_html_path, source_pdf_path, source_md_path, source_html_path,
+                      article_url, publication_date, online_date, publication_year, paper_citation_count,
+                      metadata_source, extractability_status, paper_type, extractability_reason, extractability_evidence_section
+                    ) VALUES (
+                      %s, %s, %s, %s::jsonb, %s, %s,
+                      %s, %s, %s, %s,
+                      %s, %s, %s, %s, %s,
+                      %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (paper_id) DO UPDATE SET
+                      doi = EXCLUDED.doi,
+                      title = EXCLUDED.title,
+                      authors_json = EXCLUDED.authors_json,
+                      abstract = EXCLUDED.abstract,
+                      journal = EXCLUDED.journal,
+                      offline_html_path = EXCLUDED.offline_html_path,
+                      source_pdf_path = EXCLUDED.source_pdf_path,
+                      source_md_path = EXCLUDED.source_md_path,
+                      source_html_path = EXCLUDED.source_html_path,
+                      article_url = EXCLUDED.article_url,
+                      publication_date = EXCLUDED.publication_date,
+                      online_date = EXCLUDED.online_date,
+                      publication_year = EXCLUDED.publication_year,
+                      paper_citation_count = EXCLUDED.paper_citation_count,
+                      metadata_source = EXCLUDED.metadata_source
+                    """,
+                    (
+                        str(metadata.get("paper_id", "") or ""),
+                        str(metadata.get("doi", "") or ""),
+                        str(metadata.get("title", "") or ""),
+                        json.dumps(metadata.get("authors_json", []), ensure_ascii=False),
+                        str(metadata.get("abstract", "") or ""),
+                        str(metadata.get("journal", "") or ""),
+                        self._normalize_storage_path(str(metadata.get("offline_html_path", "") or "")),
+                        self._normalize_storage_path(str(metadata.get("source_pdf_path", "") or "")),
+                        self._normalize_storage_path(str(metadata.get("source_md_path", "") or "")),
+                        self._normalize_storage_path(str(metadata.get("source_html_path", "") or "")),
+                        str(metadata.get("article_url", "") or ""),
+                        str(metadata.get("publication_date", "") or ""),
+                        str(metadata.get("online_date", "") or ""),
+                        metadata.get("publication_year"),
+                        metadata.get("paper_citation_count"),
+                        str(metadata.get("metadata_source", "") or "literature_import"),
+                        str(metadata.get("extractability_status", "") or ""),
+                        str(metadata.get("paper_type", "") or ""),
+                        str(metadata.get("extractability_reason", "") or ""),
+                        str(metadata.get("extractability_evidence_section", "") or ""),
+                    ),
+                )
 
     def _default_library_id(self) -> str:
         return (os.getenv("LITERATURE_DEFAULT_LIBRARY_ID", "") or "").strip()
@@ -985,6 +1063,7 @@ class LiteratureService:
             "sentence_count": sent_count,
             "paragraph_count": para_count,
             "document_count": doc_count,
+            "db_upsert_enabled": bool(self._postgres_dsn and psycopg is not None),
             "workspace_path": workspace_path,
             "materialized_papers": materialized_rows,
         }
@@ -1037,6 +1116,28 @@ class LiteratureService:
         mat_payload = materialized.get("materialized") if isinstance(materialized, dict) else None
         if isinstance(mat_payload, dict) and mat_payload:
             paper["metadata"]["paper_key"] = str(mat_payload.get("paper_key", "") or "")
+
+        # Persist metadata in Postgres first; Weaviate remains a rebuildable search index.
+        self._upsert_paper_metadata(
+            {
+                "paper_id": paper_id,
+                "doi": doi,
+                "title": title,
+                "authors_json": row_for_import.get("authors", []) or row_for_import.get("authors_json", []) or [],
+                "abstract": str(row_for_import.get("abstract", "") or ""),
+                "journal": str(row_for_import.get("journal", "") or ""),
+                "offline_html_path": source_html,
+                "source_pdf_path": str((mat_payload or {}).get("source_pdf_path", "") or ""),
+                "source_md_path": str((mat_payload or {}).get("md_path", "") or ""),
+                "source_html_path": str((mat_payload or {}).get("html_path", "") or ""),
+                "article_url": str(row_for_import.get("article_url", "") or ""),
+                "publication_date": str(row_for_import.get("publication_date", "") or ""),
+                "online_date": str(row_for_import.get("online_date", "") or ""),
+                "publication_year": row_for_import.get("publication_year"),
+                "paper_citation_count": row_for_import.get("paper_citation_count"),
+                "metadata_source": "literature_import",
+            }
+        )
 
         sentence_vectors = self.embedding.embed_texts([str(s.get("text", "")) for s in sentences])
         paragraph_vectors = self.embedding.embed_texts([str(p.get("text", "")) for p in paragraphs])
