@@ -249,6 +249,7 @@ def _run_finalize(
             SqliteRepo = getattr(repo_mod, "SqliteRepo")
             repo = SqliteRepo(conn)
             repo.apply_schema()
+            # Write paper metadata (title, paths) from import result
             mats = import_result.get("materialized_papers", []) or []
             if isinstance(mats, list):
                 for m in mats:
@@ -285,29 +286,23 @@ def _run_finalize(
                         ),
                     )
                     conn.commit()
-            conn.close()
-        except Exception as exc:
-            graph_warning = (graph_warning + "; " + str(exc)).strip("; ") if graph_warning else str(exc)
-
-    if workspace_path:
-        try:
-            db_path = Path(workspace_path) / "kn_gragh.db"
+            # Import extraction results into SQLite if available
             raw_jsonl = run_dir / "extract" / "raw_llm_outputs.jsonl"
             if raw_jsonl.exists():
-                import_mod = _load_script_module("smj_pipeline_import_to_sqlite_finalize", "import_raw_outputs_to_sqlite.py")
                 _stage_update(store, job_id, "finalize", 98, "importing_to_sqlite", status="running")
-                import_result_raw = import_mod.main_inline(db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=True)
-                imported_ok = (import_result_raw.get("ok_rows", 0) if isinstance(import_result_raw, dict) else 0)
-                if imported_ok > 0:
-                    _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
-                    build_mod = _load_script_module("smj_pipeline_build_graph_views_finalize", "build_graph_views.py")
-                    artifact = build_mod._build_artifact_from_sqlite(db_path)
-                    views_out = Path(workspace_path) / "graph_views.json"
-                    build_mod.run_build_from_artifact(artifact, views_out)
-                    graph_output_path = str(views_out.resolve())
-                    graph_updated = views_out.exists()
-                    if graph_updated:
-                        graph_output_size = views_out.stat().st_size
+                import_mod = _load_script_module("smj_pipeline_import_to_sqlite_finalize", "import_raw_outputs_to_sqlite.py")
+                import_mod.main_inline(db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False)
+            conn.close()
+            # Always rebuild graph_views — paper metadata is now in SQLite
+            _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
+            build_mod = _load_script_module("smj_pipeline_build_graph_views_finalize", "build_graph_views.py")
+            artifact = build_mod._build_artifact_from_sqlite(db_path)
+            views_out = Path(workspace_path) / "graph_views.json"
+            build_mod.run_build_from_artifact(artifact, views_out)
+            graph_output_path = str(views_out.resolve())
+            graph_updated = views_out.exists()
+            if graph_updated:
+                graph_output_size = views_out.stat().st_size
         except Exception as exc:
             graph_warning = str(exc)
 
