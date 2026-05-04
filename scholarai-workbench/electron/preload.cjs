@@ -1,10 +1,15 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+// Backend URL is predictable: port 8013 on localhost.
+// Electron main process picks a port in 8013-8017 range.
+const BACKEND_BASE = "http://127.0.0.1:8013";
+
 contextBridge.exposeInMainWorld("desktopShell", {
   platform: process.platform,
   runtime: "electron",
   getBackendPort: () => ipcRenderer.invoke("get-backend-port"),
   getBackendUrl: () => ipcRenderer.invoke("get-backend-url"),
+  getBackendUrlSync: () => BACKEND_BASE,
   restartBackend: () => ipcRenderer.invoke("restart-backend"),
   openLocalPath: (targetPath) => ipcRenderer.invoke("open-local-path", targetPath),
   readLocalFile: (filePath) => ipcRenderer.invoke("read-local-file", filePath),

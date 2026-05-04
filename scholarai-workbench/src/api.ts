@@ -19,7 +19,13 @@ import type {
   GlobalSettingsPayload,
 } from './types';
 
-const API_BASE = '';
+// In Electron (file:// protocol), API_BASE must point to the backend.
+// In Vite dev mode, the proxy at port 3000 handles routing so base is empty.
+const API_BASE = (() => {
+  const w = window as unknown as { desktopShell?: { getBackendUrlSync?: () => string } };
+  if (w.desktopShell?.getBackendUrlSync) return w.desktopShell.getBackendUrlSync();
+  return '';
+})();
 
 async function jsonFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${url}`, {
