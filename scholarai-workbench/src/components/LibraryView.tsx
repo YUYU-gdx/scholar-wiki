@@ -49,6 +49,18 @@ export default function LibraryView() {
   const [mode, setMode] = useState<Mode>(() => (localStorage.getItem(MODE_KEY) as Mode) || 'papers');
   const [paperFilesByScopedKey, setPaperFilesByScopedKey] = useState<Record<string, PaperFileStatus>>({});
 
+  const deletePaper = async (p: { paperId: string; libraryId: string; scopedKey: string }) => {
+    if (!confirm(`确定删除「${p.paperId}」吗？\n将同时删除数据库记录和磁盘文件。`)) return;
+    try {
+      const res = await fetch(`/paper/${encodeURIComponent(p.paperId)}?library_id=${encodeURIComponent(p.libraryId)}`, { method: 'DELETE' });
+      if (res.ok) {
+        setPaperFilesByScopedKey((prev) => { const n = { ...prev }; delete n[p.scopedKey]; return n; });
+        // Trigger graph data refresh via the parent
+        window.dispatchEvent(new CustomEvent('paper-deleted', { detail: { libraryId: p.libraryId } }));
+      }
+    } catch { /* ignore */ }
+  };
+
   const variables = useMemo(() => (graphData?.nodes || []).filter((n) => String(n.type || '') === 'variable'), [graphData]);
 
   const paperList = useMemo(() => {
@@ -238,7 +250,7 @@ export default function LibraryView() {
                     <div className="flex items-center gap-2">
                       {hasPdf && <button onClick={() => openInReader(p.paperId, p.libraryId, p.rawPaperId, 'pdf')} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />PDF</button>}
                       {hasMd && <button onClick={() => openInReader(p.paperId, p.libraryId, p.rawPaperId, 'markdown')} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />MD</button>}
-                      
+                      <button onClick={() => deletePaper(p)} className="text-xs px-2 py-1 rounded border border-red-200 hover:border-red-400 hover:bg-red-50 text-red-600 flex items-center gap-1">删除</button>
                     </div>
                   )}
                 </div>

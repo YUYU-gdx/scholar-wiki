@@ -87,6 +87,13 @@ def create_paper_router(graph_service: GraphService) -> APIRouter:
             return JSONResponse(status_code=404, content={"error": "node_not_found", "node_id": node_id})
         return result
 
+    @router.delete("/paper/{paper_id_or_doi}")
+    async def delete_paper(paper_id_or_doi: str, library_id: str = Query(default="")):
+        result = graph_service.delete_paper(paper_id_or_doi, library_id=library_id)
+        if result is None:
+            return JSONResponse(status_code=404, content={"error": "paper_not_found", "paper_id": paper_id_or_doi})
+        return result
+
     @router.get("/paper/{paper_id_or_doi}/files")
     async def paper_files(paper_id_or_doi: str, library_id: str = Query(default="")):
         result = graph_service.get_paper_files(paper_id_or_doi, library_id=library_id)

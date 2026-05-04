@@ -151,6 +151,12 @@ export default function App() {
 
   useEffect(() => {
     refreshLibraries();
+    const onDelete = (e: Event) => {
+      const libId = (e as CustomEvent).detail?.libraryId || '';
+      if (libId) api.graph.full(libId).then((p) => setGraphData((prev) => mergeGraphPayloads([p, prev]))).catch(() => {});
+    };
+    window.addEventListener('paper-deleted', onDelete);
+    return () => window.removeEventListener('paper-deleted', onDelete);
   }, []);
 
   useEffect(() => {

@@ -1058,6 +1058,59 @@ class GraphService:
             "default_view": default_view,
         }
 
+    def delete_paper(self, paper_id_or_doi: str, library_id: str = "") -> dict[str, Any] | None:
+        """Delete a paper: SQLite, disk files, then rebuild graph_views."""
+        self._ensure_loaded(library_id)
+        paper = self.get_paper(paper_id_or_doi, library_id=library_id)
+        if paper is None:
+            return None
+        pid = str(paper.get("paper_id", "") or "").strip()
+        pkey = str(paper.get("paper_key", "") or pid).strip()
+        deleted = {"paper_id": pid, "paper_key": pkey, "library_id": library_id, "deleted": []}
+
+        # 1. SQLite: delete paper + related rows
+        db_path = self._settings.workspaces_dir / library_id / "kn_gragh.db"
+        if db_path.exists():
+            import sqlite3
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.cursor()
+            for table in ("paper_domains", "variable_aliases", "variable_definitions",
+                          "direct_effects", "moderations", "interactions", "interaction_inputs"):
+                cur.execute(f"DELETE FROM {table} WHERE paper_id = ?", (pid,))
+            cur.execute("DELETE FROM papers WHERE paper_id = ?", (pid,))
+            conn.commit()
+            conn.close()
+            deleted["deleted"].append("sqlite")
+
+        # 2. Disk: remove paper directory
+        import shutil
+        ws = self._settings.workspaces_dir / library_id
+        paper_dir = ws / "corpus" / "papers" / pkey
+        if paper_dir.exists():
+            shutil.rmtree(paper_dir, ignore_errors=True)
+            deleted["deleted"].append("files")
+
+        # 3. Rebuild graph_views
+        db_path = ws / "kn_gragh.db"
+        if db_path.exists():
+            try:
+                from build_graph_views import _build_artifact_from_sqlite, run_build_from_artifact
+                import sys
+                _scripts = str((Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline").resolve())
+                if _scripts not in sys.path:
+                    sys.path.insert(0, _scripts)
+                artifact = _build_artifact_from_sqlite(db_path)
+                views_out = ws / "graph_views.json"
+                run_build_from_artifact(artifact, views_out)
+                deleted["graph_rebuilt"] = True
+            except Exception:
+                deleted["graph_rebuilt"] = False
+
+        # 4. Reload
+        self._loaded = False
+        self._ensure_loaded(library_id)
+        return deleted
+
     def resolve_paper_file(self, paper_id_or_doi: str, library_id: str = "", file_type: str = "") -> dict[str, Any] | None:
         files_payload = self.get_paper_files(paper_id_or_doi, library_id=library_id)
         if files_payload is None:
