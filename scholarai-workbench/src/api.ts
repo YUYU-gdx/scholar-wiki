@@ -168,6 +168,22 @@ export const api = {
     listLibraries(): Promise<LibrariesResponse> {
       return jsonFetch('/literature/libraries');
     },
+    createLibrary(libraryId: string, workspaceRoot: string = '', setDefault: boolean = true): Promise<Record<string, unknown>> {
+      return jsonFetch('/literature/libraries', {
+        method: 'POST',
+        body: JSON.stringify({
+          library_id: libraryId,
+          workspace_root: workspaceRoot,
+          set_default: setDefault,
+        }),
+      });
+    },
+    deleteLibrary(libraryId: string, deleteWorkspaceData: boolean = true): Promise<Record<string, unknown>> {
+      const params = new URLSearchParams({ delete_workspace_data: String(deleteWorkspaceData) });
+      return jsonFetch(`/literature/libraries/${encodeURIComponent(libraryId)}?${params}`, {
+        method: 'DELETE',
+      });
+    },
     search(query: string, libraryId: string, topK: number = 20, levels: string = 'sentence', keywordWeight: number = 0.4, ragWeight: number = 0.6): Promise<LiteratureSearchResponse> {
       const params = new URLSearchParams({ query, library_id: libraryId, top_k: String(topK), levels, keyword_weight: String(keywordWeight), rag_weight: String(ragWeight) });
       return jsonFetch(`/literature/search?${params}`);

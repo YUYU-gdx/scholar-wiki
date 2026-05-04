@@ -4,17 +4,212 @@ import argparse
 import json
 import logging
 import math
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+import re
+
+try:
+    import psycopg
+except Exception:  # pragma: no cover
+    psycopg = None
 
 logger = logging.getLogger(__name__)
 
 
+def _slug(text: str) -> str:
+    t = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    t = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", t).strip("-")
+    return t or "unknown"
+
+
+def _canonical_var_id(text: str) -> str:
+    value = " ".join(str(text or "").strip().split())
+    return f"var::{value}" if value else "var::unknown"
+
+
+def _build_artifact_from_postgres_compat(dsn: str, output_json: Path) -> Path:
+    if psycopg is None:
+        raise RuntimeError("psycopg is not installed")
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT paper_id, doi, title, abstract, journal, source_html_path, article_url,
+                       source_pdf_path, source_md_path, publication_date, online_date, publication_year, paper_citation_count
+                FROM papers
+                ORDER BY paper_id
+                """
+            )
+            papers_rows = cur.fetchall()
+            paper_cols = [d.name for d in cur.description]
+            papers = [dict(zip(paper_cols, row)) for row in papers_rows]
+
+            cur.execute(
+                """
+                SELECT paper_id, source_var, target_var, effect_form, verification, evidence_text
+                FROM direct_effects
+                ORDER BY paper_id, id
+                """
+            )
+            eff_rows = cur.fetchall()
+            eff_cols = [d.name for d in cur.description]
+            effects = [dict(zip(eff_cols, row)) for row in eff_rows]
+            cur.execute(
+                """
+                SELECT paper_id, moderator_var, source_var, target_var, effect_form, verification, evidence_text
+                FROM moderations
+                ORDER BY paper_id, id
+                """
+            )
+            mod_rows = cur.fetchall()
+            mod_cols = [d.name for d in cur.description]
+            moderations = [dict(zip(mod_cols, row)) for row in mod_rows]
+            cur.execute(
+                """
+                SELECT i.id, i.paper_id, i.output_var, i.effect_form, i.verification, i.evidence_text,
+                       inp.input_var, inp.input_order
+                FROM interactions i
+                LEFT JOIN interaction_inputs inp ON inp.interaction_id = i.id
+                ORDER BY i.paper_id, i.id, inp.input_order
+                """
+            )
+            inter_rows = cur.fetchall()
+            inter_cols = [d.name for d in cur.description]
+            interaction_rows = [dict(zip(inter_cols, row)) for row in inter_rows]
+
+    node_map: dict[str, dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
+    moderation_links: list[dict[str, Any]] = []
+    interaction_links: list[dict[str, Any]] = []
+    for idx, rel in enumerate(effects):
+        source = str(rel.get("source_var", "") or "").strip()
+        target = str(rel.get("target_var", "") or "").strip()
+        pid = str(rel.get("paper_id", "") or "").strip()
+        if not source or not target or not pid:
+            continue
+        sid = _canonical_var_id(source)
+        tid = _canonical_var_id(target)
+        node_map.setdefault(sid, {"id": sid, "type": "variable", "label": source, "name": source})
+        node_map.setdefault(tid, {"id": tid, "type": "variable", "label": target, "name": target})
+        edges.append(
+            {
+                "id": f"edge::{_slug(pid)}::{idx}",
+                "source": sid,
+                "target": tid,
+                "source_name_local": source,
+                "target_name_local": target,
+                "paper_id": pid,
+                "relation_type": "main_effect",
+                "relation_type_std": "main_effect",
+                "relation_form": str(rel.get("effect_form", "") or ""),
+                "verification": str(rel.get("verification", "") or ""),
+                "evidence_snippet": str(rel.get("evidence_text", "") or ""),
+                "display_effect_class": "nonlinear",
+            }
+        )
+    for idx, mod in enumerate(moderations):
+        pid = str(mod.get("paper_id", "") or "").strip()
+        moderator = str(mod.get("moderator_var", "") or "").strip()
+        source = str(mod.get("source_var", "") or "").strip()
+        target = str(mod.get("target_var", "") or "").strip()
+        if not pid or not moderator:
+            continue
+        mid = _canonical_var_id(moderator)
+        node_map.setdefault(mid, {"id": mid, "type": "variable", "label": moderator, "name": moderator})
+        srid = _canonical_var_id(source) if source else ""
+        tid = _canonical_var_id(target) if target else ""
+        if srid:
+            node_map.setdefault(srid, {"id": srid, "type": "variable", "label": source, "name": source})
+        if tid:
+            node_map.setdefault(tid, {"id": tid, "type": "variable", "label": target, "name": target})
+        moderation_links.append(
+            {
+                "id": f"mod::{_slug(pid)}::{idx}",
+                "paper_id": pid,
+                "moderator_var": moderator,
+                "moderator_node_id": mid,
+                "moderated_relation": {
+                    "source_var": source,
+                    "target_var": target,
+                    "source_node_id": srid,
+                    "target_node_id": tid,
+                },
+                "direction": str(mod.get("effect_form", "") or ""),
+                "verification": str(mod.get("verification", "") or ""),
+                "evidence_snippet": str(mod.get("evidence_text", "") or ""),
+            }
+        )
+
+    grouped_inter: dict[tuple[str, int], dict[str, Any]] = {}
+    for row in interaction_rows:
+        iid = int(row.get("id") or 0)
+        pid = str(row.get("paper_id", "") or "").strip()
+        if iid <= 0 or not pid:
+            continue
+        key = (pid, iid)
+        g = grouped_inter.setdefault(
+            key,
+            {
+                "paper_id": pid,
+                "output_var": str(row.get("output_var", "") or "").strip(),
+                "effect_form": str(row.get("effect_form", "") or ""),
+                "verification": str(row.get("verification", "") or ""),
+                "evidence_text": str(row.get("evidence_text", "") or ""),
+                "inputs": [],
+            },
+        )
+        iv = str(row.get("input_var", "") or "").strip()
+        if iv:
+            g["inputs"].append(iv)
+
+    for idx, ((_pid, _iid), inter) in enumerate(grouped_inter.items()):
+        pid = str(inter.get("paper_id", "") or "")
+        out = str(inter.get("output_var", "") or "").strip()
+        inputs = [str(x).strip() for x in (inter.get("inputs", []) or []) if str(x).strip()]
+        out_id = _canonical_var_id(out) if out else ""
+        if out_id:
+            node_map.setdefault(out_id, {"id": out_id, "type": "variable", "label": out, "name": out})
+        input_ids: list[str] = []
+        for iv in inputs:
+            iid = _canonical_var_id(iv)
+            input_ids.append(iid)
+            node_map.setdefault(iid, {"id": iid, "type": "variable", "label": iv, "name": iv})
+        interaction_links.append(
+            {
+                "id": f"int::{_slug(pid)}::{idx}",
+                "paper_id": pid,
+                "inputs": inputs,
+                "input_node_ids": input_ids,
+                "output": out,
+                "output_node_id": out_id,
+                "effect": str(inter.get("effect_form", "") or ""),
+                "verification": str(inter.get("verification", "") or ""),
+                "evidence_snippet": str(inter.get("evidence_text", "") or ""),
+            }
+        )
+
+    payload = {
+        "meta": {
+            "dataset_source": "postgres_compat",
+            "paper_count": len(papers),
+            "node_count": len(node_map),
+            "edge_count": len(edges),
+        },
+        "nodes": list(node_map.values()),
+        "edges": edges,
+        "moderation_links": moderation_links,
+        "interaction_links": interaction_links,
+        "papers": papers,
+    }
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return output_json
+
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Build optimized graph views from full frontend artifact.")
+    p = argparse.ArgumentParser(description="Build optimized graph views from PostgreSQL source-of-truth.")
     p.add_argument(
         "--input-json",
         type=Path,
@@ -26,7 +221,7 @@ def parse_args() -> argparse.Namespace:
         default=Path("outputs/smj_supply_chain_batch/supply_chain_merged_20260414_113031/graph_views.json"),
     )
     p.add_argument("--overview-limit", type=int, default=700)
-    p.add_argument("--dsn", type=str, default="", help="Optional Postgres DSN. If set, build from Postgres as source-of-truth.")
+    p.add_argument("--dsn", type=str, default="", help="PostgreSQL DSN (required).")
     return p.parse_args()
 
 
@@ -253,38 +448,24 @@ def run_build(artifact_json: Path, output_json: Path | None = None) -> Path | No
     return output_json
 
 
+def run_build_from_dsn(dsn: str, output_json: Path) -> Path | None:
+    dsn_text = str(dsn or "").strip()
+    if not dsn_text:
+        logger.warning("dsn_required")
+        return None
+    with tempfile.TemporaryDirectory(prefix="kn_graph_views_") as tmpd:
+        artifact_path = Path(tmpd) / "frontend_artifact.json"
+        _build_artifact_from_postgres_compat(dsn_text, artifact_path)
+        return run_build(artifact_json=artifact_path, output_json=output_json)
+
+
 def main() -> None:
     args = parse_args()
-    artifact_path = args.input_json
-    if str(args.dsn or "").strip():
-        with tempfile.TemporaryDirectory(prefix="kn_graph_views_") as tmpd:
-            artifact_path = Path(tmpd) / "frontend_artifact.json"
-            cmd = [
-                "uv",
-                "run",
-                "python",
-                "scripts/smj_pipeline/export_frontend_artifact_from_postgres.py",
-                "--dsn",
-                str(args.dsn).strip(),
-                "--output-json",
-                str(artifact_path),
-            ]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            if proc.returncode != 0:
-                if proc.stdout.strip():
-                    logger.error(proc.stdout.strip())
-                if proc.stderr.strip():
-                    logger.error(proc.stderr.strip())
-                sys.exit(proc.returncode)
-            result = run_build(
-                artifact_json=artifact_path,
-                output_json=args.output_json,
-            )
-    else:
-        result = run_build(
-            artifact_json=artifact_path,
-            output_json=args.output_json,
-        )
+    dsn = str(args.dsn or "").strip()
+    if not dsn:
+        logger.error("--dsn is required. PostgreSQL is the only supported source-of-truth.")
+        sys.exit(2)
+    result = run_build_from_dsn(dsn, args.output_json)
     if result is None:
         sys.exit(1)
 

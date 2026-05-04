@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import threading
 from datetime import datetime, timezone
@@ -229,38 +230,30 @@ def _run_finalize(
     graph_warning = ""
     if library_id and workspace_path:
         try:
-            export_mod = _load_script_module("smj_pipeline_export_frontend_artifact_for_kn_graph_runtime", "export_frontend_artifact.py")
             build_mod = _load_script_module("smj_pipeline_build_graph_views_for_kn_graph_runtime", "build_graph_views.py")
-            run_export = export_mod.run_export
-            run_build = build_mod.run_build
-
-            extract_dir = run_dir / "extract"
-            artifact_path = extract_dir / "frontend_artifact.json" if extract_dir.is_dir() else None
-            raw_llm_path = extract_dir / "raw_llm_outputs.jsonl" if extract_dir.is_dir() else None
-
-            if artifact_path is not None or raw_llm_path is not None:
+            run_build_from_dsn = build_mod.run_build_from_dsn
+            dsn = str(options.get("papers_postgres_dsn", "") or "").strip()
+            if not dsn:
+                dsn = str(os.getenv("KN_PAPERS_POSTGRES_DSN", "") or "").strip()
+            if not dsn:
+                graph_warning = "postgres_dsn_missing_for_graph_rebuild"
+            else:
                 _stage_update(store, job_id, "finalize", 98, "graph_rebuild_started", status="running")
-                src_path = raw_llm_path or artifact_path
-                if src_path and src_path.exists():
-                    artifact_result = run_export(input_json=src_path, output_json=artifact_path)
-                    if artifact_result and artifact_result.exists():
-                        ws_path = Path(workspace_path)
-                        graph_output = ws_path / "graph_views.json"
-                        graph_output_path = str(graph_output.resolve())
-                        before_mtime = graph_output.stat().st_mtime if graph_output.exists() else 0.0
-                        build_result = run_build(artifact_json=artifact_result, output_json=graph_output)
-                        exists_after = graph_output.exists()
-                        after_mtime = graph_output.stat().st_mtime if exists_after else 0.0
-                        graph_output_size = int(graph_output.stat().st_size) if exists_after else 0
-                        graph_updated = bool(
-                            build_result and exists_after and graph_output_size > 0 and (after_mtime >= before_mtime)
-                        )
-                        if graph_updated:
-                            _stage_update(store, job_id, "finalize", 99, "graph_rebuilt", status="running")
-                        else:
-                            graph_warning = "build_graph_views_result_invalid"
-                    else:
-                        graph_warning = "export_frontend_artifact failed"
+                ws_path = Path(workspace_path)
+                graph_output = ws_path / "graph_views.json"
+                graph_output_path = str(graph_output.resolve())
+                before_mtime = graph_output.stat().st_mtime if graph_output.exists() else 0.0
+                build_result = run_build_from_dsn(dsn, graph_output)
+                exists_after = graph_output.exists()
+                after_mtime = graph_output.stat().st_mtime if exists_after else 0.0
+                graph_output_size = int(graph_output.stat().st_size) if exists_after else 0
+                graph_updated = bool(
+                    build_result and exists_after and graph_output_size > 0 and (after_mtime >= before_mtime)
+                )
+                if graph_updated:
+                    _stage_update(store, job_id, "finalize", 99, "graph_rebuilt", status="running")
+                else:
+                    graph_warning = "build_graph_views_result_invalid"
         except Exception as exc:
             graph_warning = f"graph_rebuild_error: {exc}"
     else:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--runs-root", type=Path, default=DEFAULT_RUNS_ROOT)
     p.add_argument("--batch-id", default="")
     p.add_argument("--api-key-env", default="ZHIPU_API_KEY")
+    p.add_argument("--dsn", default="", help="PostgreSQL DSN (required for graph build).")
     p.add_argument("--activate", action="store_true")
     return p.parse_args()
 
@@ -77,21 +79,9 @@ def main() -> None:
         Path.cwd(),
     )
 
-    raw_llm_outputs = rdir / "raw_llm_outputs_from_batch.jsonl"
-    artifact_out = rdir / "frontend_artifact.json"
-    _run(
-        [
-            "uv",
-            "run",
-            "python",
-            "scripts/smj_pipeline/export_frontend_artifact.py",
-            "--raw-output-jsonl",
-            str(raw_llm_outputs),
-            "--output-json",
-            str(artifact_out),
-        ],
-        Path.cwd(),
-    )
+    dsn = str(args.dsn or "").strip() or str(os.getenv("KN_PAPERS_POSTGRES_DSN", "")).strip()
+    if not dsn:
+        raise RuntimeError("dsn_required_for_graph_build")
 
     views_out = rdir / "graph_views.json"
     _run(
@@ -100,8 +90,8 @@ def main() -> None:
             "run",
             "python",
             "scripts/smj_pipeline/build_graph_views.py",
-            "--input-json",
-            str(artifact_out),
+            "--dsn",
+            dsn,
             "--output-json",
             str(views_out),
         ],
@@ -119,7 +109,7 @@ def main() -> None:
             meta = {}
     meta["status"] = "ready"
     meta["batch_id"] = batch_id
-    meta["artifact_json"] = str(artifact_out)
+    meta["artifact_json"] = ""
     meta["graph_views"] = str(views_out)
     meta["updated_at"] = datetime.now(timezone.utc).isoformat()
     write_json_atomic(meta_path, meta)
@@ -135,7 +125,7 @@ def main() -> None:
                 "run_id": args.run_id,
                 "status": "ready",
                 "batch_id": batch_id,
-                "artifact_json": str(artifact_out),
+                "artifact_json": "",
                 "graph_views": str(views_out),
                 **active_info,
             },

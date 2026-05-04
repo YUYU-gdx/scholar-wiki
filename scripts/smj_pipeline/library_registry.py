@@ -26,7 +26,13 @@ def _now_iso() -> str:
 
 
 def _safe_library_id(raw: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9._-]+", "_", str(raw or "").strip())
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    # Keep CJK, letters, digits, dot/underscore/hyphen; collapse other chars to underscore.
+    cleaned = re.sub(r"[^\u4e00-\u9fffa-zA-Z0-9._-]+", "_", text)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._-")
+    return cleaned
 
 
 def _safe_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -264,3 +270,147 @@ def resolve_workspace_root(registry: dict[str, Any], library_id: str) -> str:
         except Exception:
             return root
     return ""
+
+
+def create_library(
+    *,
+    library_id: str,
+    registry_path: Path | None = None,
+    legacy_index_root: Path | None = None,
+    workspace_root: str = "",
+    set_default: bool = True,
+) -> dict[str, Any]:
+    target = _safe_library_id(library_id)
+    if not target:
+        raise ValueError("library_id_required")
+
+    reg_path = (registry_path or _configured_paths.get("registry_path") or registry_path_from_env()).resolve()
+    idx_root = (legacy_index_root or _configured_paths.get("index_root") or legacy_index_root_from_env()).resolve()
+    idx_root.mkdir(parents=True, exist_ok=True)
+    registry = ensure_registry(registry_path=reg_path, legacy_index_root=idx_root)
+
+    if str(workspace_root or "").strip():
+        ws_path = Path(workspace_root).resolve()
+    else:
+        configured_ws = _get_configured_workspace_root()
+        ws_base = configured_ws.resolve() if configured_ws is not None else workspace_root_base_from_env().resolve()
+        ws_path = ws_base / target
+    ws_path.mkdir(parents=True, exist_ok=True)
+    index_path = (idx_root / f"{target}.json").resolve()
+
+    index_payload = {
+        "library_id": target,
+        "paper_count": 0,
+        "paper_ids": [],
+        "workspace_root": str(ws_path),
+        "updated_at": _now_iso(),
+    }
+    index_path.write_text(json.dumps(index_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    rows = registry.get("libraries", []) if isinstance(registry, dict) else []
+    if not isinstance(rows, list):
+        rows = []
+    next_rows: list[dict[str, Any]] = []
+    found = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rid = _safe_library_id(str(row.get("library_id", "") or ""))
+        if rid == target:
+            found = True
+            next_rows.append(
+                {
+                    "library_id": target,
+                    "workspace_root": str(ws_path),
+                    "index_path": str(index_path),
+                    "paper_count": 0,
+                    "updated_at": _now_iso(),
+                    "state": "active",
+                }
+            )
+        else:
+            next_rows.append(row)
+    if not found:
+        next_rows.append(
+            {
+                "library_id": target,
+                "workspace_root": str(ws_path),
+                "index_path": str(index_path),
+                "paper_count": 0,
+                "updated_at": _now_iso(),
+                "state": "active",
+            }
+        )
+    next_rows.sort(key=lambda x: str(x.get("library_id", "")))
+    registry["libraries"] = next_rows
+    if set_default or not str(registry.get("default_library_id", "") or "").strip():
+        registry["default_library_id"] = target
+    save_registry(reg_path, registry)
+
+    return {
+        "library_id": target,
+        "workspace_path": str(ws_path),
+        "index_path": str(index_path),
+        "default_library_id": str(registry.get("default_library_id", "") or ""),
+    }
+
+
+def delete_library(
+    *,
+    library_id: str,
+    registry_path: Path | None = None,
+    legacy_index_root: Path | None = None,
+    delete_workspace_data: bool = True,
+) -> dict[str, Any]:
+    target = _safe_library_id(library_id)
+    if not target:
+        raise ValueError("library_id_required")
+
+    reg_path = (registry_path or _configured_paths.get("registry_path") or registry_path_from_env()).resolve()
+    idx_root = (legacy_index_root or _configured_paths.get("index_root") or legacy_index_root_from_env()).resolve()
+    registry = ensure_registry(registry_path=reg_path, legacy_index_root=idx_root)
+
+    rows = registry.get("libraries", []) if isinstance(registry, dict) else []
+    if not isinstance(rows, list):
+        rows = []
+    matched: dict[str, Any] | None = None
+    next_rows: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rid = _safe_library_id(str(row.get("library_id", "") or ""))
+        if rid == target and matched is None:
+            matched = row
+            continue
+        next_rows.append(row)
+    if matched is None:
+        return {"library_id": target, "deleted": False, "reason": "library_not_found"}
+
+    index_path = Path(str(matched.get("index_path", "") or "")).resolve() if str(matched.get("index_path", "") or "").strip() else (idx_root / f"{target}.json").resolve()
+    if index_path.exists() and index_path.is_file():
+        index_path.unlink(missing_ok=True)
+
+    workspace_path_text = str(matched.get("workspace_root", "") or "").strip()
+    deleted_workspace = False
+    if delete_workspace_data and workspace_path_text:
+        workspace_path = Path(workspace_path_text).resolve()
+        configured_ws = _get_configured_workspace_root()
+        ws_base = (configured_ws.resolve() if configured_ws is not None else workspace_root_base_from_env().resolve())
+        if workspace_path != ws_base and ws_base in workspace_path.parents and workspace_path.exists() and workspace_path.is_dir():
+            shutil.rmtree(workspace_path, ignore_errors=True)
+            deleted_workspace = True
+
+    registry["libraries"] = next_rows
+    default_id = _safe_library_id(str(registry.get("default_library_id", "") or ""))
+    if default_id == target:
+        registry["default_library_id"] = str(next_rows[0].get("library_id", "") or "") if next_rows else ""
+    save_registry(reg_path, registry)
+
+    return {
+        "library_id": target,
+        "deleted": True,
+        "deleted_workspace": deleted_workspace,
+        "workspace_path": workspace_path_text,
+        "index_path": str(index_path),
+        "default_library_id": str(registry.get("default_library_id", "") or ""),
+    }

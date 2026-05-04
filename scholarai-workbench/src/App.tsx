@@ -9,6 +9,8 @@ import {
   Search,
   Zap,
   Bell,
+  Trash2,
+  Plus,
 } from 'lucide-react';
 import { AnimatePresence } from './components/AnimatePresence';
 import LibraryView from './components/LibraryView';
@@ -133,8 +135,10 @@ export default function App() {
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<string[]>(['supply_chain']);
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([]);
   const [paperFileCache, setPaperFileCache] = useState<Record<string, { pdf: boolean; markdown: boolean; html: boolean; loaded: boolean }>>({});
+  const [creatingLibrary, setCreatingLibrary] = useState(false);
+  const [newLibraryId, setNewLibraryId] = useState('');
 
-  useEffect(() => {
+  const refreshLibraries = () => {
     api.literature.listLibraries().then((res) => {
       setLibraries(res.libraries);
       const fallback = res.default_library_id || res.libraries[0]?.library_id || 'supply_chain';
@@ -143,6 +147,10 @@ export default function App() {
       setSelectedNodeLibraryId(fallback);
       setSelectedPaperLibraryId(fallback);
     }).catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshLibraries();
   }, []);
 
   useEffect(() => {
@@ -245,26 +253,97 @@ export default function App() {
           </div>
 
           <div className="px-2 mb-2">
-            <label className="text-[10px] font-mono text-outline uppercase tracking-widest block mb-1">Libraries (Multi-select)</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] font-mono text-outline uppercase tracking-widest">Libraries (Multi-select)</label>
+              <button
+                type="button"
+                title="创建文献库"
+                className="p-1 rounded border border-outline-variant text-outline hover:text-secondary hover:border-secondary"
+                onClick={() => {
+                  setCreatingLibrary((v) => !v);
+                  if (!creatingLibrary) setNewLibraryId('new_library');
+                }}
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            {creatingLibrary && (
+              <div className="mb-2 flex items-center gap-1.5">
+                <input
+                  value={newLibraryId}
+                  onChange={(e) => setNewLibraryId(e.target.value)}
+                  placeholder="library_id"
+                  className="flex-1 bg-surface-container border border-outline-variant rounded px-2 py-1 text-xs font-mono outline-none focus:border-secondary"
+                />
+                <button
+                  type="button"
+                  className="px-2 py-1 text-[11px] rounded border border-outline-variant hover:border-secondary"
+                  onClick={async () => {
+                    const libraryId = newLibraryId.trim();
+                    if (!libraryId) return;
+                    try {
+                      await api.literature.createLibrary(libraryId, '', false);
+                      setCreatingLibrary(false);
+                      setNewLibraryId('');
+                      refreshLibraries();
+                    } catch (err) {
+                      window.alert(`创建失败: ${String((err as Error)?.message || err)}`);
+                    }
+                  }}
+                >
+                  创建
+                </button>
+                <button
+                  type="button"
+                  className="px-2 py-1 text-[11px] rounded border border-outline-variant hover:border-secondary"
+                  onClick={() => {
+                    setCreatingLibrary(false);
+                    setNewLibraryId('');
+                  }}
+                >
+                  取消
+                </button>
+              </div>
+            )}
             <div className="max-h-36 overflow-auto rounded-lg border border-outline-variant bg-surface-container p-1.5 space-y-1">
               {libraries.map((lib) => {
                 const checked = selectedLibraryIds.includes(lib.library_id);
                 return (
-                  <label key={lib.library_id} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-surface-container-low cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) => {
-                        const next = e.target.checked
-                          ? [...selectedLibraryIds, lib.library_id]
-                          : selectedLibraryIds.filter((id) => id !== lib.library_id);
-                        const ensured = next.length ? next : [lib.library_id];
-                        setSelectedLibraryIds(ensured);
-                        setActiveLibraryId(ensured[0]);
+                  <div key={lib.library_id} className="flex items-center justify-between gap-2 px-1.5 py-1 rounded hover:bg-surface-container-low">
+                    <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? [...selectedLibraryIds, lib.library_id]
+                            : selectedLibraryIds.filter((id) => id !== lib.library_id);
+                          const ensured = next.length ? next : [lib.library_id];
+                          setSelectedLibraryIds(ensured);
+                          setActiveLibraryId(ensured[0]);
+                        }}
+                      />
+                      <span className="text-xs text-on-surface truncate">{lib.library_id}</span>
+                    </label>
+                    <button
+                      type="button"
+                      title={`删除库 ${lib.library_id}`}
+                      className="p-1 rounded border border-outline-variant text-outline hover:text-red-500 hover:border-red-400"
+                      onClick={async () => {
+                        const ok = window.confirm(`确认删除库 ${lib.library_id}？这会删除该库的索引与工作区数据。`);
+                        if (!ok) return;
+                        try {
+                          await api.literature.deleteLibrary(lib.library_id, true);
+                          refreshLibraries();
+                        } catch (err) {
+                          // eslint-disable-next-line no-alert
+                          window.alert(`删除失败: ${String((err as Error)?.message || err)}`);
+                        }
                       }}
-                    />
-                    <span className="text-xs text-on-surface">{lib.library_id}</span>
-                  </label>
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 );
               })}
             </div>

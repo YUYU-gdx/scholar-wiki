@@ -850,33 +850,22 @@ def _run_finalize(
     if library_id and workspace_path:
         try:
             try:
-                from export_frontend_artifact import run_export
+                from build_graph_views import run_build_from_dsn
             except ImportError:
-                from .export_frontend_artifact import run_export
-            try:
-                from build_graph_views import run_build
-            except ImportError:
-                from .build_graph_views import run_build
+                from .build_graph_views import run_build_from_dsn
 
-            extract_dir = run_dir / "extract"
-            artifact_path = extract_dir / "frontend_artifact.json" if extract_dir.is_dir() else None
-            raw_llm_path = extract_dir / "raw_llm_outputs.jsonl" if extract_dir.is_dir() else None
-
-            if artifact_path is not None or raw_llm_path is not None:
+            dsn = str(options.get("papers_postgres_dsn", "") or os.getenv("KN_PAPERS_POSTGRES_DSN", "")).strip()
+            if not dsn:
+                graph_warning = "postgres_dsn_missing_for_graph_rebuild"
+            else:
                 _stage_update(store, job_id, "finalize", 98, "graph_rebuild_started", status="running")
-                src_path = raw_llm_path or artifact_path
-                if src_path and src_path.exists():
-                    artifact_result = run_export(input_json=src_path, output_json=artifact_path)
-                    if artifact_result and artifact_result.exists():
-                        ws_path = Path(workspace_path)
-                        graph_output = ws_path / "graph_views.json"
-                        build_result = run_build(artifact_json=artifact_result, output_json=graph_output)
-                        if build_result:
-                            _stage_update(store, job_id, "finalize", 99, "graph_rebuilt", status="running")
-                        else:
-                            graph_warning = "build_graph_views failed"
-                    else:
-                        graph_warning = "export_frontend_artifact failed"
+                ws_path = Path(workspace_path)
+                graph_output = ws_path / "graph_views.json"
+                build_result = run_build_from_dsn(dsn, graph_output)
+                if build_result:
+                    _stage_update(store, job_id, "finalize", 99, "graph_rebuilt", status="running")
+                else:
+                    graph_warning = "build_graph_views failed"
         except Exception as exc:
             graph_warning = f"graph_rebuild_error: {exc}"
 

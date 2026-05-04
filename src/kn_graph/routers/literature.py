@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
-from kn_graph.models.literature import LiteratureAnswerRequest, LiteratureImportRequest
+from kn_graph.models.literature import LiteratureAnswerRequest, LiteratureCreateLibraryRequest, LiteratureImportRequest
 from kn_graph.services.literature_service import LiteratureService
 
 
@@ -42,6 +42,39 @@ def create_router(literature_service: LiteratureService) -> APIRouter:
     @router.get("/libraries")
     async def list_libraries():
         return literature_service.list_libraries()
+
+    @router.post("/libraries")
+    async def create_library(body: LiteratureCreateLibraryRequest):
+        library_id = str(body.library_id or "").strip()
+        if not library_id:
+            return JSONResponse(status_code=400, content={"error": "library_id_required"})
+        try:
+            return literature_service.create_library(
+                library_id=library_id,
+                workspace_root=str(body.workspace_root or "").strip(),
+                set_default=bool(body.set_default),
+            )
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": "library_create_failed", "detail": str(exc)})
+
+    @router.delete("/libraries/{library_id}")
+    async def delete_library(
+        library_id: str,
+        delete_workspace_data: bool = Query(default=True),
+    ):
+        lib = str(library_id or "").strip()
+        if not lib:
+            return JSONResponse(status_code=400, content={"error": "library_id_required"})
+        try:
+            result = literature_service.delete_library(
+                library_id=lib,
+                delete_workspace_data=bool(delete_workspace_data),
+            )
+            if not bool(result.get("deleted", False)):
+                return JSONResponse(status_code=404, content={"error": "library_not_found", "library_id": lib})
+            return result
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": "library_delete_failed", "detail": str(exc)})
 
     @router.post("/import")
     async def import_manifest(body: LiteratureImportRequest):

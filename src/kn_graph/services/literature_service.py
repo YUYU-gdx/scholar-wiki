@@ -107,3 +107,28 @@ class LiteratureService:
             options = {}
         literature = self._ensure_service()
         return literature.import_manifest(manifest_path=manifest_path, options=options)
+
+    def create_library(self, library_id: str, workspace_root: str = "", set_default: bool = True) -> dict[str, Any]:
+        lib = str(library_id or "").strip()
+        if not lib:
+            raise ValueError("library_id_required")
+        reg_mod = _load_library_registry_module()
+        return reg_mod.create_library(
+            library_id=lib,
+            registry_path=self._settings.registry_path,
+            legacy_index_root=self._settings.indexes_dir,
+            workspace_root=str(workspace_root or "").strip(),
+            set_default=bool(set_default),
+        )
+
+    def delete_library(self, library_id: str, delete_workspace_data: bool = True) -> dict[str, Any]:
+        lib = str(library_id or "").strip()
+        if not lib:
+            raise ValueError("library_id_required")
+        reg_mod = _load_library_registry_module()
+        return reg_mod.delete_library(
+            library_id=lib,
+            registry_path=self._settings.registry_path,
+            legacy_index_root=self._settings.indexes_dir,
+            delete_workspace_data=bool(delete_workspace_data),
+        )

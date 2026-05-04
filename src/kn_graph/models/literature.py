@@ -62,6 +62,14 @@ class LiteratureImportRequest(BaseModel):
     options: dict[str, Any] = {}
 
 
+class LiteratureCreateLibraryRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    library_id: str = ""
+    workspace_root: str = ""
+    set_default: bool = True
+
+
 class LiteratureSearchResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
