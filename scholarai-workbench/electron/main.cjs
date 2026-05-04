@@ -20,7 +20,16 @@ let quitInProgress = false;
 let backendStartedByUs = false;
 
 function appUrl() {
-  return `http://${HOST}:${runtimePort}/healthz`;
+  // Load built frontend from disk (no Vite dev server needed)
+  const distIndex = path.join(__dirname, "..", "dist", "index.html");
+  if (fs.existsSync(distIndex)) {
+    return `file://${distIndex.replace(/\\/g, "/")}`;
+  }
+  // Fallback: try Vite dev server for development
+  const devUrl = process.env.VITE_DEV_SERVER_URL;
+  if (devUrl) return devUrl;
+  // Last resort: let backend serve static files
+  return `http://${HOST}:${runtimePort}`;
 }
 
 function healthUrl(port) {
