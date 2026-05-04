@@ -363,7 +363,12 @@ def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
     if not str(out.get("llm_api_key", "") or "").strip():
         out["llm_api_key"] = str(pipeline.get("fast_api_key", "") or "").strip()
     if not str(out.get("llm_base_url", "") or "").strip():
-        out["llm_base_url"] = str(pipeline.get("fast_base_url", "") or "").strip()
+        # Prefer the full endpoint URL (includes /v1/chat/completions path) over bare base_url
+        endpoint_url = str(pipeline.get("fast_endpoint_url", "") or "").strip()
+        if endpoint_url:
+            out["llm_base_url"] = endpoint_url
+        else:
+            out["llm_base_url"] = str(pipeline.get("fast_base_url", "") or "").strip()
     if not str(out.get("llm_api_key_env", "") or "").strip() and str(out.get("llm_api_key", "") or "").strip():
         pass
     # Default to 300s timeout for long papers

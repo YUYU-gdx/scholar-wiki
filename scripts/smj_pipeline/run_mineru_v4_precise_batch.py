@@ -74,10 +74,14 @@ def _log(message: str) -> None:
     enc = getattr(sys.stdout, "encoding", None) or "utf-8"
     try:
         print(line, flush=True)
-    except UnicodeEncodeError:
-        # Windows console may be GBK; avoid crash on non-GBK file names.
-        safe_line = line.encode(enc, errors="replace").decode(enc, errors="replace")
-        print(safe_line, flush=True)
+    except (UnicodeEncodeError, OSError, ValueError):
+        # Windows console may be GBK, or stdout may be invalid in a
+        # background thread -- silently drop log lines.
+        try:
+            safe_line = line.encode(enc, errors="replace").decode(enc, errors="replace")
+            print(safe_line, flush=True)
+        except (UnicodeEncodeError, OSError, ValueError):
+            pass
 
 
 def _now_iso() -> str:

@@ -17,12 +17,6 @@ type PaperFileStatus = PaperFileAvailability & {
 
 function firstTitle(v: Record<string, unknown>, paperId: string): string {
   const pretty = (s: string): string => String(s || '').replace(/\.pdf$/i, '').replace(/__/g, ' ').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-  const mdPath = String(v.source_md_path || '').trim();
-  if (mdPath) {
-    const stem = mdPath.split(/[\\/]/).pop()?.replace(/\.md$/i, '') || '';
-    const p = pretty(stem);
-    if (p) return p;
-  }
   const display = String(v.display_title || '').trim();
   if (display) return pretty(display);
   const title = String(v.title || '').trim();
