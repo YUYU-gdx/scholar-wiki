@@ -1074,8 +1074,10 @@ class GraphService:
             import sqlite3
             conn = sqlite3.connect(str(db_path))
             cur = conn.cursor()
+            # Delete interaction_inputs first (FK to interactions)
+            cur.execute("DELETE FROM interaction_inputs WHERE interaction_id IN (SELECT id FROM interactions WHERE paper_id = ?)", (pid,))
             for table in ("paper_domains", "variable_aliases", "variable_definitions",
-                          "direct_effects", "moderations", "interactions", "interaction_inputs"):
+                          "direct_effects", "moderations", "interactions"):
                 cur.execute(f"DELETE FROM {table} WHERE paper_id = ?", (pid,))
             cur.execute("DELETE FROM papers WHERE paper_id = ?", (pid,))
             conn.commit()
