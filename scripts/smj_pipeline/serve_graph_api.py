@@ -1206,6 +1206,56 @@ def make_handler(
         root = str(base_url or "").strip().rstrip("/")
         return f"{root}/v1/chat/completions" if root else ""
 
+    def _default_agent_settings() -> dict[str, Any]:
+        return {
+            "current_agent": "codex",
+            "codex_config_path": str(codex_config_path.resolve()),
+            "claude_code_config_path": str((Path.home() / ".claude").resolve()),
+            "gemini_cli_config_path": str((Path.home() / ".gemini").resolve()),
+            "hermes_config_path": "",
+            "opencode_config_path": str((Path.home() / ".opencode").resolve()),
+            "openclaw_config_path": str((Path.home() / ".openclaw").resolve()),
+        }
+
+    def _agent_settings_path() -> Path:
+        return Path("outputs/chat/agent_settings.json")
+
+    def _load_agent_settings_payload() -> dict[str, Any]:
+        defaults = _default_agent_settings()
+        path = _agent_settings_path()
+        payload: dict[str, Any] = {}
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    payload = raw
+            except Exception:
+                payload = {}
+        merged = dict(defaults)
+        merged.update(payload)
+        return merged
+
+    def _save_agent_settings_payload(body: dict[str, Any]) -> dict[str, Any]:
+        current = _load_agent_settings_payload()
+        next_payload = dict(current)
+        for key in (
+            "current_agent",
+            "codex_config_path",
+            "claude_code_config_path",
+            "gemini_cli_config_path",
+            "hermes_config_path",
+            "opencode_config_path",
+            "openclaw_config_path",
+        ):
+            if key in body:
+                next_payload[key] = str(body.get(key, "") or "").strip()
+        if str(next_payload.get("current_agent", "codex") or "codex") not in {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}:
+            raise ValueError("settings_validation_failed: agent_settings.current_agent")
+        path = _agent_settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(next_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return _load_agent_settings_payload()
+
     def _settings_schema_payload() -> dict[str, Any]:
         return {
             "categories": [
@@ -1310,7 +1360,7 @@ def make_handler(
             "settings": {
                 "pipeline": _get_pipeline_settings(),
                 "translation": translation_cfg,
-                "agent_settings": _load_codex_config_payload(),
+                "agent_settings": _load_agent_settings_payload(),
             },
             "updated_at": str(store.get("updated_at", "") or ""),
         }
@@ -1335,7 +1385,7 @@ def make_handler(
             translation_path.write_text(json.dumps(next_payload, ensure_ascii=False, indent=2), encoding="utf-8")
             return next_payload
         if key == "agent_settings":
-            return _save_codex_config_payload(body)
+            return _save_agent_settings_payload(body)
         raise KeyError(f"unknown_settings_category:{key}")
 
     class Handler(BaseHTTPRequestHandler):

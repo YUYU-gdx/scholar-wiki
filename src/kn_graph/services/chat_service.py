@@ -195,6 +195,61 @@ class ChatService:
         except Exception:
             return {}
 
+    def _agent_settings_path(self) -> Path:
+        return self._settings.data_dir / "chat" / "agent_settings.json"
+
+    def _default_agent_settings(self) -> dict[str, Any]:
+        return {
+            "current_agent": "codex",
+            "codex_config_path": str(self._settings.codex_config_path.resolve()),
+            "claude_code_config_path": str((Path.home() / ".claude").resolve()),
+            "gemini_cli_config_path": str((Path.home() / ".gemini").resolve()),
+            "hermes_config_path": "",
+            "opencode_config_path": str((Path.home() / ".opencode").resolve()),
+            "openclaw_config_path": str((Path.home() / ".openclaw").resolve()),
+        }
+
+    def get_agent_settings(self) -> dict[str, Any]:
+        defaults = self._default_agent_settings()
+        path = self._agent_settings_path()
+        data: dict[str, Any] = {}
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    data = raw
+            except Exception:
+                data = {}
+        if "current_agent" not in data:
+            data["current_agent"] = "codex"
+        merged = dict(defaults)
+        merged.update(data)
+        return merged
+
+    def save_agent_settings(self, body: dict[str, Any]) -> dict[str, Any]:
+        current = self.get_agent_settings()
+        next_payload = dict(current)
+        for key in (
+            "current_agent",
+            "codex_config_path",
+            "claude_code_config_path",
+            "gemini_cli_config_path",
+            "hermes_config_path",
+            "opencode_config_path",
+            "openclaw_config_path",
+        ):
+            if key in body:
+                next_payload[key] = str(body.get(key, "") or "").strip()
+        allowed_agents = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
+        current_agent = str(next_payload.get("current_agent", "codex") or "codex").strip()
+        if current_agent not in allowed_agents:
+            raise ValueError("settings_validation_failed: agent_settings.current_agent")
+        next_payload["current_agent"] = current_agent
+        path = self._agent_settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(next_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return self.get_agent_settings()
+
     def save_codex_config(self, body: dict[str, Any]) -> dict[str, Any]:
         agent_runner_mod = _load_agent_runner_module()
         config_path = self._settings.codex_config_path

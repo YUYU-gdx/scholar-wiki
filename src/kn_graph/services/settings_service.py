@@ -141,7 +141,7 @@ class SettingsService:
             "categories": [
                 {"id": "pipeline", "title": "Pipeline", "restart_required": False},
                 {"id": "translation", "title": "翻译", "restart_required": False},
-                {"id": "agent_settings", "title": "Agent 设置", "restart_required": True},
+                {"id": "agent_settings", "title": "Agent设置", "restart_required": True},
             ],
         }
 
@@ -153,7 +153,7 @@ class SettingsService:
             "settings": {
                 "pipeline": pipeline,
                 "translation": translation,
-                "agent_settings": self._chat_service.get_codex_config(),
+                "agent_settings": self._chat_service.get_agent_settings(),
             },
             "updated_at": self._read_store().get("updated_at", ""),
         }
@@ -166,5 +166,5 @@ class SettingsService:
         if key == "translation":
             return self._save_translation_category(payload)
         if key == "agent_settings":
-            return self._chat_service.save_codex_config(payload)
+            return self._chat_service.save_agent_settings(payload)
         raise KeyError(f"unknown_settings_category:{key}")

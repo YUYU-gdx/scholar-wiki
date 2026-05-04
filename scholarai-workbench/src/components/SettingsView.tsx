@@ -30,6 +30,11 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function str(v: unknown): string { return String(v ?? ''); }
+function asPresets(value: unknown): ProviderPreset[] {
+  if (!Array.isArray(value)) return DEFAULT_PROVIDER_PRESETS;
+  const rows = value.filter((x) => x && typeof x === 'object') as ProviderPreset[];
+  return rows.length > 0 ? rows : DEFAULT_PROVIDER_PRESETS;
+}
 
 export default function SettingsView() {
   const [loading, setLoading] = useState(true);
@@ -67,7 +72,7 @@ export default function SettingsView() {
 
   const applyProviderPreset = (category: 'pipeline' | 'translation', providerId: string) => {
     const values = asRecord(drafts[category]);
-    const presets = (values.provider_presets as ProviderPreset[]) || [];
+    const presets = asPresets(values.provider_presets);
     const hit = presets.find((p) => p.id === providerId);
     if (!hit) return;
     if (category === 'pipeline') {
@@ -147,10 +152,23 @@ export default function SettingsView() {
 
               {id === 'agent_settings' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                  <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
-                  <label><div className="mb-1">审批策略</div><input className="w-full px-3 py-2 rounded border" value={str(values.approval_policy)} onChange={(e) => updateField(id, 'approval_policy', e.target.value)} /></label>
-                  <label><div className="mb-1">沙箱模式</div><input className="w-full px-3 py-2 rounded border" value={str(values.sandbox_mode)} onChange={(e) => updateField(id, 'sandbox_mode', e.target.value)} /></label>
-                  <label><div className="mb-1">超时秒数</div><input className="w-full px-3 py-2 rounded border" value={str(values.timeout_seconds)} onChange={(e) => updateField(id, 'timeout_seconds', Number(e.target.value) || 0)} /></label>
+                  <label>
+                    <div className="mb-1">当前应用 Agent</div>
+                    <select className="w-full px-3 py-2 rounded border" value={str(values.current_agent || 'codex')} onChange={(e) => updateField(id, 'current_agent', e.target.value)}>
+                      <option value="codex">codex</option>
+                      <option value="claude_code">claude code</option>
+                      <option value="gemini_cli">gemini cli</option>
+                      <option value="hermes">hermes</option>
+                      <option value="opencode">opencode</option>
+                      <option value="openclaw">openclaw</option>
+                    </select>
+                  </label>
+                  <label><div className="mb-1">Codex 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.codex_config_path)} onChange={(e) => updateField(id, 'codex_config_path', e.target.value)} /></label>
+                  <label><div className="mb-1">Claude Code 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.claude_code_config_path)} onChange={(e) => updateField(id, 'claude_code_config_path', e.target.value)} /></label>
+                  <label><div className="mb-1">Gemini CLI 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.gemini_cli_config_path)} onChange={(e) => updateField(id, 'gemini_cli_config_path', e.target.value)} /></label>
+                  <label><div className="mb-1">Hermes 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.hermes_config_path)} onChange={(e) => updateField(id, 'hermes_config_path', e.target.value)} /></label>
+                  <label><div className="mb-1">OpenCode 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.opencode_config_path)} onChange={(e) => updateField(id, 'opencode_config_path', e.target.value)} /></label>
+                  <label><div className="mb-1">OpenClaw 配置路径</div><input className="w-full px-3 py-2 rounded border" value={str(values.openclaw_config_path)} onChange={(e) => updateField(id, 'openclaw_config_path', e.target.value)} /></label>
                 </div>
               )}
 
