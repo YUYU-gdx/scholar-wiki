@@ -152,7 +152,7 @@ export default function PipelineView() {
         </div>
         <div className="p-6">
           <div className="flex items-center gap-4">
-            <label className="flex-1 relative">
+            <label className="flex-1 min-w-0 relative">
               <input
                 type="file"
                 accept=".pdf"
@@ -161,9 +161,9 @@ export default function PipelineView() {
                 id="pdf-upload"
               />
               <label htmlFor="pdf-upload" className="flex items-center gap-3 p-4 border-2 border-dashed border-outline-variant rounded-xl cursor-pointer hover:border-secondary transition-all bg-surface-container-low/30">
-                <FileText className="w-6 h-6 text-outline" />
-                <div>
-                  <p className="text-sm font-medium text-on-surface">{uploadFile ? uploadFile.name : 'Choose a PDF file'}</p>
+                <FileText className="w-6 h-6 text-outline shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-on-surface truncate">{uploadFile ? uploadFile.name : 'Choose a PDF file'}</p>
                   <p className="text-[10px] text-outline font-mono">{uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : 'Click to browse'}</p>
                 </div>
               </label>
@@ -171,7 +171,7 @@ export default function PipelineView() {
             <button
               onClick={submitJob}
               disabled={!uploadFile || uploading}
-              className="bg-secondary text-on-secondary px-6 py-4 rounded-xl text-sm font-bold hover:opacity-90 transition-all shadow-lg shadow-secondary/10 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              className="shrink-0 bg-secondary text-on-secondary px-6 py-4 rounded-xl text-sm font-bold hover:opacity-90 transition-all shadow-lg shadow-secondary/10 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
             >
               {uploading ? (
                 <>
@@ -229,20 +229,20 @@ export default function PipelineView() {
               {pipelineJobs.map((job) => (
                 <tr key={job.job_id} className="hover:bg-surface-container-low/10 transition-colors group">
                   <td className="px-6 py-4 font-mono text-[11px] font-bold text-on-surface-variant">{job.job_id?.slice(0, 12)}...</td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
+                  <td className="px-6 py-4 min-w-0">
+                    <div className="flex items-center gap-3 min-w-0">
                       <div className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center text-red-500 border border-red-100 group-hover:scale-110 transition-transform">
                         <FileText className="w-4 h-4" />
                       </div>
-                      <span className="text-sm font-semibold text-on-surface">{job.display_name || job.input_path?.split('/').pop() || 'Unknown'}</span>
+                      <span className="text-sm font-semibold text-on-surface truncate">{job.display_name || job.input_path?.split('/').pop() || 'Unknown'}</span>
                     </div>
                   </td>
-                  <td className="px-6 py-4">
-                    <span className={`text-[10px] font-mono font-black uppercase px-3 py-1.5 rounded-full ${statusBadge(job.stage || job.status_code || '')}`}>
+                  <td className="px-6 py-4 shrink-0">
+                    <span className={`text-[10px] font-mono font-black uppercase px-3 py-1.5 rounded-full whitespace-nowrap ${statusBadge(job.stage || job.status_code || '')}`}>
                       {job.stage_label || job.stage || job.status_code || '-'}
                     </span>
                   </td>
-                  <td className="px-6 py-4 min-w-[140px]">
+                  <td className="px-6 py-4 shrink-0" style={{minWidth: 140}}>
                     <div className="flex items-center gap-3">
                       <div className="flex-1 bg-surface-container h-1.5 rounded-full overflow-hidden">
                         <div
