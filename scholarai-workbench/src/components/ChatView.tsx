@@ -202,7 +202,7 @@ export default function ChatView() {
 
   const createSession = async () => {
     try {
-      const session = await api.chat.createSession('新会话', '', mode);
+      const session = await api.chat.createSession('新会话', activeLibraryId, mode);
       setSessions(prev => [session, ...prev]);
       setActiveSessionId(session.session_id);
       setMessages([]);
