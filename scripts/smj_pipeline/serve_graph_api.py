@@ -1188,7 +1188,7 @@ def make_handler(
             "categories": [
                 {
                     "id": "pipeline",
-                    "title": "Pipeline",
+                    "title": "流水线",
                     "restart_required": False,
                     "fields": [
                         {"key": "executor", "type": "select", "options": ["inline", "celery"]},
@@ -1207,10 +1207,10 @@ def make_handler(
                         {"key": "retry_delays", "type": "text"},
                     ],
                 },
-                {"id": "llm_providers", "title": "LLM Providers", "restart_required": False},
+                {"id": "llm_providers", "title": "LLM 提供方", "restart_required": False},
                 {
                     "id": "translation",
-                    "title": "Translation",
+                    "title": "翻译",
                     "restart_required": False,
                     "fields": [
                         {"key": "provider", "type": "text"},
@@ -1221,8 +1221,8 @@ def make_handler(
                         {"key": "target_lang", "type": "text"},
                     ],
                 },
-                {"id": "codex_global", "title": "Codex Global", "restart_required": True},
-                {"id": "library_defaults", "title": "Library Defaults", "restart_required": False},
+                {"id": "codex_global", "title": "Codex 全局", "restart_required": True},
+                {"id": "library_defaults", "title": "文献库默认项", "restart_required": False},
             ],
             "version": 1,
         }

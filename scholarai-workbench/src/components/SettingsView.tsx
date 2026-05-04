@@ -43,6 +43,35 @@ function toTypedValue(raw: string, original: unknown): unknown {
 }
 
 function labelFromKey(key: string): string {
+  const zhMap: Record<string, string> = {
+    executor: '执行器',
+    job_store_dsn: '任务存储 DSN',
+    redis_url: 'Redis 地址',
+    mineru_api_key_env: 'MinerU 密钥环境变量',
+    mineru_base_url: 'MinerU Base URL',
+    mineru_model_version: 'MinerU 模型版本',
+    llm_provider: 'LLM 提供方',
+    llm_model: 'LLM 模型',
+    llm_api_key_env: 'LLM 密钥环境变量',
+    llm_base_url: 'LLM Base URL',
+    max_poll_seconds: '最大轮询秒数',
+    poll_interval_seconds: '轮询间隔秒数',
+    max_retries: '最大重试次数',
+    retry_delays: '重试延迟',
+    provider: '提供方',
+    model: '模型',
+    api_key: 'API Key',
+    base_url: 'Base URL',
+    endpoint_url: 'Endpoint URL',
+    target_lang: '目标语言',
+    default_library_id: '默认文献库 ID',
+    registry_path: '注册表路径',
+    workspaces_dir: '工作区目录',
+    indexes_dir: '索引目录',
+  };
+  if (zhMap[key]) {
+    return zhMap[key];
+  }
   return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -82,27 +111,27 @@ export default function SettingsView() {
     try {
       const res = await api.settings.updateCategory(category, current);
       setDrafts((prev) => ({ ...prev, [category]: asRecord(res.config) }));
-      setSectionState((prev) => ({ ...prev, [category]: { saving: false, message: 'Saved.' } }));
+      setSectionState((prev) => ({ ...prev, [category]: { saving: false, message: '保存成功。' } }));
     } catch (err) {
-      setSectionState((prev) => ({ ...prev, [category]: { saving: false, message: `Save failed: ${(err as Error).message}` } }));
+      setSectionState((prev) => ({ ...prev, [category]: { saving: false, message: `保存失败: ${(err as Error).message}` } }));
     }
   };
 
   if (loading) {
-    return <div className="flex-1 overflow-auto p-8 bg-surface-container-low">Loading settings...</div>;
+    return <div className="flex-1 overflow-auto p-8 bg-surface-container-low">正在加载设置...</div>;
   }
 
   if (loadError) {
-    return <div className="flex-1 overflow-auto p-8 bg-surface-container-low text-error">Failed to load settings: {loadError}</div>;
+    return <div className="flex-1 overflow-auto p-8 bg-surface-container-low text-error">设置加载失败: {loadError}</div>;
   }
 
   return (
     <div className="flex-1 overflow-auto p-8 bg-surface-container-low">
       <div className="max-w-5xl mx-auto space-y-4">
-        <h2 className="text-lg font-semibold text-on-surface">Global Settings</h2>
+        <h2 className="text-lg font-semibold text-on-surface">全局设置</h2>
         {categories.length === 0 ? (
           <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl p-5 text-sm text-on-surface-variant">
-            No settings categories returned by backend.
+            后端未返回任何可用设置分类。
             <pre className="mt-3 whitespace-pre-wrap break-all text-xs">{JSON.stringify(payload, null, 2)}</pre>
           </div>
         ) : null}
@@ -120,7 +149,7 @@ export default function SettingsView() {
                 <div>
                   <div className="text-base font-semibold text-on-surface">{category.title}</div>
                   {category.restart_required ? (
-                    <div className="text-xs text-on-surface-variant">Restart required after update.</div>
+                    <div className="text-xs text-on-surface-variant">该配置更新后需要重启生效。</div>
                   ) : null}
                 </div>
                 <button
@@ -128,7 +157,7 @@ export default function SettingsView() {
                   onClick={() => saveCategory(id)}
                   className="px-4 py-2 rounded bg-secondary text-on-secondary disabled:opacity-50"
                 >
-                  {state.saving ? 'Saving...' : 'Save'}
+                  {state.saving ? '保存中...' : '保存'}
                 </button>
               </div>
 
@@ -150,7 +179,7 @@ export default function SettingsView() {
                             className="text-xs underline"
                             onClick={() => setVisibleSecrets((prev) => ({ ...prev, [secretKey]: !prev[secretKey] }))}
                           >
-                            {visibleSecrets[secretKey] ? 'Hide' : 'Edit'}
+                            {visibleSecrets[secretKey] ? '隐藏' : '编辑'}
                           </button>
                         ) : null}
                       </div>
