@@ -238,6 +238,7 @@ function createMainWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: false,  // Needed for file:// protocol with crossorigin modules
     },
   });
 
