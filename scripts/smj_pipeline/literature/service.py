@@ -777,7 +777,7 @@ class LiteratureService:
         target_html.write_text(html_text, encoding="utf-8")
 
         # Copy unpacked zip contents (images, supplementary files) into out_dir
-        # so that _sync_md_library_bundle can later capture the full output.
+        # Copy unpacked zip contents (images, supplementary files) into out_dir.
         zip_unpacked = work_dir / "parse" / "mineru_zip_unpacked"
         if zip_unpacked.exists():
             for item in zip_unpacked.iterdir():

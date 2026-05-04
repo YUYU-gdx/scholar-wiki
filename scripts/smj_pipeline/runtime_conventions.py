@@ -15,9 +15,6 @@ PIPELINE_SQLITE_DEFAULT_PATH = "outputs/workbench/pipeline_jobs.sqlite"
 
 # Weaviate default/fallback order when WEAVIATE_URL is not configured.
 WEAVIATE_DEFAULT_PORT_CANDIDATES: tuple[int, ...] = (8080, 8090)
-SOURCE_DIRNAME = "sources"
-MD_LIBRARY_DIRNAME = "md_library"
-
 SUPPORTED_SOURCE_SUFFIXES: tuple[str, ...] = (".pdf", ".md", ".txt", ".html", ".htm")
 DIRECT_EXTRACT_SUFFIXES: tuple[str, ...] = (".md", ".txt", ".html", ".htm")
 
