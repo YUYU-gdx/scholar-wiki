@@ -701,7 +701,7 @@ class LiteratureService:
         if title:
             title_key = _safe_segment(title)
             if title_key and title_key not in {"job", "item", "paper", "article"}:
-                return f"title_{title_key[:80]}"
+                return f"title_{title_key[:160]}"
         if doi_norm:
             return f"doi_{doi_norm}"
         if source_path is not None and source_path.exists() and source_path.is_file():
