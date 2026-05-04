@@ -737,7 +737,7 @@ class GraphService:
             base["paper_id_raw"] = pid
             base["paper_id"] = pkey
             base["paper_key"] = pkey
-            base["source_md_path"] = str(meta.get("source_md_path", "") or "")
+            base["source_md_path"] = str(meta.get("source_md_path", "") or meta.get("md_library_path", "") or "")
             base["source_pdf_path"] = str(meta.get("source_pdf_path", "") or "")
             base["offline_html_path"] = str(meta.get("html_path", "") or base.get("offline_html_path", "") or "")
             title_from_key = _pretty_title(pkey)
@@ -973,7 +973,9 @@ class GraphService:
             payload["paper_id"] = pkey
             payload["paper_key"] = pkey
             meta = self._paper_meta_by_key.get(pkey, {})
-            payload["source_md_path"] = str(meta.get("source_md_path", "") or payload.get("source_md_path", "") or "")
+            # source_md_path may be stored as md_library_path in paper.json
+            md_fallback = str(meta.get("md_library_path", "") or meta.get("source_md_path", "") or payload.get("source_md_path", "") or "")
+            payload["source_md_path"] = str(meta.get("source_md_path", "") or md_fallback or "")
             payload["source_pdf_path"] = str(meta.get("source_pdf_path", "") or payload.get("source_pdf_path", "") or "")
             payload["offline_html_path"] = str(meta.get("html_path", "") or payload.get("offline_html_path", "") or "")
             payload["display_title"] = _pretty_title(pkey)
