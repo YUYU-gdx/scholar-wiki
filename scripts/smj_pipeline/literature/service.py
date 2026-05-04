@@ -694,6 +694,14 @@ class LiteratureService:
 
     def _paper_key_for_row(self, row: dict[str, Any], source_path: Path | None, html_text: str) -> str:
         doi_norm = _normalize_doi_for_key(str(row.get("doi", "") or ""))
+        # If the DOI is a synthetic job ID, prefer the title
+        if doi_norm and not doi_norm.startswith("job_"):
+            return f"doi_{doi_norm}"
+        title = str(row.get("title", "") or "").strip()
+        if title:
+            title_key = _safe_segment(title)
+            if title_key and title_key not in {"job", "item", "paper", "article"}:
+                return f"title_{title_key[:80]}"
         if doi_norm:
             return f"doi_{doi_norm}"
         if source_path is not None and source_path.exists() and source_path.is_file():

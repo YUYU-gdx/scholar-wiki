@@ -234,11 +234,61 @@ def _run_finalize(
     if imported_count <= 0:
         raise RuntimeError("import_noop:imported_count_is_zero")
 
-    # ── Import extraction results into SQLite ──
+    # ── Persist paper metadata to SQLite from import result ──
     graph_warning = ""
     graph_output_path = ""
     graph_updated = False
     graph_output_size = 0
+    if workspace_path:
+        try:
+            import sqlite3 as _sqlite3
+            import json as _json
+            db_path = Path(workspace_path) / "kn_gragh.db"
+            conn = _sqlite3.connect(str(db_path))
+            repo_mod = _load_script_module("smj_pipeline_sqlite_repo_persist", "storage/sqlite_repo.py")
+            SqliteRepo = getattr(repo_mod, "SqliteRepo")
+            repo = SqliteRepo(conn)
+            repo.apply_schema()
+            mats = import_result.get("materialized_papers", []) or []
+            if isinstance(mats, list):
+                for m in mats:
+                    if not isinstance(m, dict):
+                        continue
+                    pid = str(m.get("paper_id", "") or m.get("paper_key", "") or "").strip()
+                    if not pid:
+                        continue
+                    meta_path = Path(str(m.get("meta_path", "") or ""))
+                    meta = {}
+                    if meta_path.exists():
+                        try:
+                            meta = _json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+                        except Exception:
+                            meta = {}
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    title = str(meta.get("title", "") or row.get("title", "") or "").strip()
+                    cur = conn.cursor()
+                    cur.execute(
+                        """INSERT OR REPLACE INTO papers (paper_id, doi, title,
+                           offline_html_path, source_pdf_path, source_md_path, source_html_path,
+                           metadata_source)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            pid,
+                            str(m.get("doi", "") or ""),
+                            title,
+                            str(m.get("html_path", "") or ""),
+                            str(m.get("source_pdf_path", "") or ""),
+                            str(m.get("md_library_path", "") or m.get("md_path", "") or ""),
+                            str(m.get("html_path", "") or ""),
+                            "literature_import",
+                        ),
+                    )
+                    conn.commit()
+            conn.close()
+        except Exception as exc:
+            graph_warning = (graph_warning + "; " + str(exc)).strip("; ") if graph_warning else str(exc)
+
     if workspace_path:
         try:
             db_path = Path(workspace_path) / "kn_gragh.db"
