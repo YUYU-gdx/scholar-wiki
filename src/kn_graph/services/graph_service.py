@@ -740,7 +740,8 @@ class GraphService:
             base["source_md_path"] = str(meta.get("source_md_path", "") or meta.get("md_library_path", "") or "")
             base["source_pdf_path"] = str(meta.get("source_pdf_path", "") or "")
             base["offline_html_path"] = str(meta.get("html_path", "") or base.get("offline_html_path", "") or "")
-            title_from_key = _pretty_title(pkey)
+            meta_title = str(meta.get("title", "") or "").strip()
+            title_from_key = meta_title or _pretty_title(pkey)
             base["display_title"] = title_from_key
             base["title"] = title_from_key
             base["source_pdf_name"] = str(meta.get("source_pdf_name", "") or "")
@@ -978,8 +979,9 @@ class GraphService:
             payload["source_md_path"] = str(meta.get("source_md_path", "") or md_fallback or "")
             payload["source_pdf_path"] = str(meta.get("source_pdf_path", "") or payload.get("source_pdf_path", "") or "")
             payload["offline_html_path"] = str(meta.get("html_path", "") or payload.get("offline_html_path", "") or "")
-            payload["display_title"] = _pretty_title(pkey)
-            payload["title"] = _pretty_title(pkey)
+            meta_title = str(meta.get("title", "") or "").strip()
+            payload["display_title"] = meta_title or _pretty_title(pkey)
+            payload["title"] = meta_title or payload.get("title", "") or _pretty_title(pkey)
         return payload
 
     def get_paper_files(self, paper_id_or_doi: str, library_id: str = "") -> dict[str, Any] | None:
