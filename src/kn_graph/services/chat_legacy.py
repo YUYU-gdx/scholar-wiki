@@ -278,6 +278,17 @@ class ChatService:
     def _session_scope_id() -> str:
         return "__global__"
 
+    def _agent_workspace_dir(self) -> str:
+        root = str(os.getenv("CHAT_CODEX_WORKSPACE_ROOT", "") or "").strip()
+        if root:
+            return root
+        if hasattr(self, "_settings") and self._settings is not None:
+            ws = self._settings.workspaces_dir
+            if not ws.exists():
+                ws.mkdir(parents=True, exist_ok=True)
+            return str(ws.resolve())
+        return str(Path.cwd().resolve())
+
     @staticmethod
     def _sync_codex_thread_on_session_ops() -> bool:
         flag = str(os.getenv("CHAT_SESSION_SYNC_CODEX_THREAD", "0") or "0").strip().lower()
@@ -301,8 +312,11 @@ class ChatService:
         backend = self._agent_backend
         if backend in ("codex", "claude_code", "gemini_cli"):
             local = self._store.create_session(title=title, default_mode="agent", library_id=self._session_scope_id())
-            workspace = self._resolve_workspace_path(lib)
-            library_workspace = str(self._resolve_library_workspace_path(lib))
+            workspace = self._agent_workspace_dir()
+            try:
+                library_workspace = str(self._resolve_library_workspace_path(lib))
+            except Exception:
+                library_workspace = ""
             runner = self._runner_factory.build(backend)
             overrides = self._build_codex_runtime_overrides(library_workspace, lib)
             thread_res = runner.thread_start(
@@ -345,11 +359,22 @@ class ChatService:
         lib = self._effective_library_id(library_id)
         backend = self._agent_backend
         if backend in ("codex", "claude_code", "gemini_cli"):
-            out = self._store.list_sessions(library_id=self._session_scope_id())
-            for row in out:
-                row["source"] = backend
-                row["library_id"] = ""
-            return out
+            workdir = self._agent_workspace_dir()
+            runner = self._runner_factory.build(backend)
+            result = runner.thread_list(workdir=workdir)
+            sessions: list[dict[str, Any]] = []
+            for t in result.get("data", []):
+                tid = str(t.get("id", "") or "")
+                sessions.append({
+                    "session_id": tid,
+                    "title": str(t.get("name", "") or "").strip() or f"Session {tid[:8]}",
+                    "default_mode": "agent",
+                    "library_id": "",
+                    "created_at": t.get("created_at", ""),
+                    "updated_at": t.get("last_modified", ""),
+                    "source": backend,
+                })
+            return sessions
         return self._store.list_sessions(library_id=self._session_scope_id())
 
     def delete_session(self, session_id: str, undo_window_seconds: int = 5, library_id: str = "") -> dict[str, Any]:
@@ -358,8 +383,11 @@ class ChatService:
         if backend in ("codex", "claude_code", "gemini_cli"):
             thread_id = self._session_thread_by_session_id.get(str(session_id), "").strip()
             if thread_id and self._sync_codex_thread_on_session_ops():
-                workspace = self._resolve_workspace_path(lib)
-                library_workspace = str(self._resolve_library_workspace_path(lib))
+                workspace = self._agent_workspace_dir()
+                try:
+                    library_workspace = str(self._resolve_library_workspace_path(lib))
+                except Exception:
+                    library_workspace = ""
                 runner = self._runner_factory.build(backend)
                 try:
                     runner.thread_archive(
@@ -403,8 +431,11 @@ class ChatService:
         if backend in ("codex", "claude_code", "gemini_cli"):
             thread_id = self._session_thread_by_session_id.get(str(session_id), "").strip()
             if thread_id and self._sync_codex_thread_on_session_ops():
-                workspace = self._resolve_workspace_path(lib)
-                library_workspace = str(self._resolve_library_workspace_path(lib))
+                workspace = self._agent_workspace_dir()
+                try:
+                    library_workspace = str(self._resolve_library_workspace_path(lib))
+                except Exception:
+                    library_workspace = ""
                 runner = self._runner_factory.build(backend)
                 try:
                     runner.thread_unarchive(
@@ -440,14 +471,36 @@ class ChatService:
         lib = self._effective_library_id(library_id)
         backend = self._agent_backend
         if backend in ("codex", "claude_code", "gemini_cli"):
-            matched = self._store.get_session(str(session_id), library_id=self._session_scope_id())
-            if not isinstance(matched, dict):
-                return None
-            matched = dict(matched)
-            matched["library_id"] = ""
-            matched["source"] = backend
-            local_messages = [self._hydrate_message(m) for m in self._store.list_messages(str(session_id))]
-            return {"session": matched, "messages": local_messages}
+            workdir = self._agent_workspace_dir()
+            runner = self._runner_factory.build(backend)
+            result = runner.thread_read(thread_id=str(session_id), workdir=workdir)
+            thread = result.get("thread", {}) if isinstance(result, dict) else {}
+            tid = str(thread.get("id", "") or session_id)
+            session = {
+                "session_id": tid,
+                "title": str(thread.get("title", "") or "").strip() or f"Session {str(session_id)[:8]}",
+                "default_mode": "agent",
+                "library_id": "",
+                "created_at": thread.get("created_at", ""),
+                "updated_at": "",
+                "source": backend,
+            }
+            messages: list[dict[str, Any]] = []
+            for m in (result.get("messages", []) if isinstance(result, dict) else []):
+                messages.append({
+                    "message_id": str(m.get("message_id", "") or ""),
+                    "session_id": tid,
+                    "role": str(m.get("role", "user") or "user"),
+                    "content": str(m.get("content", "") or ""),
+                    "status": str(m.get("status", "completed") or "completed"),
+                    "citations_json": "[]",
+                    "retrieval_json": "{}",
+                    "tool_trace_json": "[]",
+                    "error_detail": "",
+                    "created_at": "",
+                    "updated_at": "",
+                })
+            return {"session": session, "messages": [self._hydrate_message(m) for m in messages]}
         sess = self._store.get_session(session_id, library_id=self._session_scope_id())
         if sess is None:
             return None
@@ -706,17 +759,6 @@ class ChatService:
         row.setdefault("kind", "agent_item")
         self._emit(message_id, event_name, row)
 
-    def _resolve_workspace_path(self, library_id: str) -> str:
-        lib = str(library_id or "").strip()
-        if not callable(self._library_workspace_resolver):
-            raise RuntimeError("codex_workspace_resolver_unavailable")
-        lib_path = self._resolve_library_workspace_path(lib)
-        # Use a shared workspaces root so Codex can access all library folders.
-        root_override = str(os.getenv("CHAT_CODEX_WORKSPACE_ROOT", "") or "").strip()
-        workdir = Path(root_override).resolve() if root_override else lib_path.parent.resolve()
-        if not workdir.exists() or not workdir.is_dir():
-            raise RuntimeError(f"codex_workdir_invalid:path={workdir}")
-        return str(workdir)
 
     def _resolve_library_workspace_path(self, library_id: str) -> Path:
         lib = str(library_id or "").strip()
@@ -960,7 +1002,7 @@ class ChatService:
         if backend not in ("codex", "claude_code", "gemini_cli"):
             raise RuntimeError(f"agent_backend_invalid:{backend}")
 
-        workspace = self._resolve_workspace_path(library_id)
+        workspace = self._agent_workspace_dir()
         runner = self._runner_factory.build(backend)
         _labels: dict[str, str] = {"codex": "Codex", "claude_code": "Claude Code", "gemini_cli": "Gemini CLI"}
         backend_label = _labels.get(backend, backend)
@@ -975,8 +1017,12 @@ class ChatService:
         rag_error_reason = ""
         rag_tool_called = False
 
+        try:
+            lib_workspace = str(self._resolve_library_workspace_path(str(library_id or "").strip()))
+        except Exception:
+            lib_workspace = ""
         runtime_overrides = self._build_codex_runtime_overrides(
-            str(self._resolve_library_workspace_path(str(library_id or "").strip())),
+            lib_workspace,
             str(library_id or "").strip(),
         )
 

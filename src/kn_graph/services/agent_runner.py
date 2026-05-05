@@ -261,7 +261,41 @@ class CodexRunner(AgentRunner):
         with self._open_codex(workdir, runtime_overrides=runtime_overrides) as codex:
             thread = codex.thread_resume(thread_id, model=self._model, cwd=workdir)
             resp = thread.read(include_turns=include_turns)
-            return resp.model_dump() if hasattr(resp, "model_dump") else {"thread": {"id": thread_id}}
+            raw: dict[str, Any] = resp.model_dump() if hasattr(resp, "model_dump") else {}
+            thread_data = raw.get("thread", {}) if isinstance(raw, dict) else {}
+            messages: list[dict[str, Any]] = []
+            if include_turns:
+                for turn in (thread_data.get("turns", []) if isinstance(thread_data, dict) else []):
+                    for item in (turn.get("items", []) if isinstance(turn, dict) else []):
+                        item_type = str(item.get("type", "") or "")
+                        if item_type == "userMessage":
+                            content_parts = []
+                            for block in (item.get("content", []) if isinstance(item, dict) else []):
+                                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                                    content_parts.append(block["text"])
+                            messages.append({
+                                "message_id": str(item.get("id", "") or ""),
+                                "session_id": thread_id,
+                                "role": "user",
+                                "content": "".join(content_parts),
+                                "status": "completed",
+                            })
+                        elif item_type == "agentMessage":
+                            messages.append({
+                                "message_id": str(item.get("id", "") or ""),
+                                "session_id": thread_id,
+                                "role": "assistant",
+                                "content": str(item.get("text", "") or ""),
+                                "status": "completed",
+                            })
+            return {
+                "thread": {
+                    "id": str(thread_data.get("id", thread_id) or thread_id),
+                    "title": str(thread_data.get("name", "") or ""),
+                    "created_at": thread_data.get("createdAt", thread_data.get("created_at", "")),
+                },
+                "messages": messages,
+            }
 
     def thread_archive(
         self,
@@ -756,16 +790,25 @@ class ClaudeCodeRunner(AgentRunner):
         limit: int = 100,
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        try:
-            import asyncio
-            from claude_agent_sdk import list_sessions_from_store, InMemorySessionStore
-        except ImportError:
-            return {"data": []}
-        store = InMemorySessionStore()
-        sessions = asyncio.run(
-            list_sessions_from_store(store=store, limit=min(limit, 200))
+        _ = archived, runtime_overrides
+        from claude_agent_sdk import list_sessions as claude_list_sessions
+
+        sessions = claude_list_sessions(
+            directory=workdir, limit=limit, include_worktrees=True
         )
-        return {"data": [{"id": s.get("id", ""), "name": s.get("summary", "")} for s in sessions]}
+        return {
+            "data": [
+                {
+                    "id": s.session_id,
+                    "name": s.custom_title or s.summary or "",
+                    "preview": (s.first_prompt or "")[:200],
+                    "last_modified": s.last_modified,
+                    "created_at": s.created_at,
+                    "git_branch": s.git_branch,
+                }
+                for s in sessions
+            ]
+        }
 
     def thread_read(
         self,
@@ -774,7 +817,43 @@ class ClaudeCodeRunner(AgentRunner):
         include_turns: bool = True,
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {"thread": {"id": thread_id}}
+        _ = runtime_overrides
+        from claude_agent_sdk import get_session_messages, get_session_info
+
+        info = get_session_info(thread_id, directory=workdir)
+        messages: list[dict[str, Any]] = []
+        if include_turns:
+            raw = get_session_messages(thread_id, directory=workdir)
+            for m in raw:
+                msg_content = ""
+                msg_obj = m.message if hasattr(m, "message") else None
+                if isinstance(msg_obj, dict):
+                    content = msg_obj.get("content", "")
+                    if isinstance(content, str):
+                        msg_content = content
+                    elif isinstance(content, list):
+                        parts = []
+                        for block in content:
+                            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                                parts.append(block["text"])
+                        msg_content = "".join(parts)
+                messages.append(
+                    {
+                        "message_id": m.uuid if hasattr(m, "uuid") else "",
+                        "session_id": thread_id,
+                        "role": m.type if hasattr(m, "type") else "user",
+                        "content": msg_content,
+                        "status": "completed",
+                    }
+                )
+        return {
+            "thread": {
+                "id": thread_id,
+                "title": info.custom_title or info.summary if info else "",
+                "created_at": info.created_at if info else None,
+            },
+            "messages": messages,
+        }
 
     def thread_archive(
         self,
@@ -1085,7 +1164,22 @@ class GeminiCLIRunner(AgentRunner):
         limit: int = 100,
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {"data": []}
+        _ = archived, runtime_overrides
+        chats_dir = self._gemini_chats_dir(workdir)
+        if chats_dir is None:
+            return {"data": []}
+
+        sessions: list[dict[str, Any]] = []
+        for f in sorted(chats_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if f.suffix not in (".json", ".jsonl"):
+                continue
+            info = self._parse_gemini_session_info(f)
+            if info is None:
+                continue
+            sessions.append(info)
+            if len(sessions) >= limit:
+                break
+        return {"data": sessions}
 
     def thread_read(
         self,
@@ -1094,7 +1188,211 @@ class GeminiCLIRunner(AgentRunner):
         include_turns: bool = True,
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {"thread": {"id": thread_id}}
+        _ = runtime_overrides
+        chats_dir = self._gemini_chats_dir(workdir)
+        if chats_dir is None:
+            return {"thread": {"id": thread_id}, "messages": []}
+
+        for f in chats_dir.iterdir():
+            if f.suffix not in (".json", ".jsonl"):
+                continue
+            try:
+                content = f.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if thread_id not in content:
+                continue
+            if f.suffix == ".json":
+                return self._parse_gemini_json_session(content, thread_id, include_turns)
+            else:
+                return self._parse_gemini_jsonl_session(content, thread_id, include_turns)
+
+        return {"thread": {"id": thread_id}, "messages": []}
+
+    # ------------------------------------------------------------------
+    # Gemini session file helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _gemini_project_name(workdir: str) -> str:
+        import re
+        from pathlib import Path
+
+        name = Path(workdir).name
+        name = re.sub(r"[^a-zA-Z0-9]", "-", name).lower()
+        return name
+
+    @staticmethod
+    def _gemini_chats_dir(workdir: str) -> Path | None:
+        from pathlib import Path
+
+        project_name = GeminiCLIRunner._gemini_project_name(workdir)
+        chats_dir = Path.home() / ".gemini" / "tmp" / project_name / "chats"
+        return chats_dir if chats_dir.is_dir() else None
+
+    @staticmethod
+    def _parse_gemini_session_info(file_path: Path) -> dict[str, Any] | None:
+        import json
+        import re
+
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+        # Extract session ID and start time from filename: session-<ts>-<hash>.<ext>
+        name = file_path.stem  # e.g. session-2026-04-24T09-09-e47c5adc
+        m = re.match(r"session-(.+?)-([a-f0-9]+)$", name)
+        start_time = ""
+        short_hash = ""
+        if m:
+            start_time = m.group(1).replace("T", " ")
+            short_hash = m.group(2)
+
+        title = ""
+        session_id = ""
+
+        if file_path.suffix == ".json":
+            try:
+                data = json.loads(content)
+                session_id = data.get("sessionId", "")
+                msgs = data.get("messages", [])
+                for msg in msgs:
+                    if isinstance(msg, dict) and msg.get("role") == "user":
+                        c = msg.get("content", "")
+                        if isinstance(c, list):
+                            for block in c:
+                                if isinstance(block, dict) and block.get("text"):
+                                    title = str(block["text"])[:200]
+                                    break
+                        elif isinstance(c, str):
+                            title = c[:200]
+                        if title:
+                            break
+            except json.JSONDecodeError:
+                return None
+        else:  # .jsonl
+            first_line = content.split("\n", 1)[0]
+            try:
+                meta = json.loads(first_line)
+                session_id = meta.get("sessionId", "")
+            except json.JSONDecodeError:
+                pass
+            # Parse lines for first user message
+            for line in content.split("\n"):
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict) and entry.get("type") == "user":
+                    c = entry.get("content", [])
+                    if isinstance(c, list):
+                        for block in c:
+                            if isinstance(block, dict) and block.get("text"):
+                                title = str(block["text"])[:200]
+                                break
+                    if title:
+                        break
+
+        if not session_id:
+            session_id = short_hash
+
+        last_modified = int(file_path.stat().st_mtime * 1000)
+
+        return {
+            "id": session_id,
+            "name": title or name,
+            "preview": title[:200],
+            "last_modified": last_modified,
+        }
+
+    @staticmethod
+    def _parse_gemini_json_session(content: str, thread_id: str, include_turns: bool) -> dict[str, Any]:
+        import json
+
+        data = json.loads(content)
+        session_id = data.get("sessionId", thread_id)
+        start_time = data.get("startTime", "")
+
+        messages: list[dict[str, Any]] = []
+        if include_turns:
+            for msg in data.get("messages", []):
+                role = msg.get("role", "")
+                if role not in ("user", "assistant"):
+                    continue
+                c = msg.get("content", "")
+                text = ""
+                if isinstance(c, list):
+                    parts = []
+                    for block in c:
+                        if isinstance(block, dict) and block.get("text"):
+                            parts.append(str(block["text"]))
+                    text = "".join(parts)
+                elif isinstance(c, str):
+                    text = c
+                messages.append({
+                    "message_id": str(msg.get("id", "")),
+                    "session_id": session_id,
+                    "role": role,
+                    "content": text,
+                    "status": "completed",
+                })
+
+        return {
+            "thread": {"id": session_id, "title": "", "created_at": start_time},
+            "messages": messages,
+        }
+
+    @staticmethod
+    def _parse_gemini_jsonl_session(content: str, thread_id: str, include_turns: bool) -> dict[str, Any]:
+        import json
+
+        session_id = thread_id
+        start_time = ""
+
+        messages: list[dict[str, Any]] = []
+        for line in content.split("\n"):
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            # First line: session metadata
+            if "sessionId" in entry and "kind" in entry:
+                session_id = entry.get("sessionId", thread_id)
+                start_time = entry.get("startTime", "")
+                continue
+            # $set lines are metadata updates
+            if "$set" in entry:
+                continue
+            entry_type = entry.get("type", "")
+            if entry_type not in ("user", "assistant"):
+                continue
+            if not include_turns:
+                continue
+            c = entry.get("content", [])
+            text = ""
+            if isinstance(c, list):
+                parts = []
+                for block in c:
+                    if isinstance(block, dict) and block.get("text"):
+                        parts.append(str(block["text"]))
+                text = "".join(parts)
+            elif isinstance(c, str):
+                text = c
+            messages.append({
+                "message_id": entry.get("id", entry.get("uuid", "")),
+                "session_id": session_id,
+                "role": entry_type,
+                "content": text,
+                "status": "completed",
+            })
+
+        return {
+            "thread": {"id": session_id, "title": "", "created_at": start_time},
+            "messages": messages,
+        }
 
     def thread_archive(
         self,
