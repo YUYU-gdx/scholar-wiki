@@ -220,16 +220,15 @@ export default function PipelineView() {
               <tr className="bg-surface-container-low/10 text-[10px] font-mono font-black text-outline uppercase tracking-widest border-b border-outline-variant/10">
                 <th className="px-6 py-4 w-[90px]">Job ID</th>
                 <th className="px-6 py-4">Filename</th>
-                <th className="px-6 py-4 w-[80px]">Stage</th>
+                <th className="px-6 py-4 w-[90px]">Stage</th>
                 <th className="px-6 py-4 w-[150px]">Progress</th>
-                <th className="px-6 py-4 text-center w-[80px]">Status</th>
-                <th className="px-6 py-4 text-right w-[80px]">Actions</th>
+                <th className="px-6 py-4 text-center w-[50px]">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant/10">
               {pipelineJobs.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-on-surface-variant text-sm">
+                  <td colSpan={5} className="px-6 py-12 text-center text-on-surface-variant text-sm">
                     No pipeline jobs found.
                   </td>
                 </tr>
@@ -246,9 +245,14 @@ export default function PipelineView() {
                     </div>
                   </td>
                   <td className="px-6 py-4 shrink-0">
-                    <span className={`text-[10px] font-mono font-black uppercase px-3 py-1.5 rounded-full whitespace-nowrap ${statusBadge(job.stage || job.status_code || '')}`}>
-                      {job.stage_label || job.stage || job.status_code || '-'}
-                    </span>
+                    <div className="flex flex-col gap-0.5">
+                      <span className={`text-[10px] font-mono font-black uppercase px-2 py-0.5 rounded-full whitespace-nowrap ${statusBadge(job.stage || job.status_code || '')}`}>
+                        {job.stage_label || job.stage || job.status_code || '-'}
+                      </span>
+                      <span className={`text-[8px] font-mono text-on-surface-variant ${job.status === 'completed' ? '' : 'opacity-60'}`}>
+                        {job.status === 'completed' ? 'done' : job.status}
+                      </span>
+                    </div>
                   </td>
                   <td className="px-6 py-4 shrink-0" style={{minWidth: 140}}>
                     <div className="flex items-center gap-3">
@@ -262,23 +266,17 @@ export default function PipelineView() {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-center">
-                    <span className={`text-[10px] font-mono font-black uppercase px-2 py-1 rounded-full ${statusBadge(job.status)}`}>
-                      {job.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => deleteJob(job.job_id, job.file_name || '')} className="text-outline hover:text-red-500 hover:scale-110 transition-all" title="删除"><Trash2 className="w-4 h-4" /></button>
+                    <div className="flex justify-center gap-1.5">
+                      <button onClick={() => deleteJob(job.job_id, job.file_name || '')} className="text-outline hover:text-red-500 hover:scale-110 transition-all p-1" title="删除"><Trash2 className="w-3.5 h-3.5" /></button>
                       {job.status === 'completed' && (
-                        <button onClick={() => setSelectedJob(job)} className="text-secondary hover:scale-110 transition-transform"><CheckCircle className="w-4 h-4" /></button>
+                        <button onClick={() => setSelectedJob(job)} className="text-outline hover:text-secondary hover:scale-110 transition-all p-1" title="详情"><Info className="w-3.5 h-3.5" /></button>
                       )}
                       {(job.status === 'queued' || job.status === 'running') && job.can_cancel && (
-                        <button onClick={() => cancelJob(job.job_id)} className="text-outline hover:text-error hover:scale-110 transition-all"><XCircle className="w-4 h-4" /></button>
+                        <button onClick={() => cancelJob(job.job_id)} className="text-outline hover:text-error hover:scale-110 transition-all p-1" title="取消"><XCircle className="w-3.5 h-3.5" /></button>
                       )}
                       {(job.status === 'failed' || job.status === 'cancelled') && job.can_retry && (
-                        <button onClick={() => retryJob(job.job_id)} className="text-outline hover:text-secondary hover:scale-110 transition-all"><RefreshCw className="w-4 h-4" /></button>
+                        <button onClick={() => retryJob(job.job_id)} className="text-outline hover:text-secondary hover:scale-110 transition-all p-1" title="重试"><RefreshCw className="w-3.5 h-3.5" /></button>
                       )}
-                      <button className="text-outline hover:text-secondary hover:scale-110 transition-all"><Info className="w-4 h-4" /></button>
                     </div>
                   </td>
                 </tr>
