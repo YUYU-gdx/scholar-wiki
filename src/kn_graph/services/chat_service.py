@@ -184,25 +184,27 @@ class ChatService:
 
     def get_codex_config(self) -> dict[str, Any]:
         try:
-            agent_runner_mod = _load_agent_runner_module()
             config_path = self._settings.codex_config_path
-            cfg = agent_runner_mod.load_codex_config(config_path)
-            return {
-                "app_server_command": str(cfg.app_server_command or ""),
-                "app_server_args": list(cfg.app_server_args),
-                "healthcheck_args": list(cfg.healthcheck_args),
-                "timeout_seconds": int(cfg.timeout_seconds),
-                "install_command": str(cfg.install_command or ""),
-                "extra_env": dict(cfg.extra_env),
-                "model": str(cfg.model or ""),
-                "approval_policy": str(cfg.approval_policy or ""),
-                "sandbox_mode": str(cfg.sandbox_mode or ""),
-                "personality": str(cfg.personality or ""),
-                "mcp_servers": list(cfg.mcp_servers),
-                "config_path": str(config_path.resolve()),
-            }
+            if config_path.exists():
+                data = json.loads(config_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    result = dict(data)
+                    result.setdefault("config_path", str(config_path.resolve()))
+                    return result
         except Exception:
-            return {}
+            pass
+        return {
+            "model": "gpt-5.2",
+            "mcp_servers": [
+                {
+                    "name": "kn_graph_tools",
+                    "command": "uv",
+                    "args": ["run", "python", "-m", "scripts.smj_pipeline.kn_mcp_server"],
+                    "env": {},
+                }
+            ],
+            "config_path": str(self._settings.codex_config_path.resolve()),
+        }
 
     def _agent_settings_path(self) -> Path:
         return self._settings.data_dir / "chat" / "agent_settings.json"
@@ -333,23 +335,10 @@ class ChatService:
         return self.get_agent_settings()
 
     def save_codex_config(self, body: dict[str, Any]) -> dict[str, Any]:
-        agent_runner_mod = _load_agent_runner_module()
         config_path = self._settings.codex_config_path
         existing = self.get_codex_config()
         next_payload = dict(existing)
-        for key in (
-            "app_server_command",
-            "app_server_args",
-            "healthcheck_args",
-            "timeout_seconds",
-            "install_command",
-            "extra_env",
-            "model",
-            "approval_policy",
-            "sandbox_mode",
-            "personality",
-            "mcp_servers",
-        ):
+        for key in ("model", "mcp_servers", "install_command"):
             if key in body:
                 next_payload[key] = body.get(key)
         to_write = {k: v for k, v in next_payload.items() if k != "config_path"}
@@ -360,9 +349,7 @@ class ChatService:
     def check_codex_health(self) -> dict[str, Any]:
         try:
             agent_runner_mod = _load_agent_runner_module()
-            config_path = self._settings.codex_config_path
-            cfg = agent_runner_mod.load_codex_config(config_path)
-            runner = agent_runner_mod.CodexRunner(cfg)
+            runner = agent_runner_mod.CodexRunner(codex_bin="codex")
             health = runner.health()
             return {
                 "backend": "codex",
