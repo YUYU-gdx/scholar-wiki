@@ -200,11 +200,8 @@ class _ExtractionClientAdapter:
 
 class ProviderRegistry:
     def __init__(self, config_path: Path | None = None) -> None:
-        env_path = str(os.getenv("LLM_PROVIDER_CONFIG_PATH", "")).strip()
         if config_path is not None:
             self._config_path = Path(config_path)
-        elif env_path:
-            self._config_path = Path(env_path)
         else:
             self._config_path = _DEFAULT_CONFIG_PATH
         self._providers: dict[str, dict[str, Any]] = {}

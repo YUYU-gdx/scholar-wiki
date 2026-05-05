@@ -19,17 +19,16 @@ SUPPORTED_SOURCE_SUFFIXES: tuple[str, ...] = (".pdf", ".md", ".txt", ".html", ".
 DIRECT_EXTRACT_SUFFIXES: tuple[str, ...] = (".md", ".txt", ".html", ".htm")
 
 
-def detect_default_storage_root() -> Path:
-    explicit = str(os.getenv("KN_STORAGE_ROOT", "")).strip()
-    if explicit:
-        return Path(explicit).resolve()
+def detect_default_storage_root(data_dir: str | Path | None = None) -> Path:
+    if data_dir:
+        return Path(data_dir).resolve()
     if os.name == "nt":
         return Path(r"D:\KNGraphApp")
     return (Path.home() / ".kn_graph_data").resolve()
 
 
-def resolve_storage_root(*, require_initialized: bool = True) -> Path:
-    root = detect_default_storage_root()
+def resolve_storage_root(*, require_initialized: bool = True, data_dir: str | Path | None = None) -> Path:
+    root = detect_default_storage_root(data_dir=data_dir)
     if require_initialized and not root.exists():
         raise RuntimeError(f"storage_root_not_initialized:{root}")
     return root
@@ -68,8 +67,8 @@ def build_source_archive_path(workspace_root: Path, filename: str) -> Path:
     return workspace_root / SOURCE_DIRNAME / source_type / filename
 
 
-def build_weaviate_base_url_candidates() -> list[str]:
-    explicit = str(os.getenv("WEAVIATE_URL", "")).strip()
+def build_weaviate_base_url_candidates(weaviate_url: str = "") -> list[str]:
+    explicit = str(weaviate_url or "").strip()
     if explicit:
         return [explicit.rstrip("/")]
     return [f"http://127.0.0.1:{port}" for port in WEAVIATE_DEFAULT_PORT_CANDIDATES]

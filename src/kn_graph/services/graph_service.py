@@ -532,7 +532,9 @@ class GraphService:
                 }
                 payload["latest_theories"] = list(concept_entry.get("theories", []) or [])
             else:
-                payload["latest_concept"] = ""
+                # Fall back to extracted definition from paper if no concept entry
+                extracted_def = str(node.get("definition", "") or "").strip()
+                payload["latest_concept"] = extracted_def
                 payload["latest_concept_source"] = {}
                 payload["latest_theories"] = []
 
@@ -734,7 +736,7 @@ class GraphService:
         backend_used = "hash"
         backend_note = ""
         if vector_backend == "embedding":
-            if os.getenv("GRAPH_EMBEDDING_MODEL", "").strip():
+            if self._settings.graph_embedding_model.strip():
                 backend_note = "embedding backend requested but unavailable; fallback to hash."
             else:
                 backend_note = "embedding model not configured; fallback to hash."
@@ -826,22 +828,37 @@ class GraphService:
         pid = str(paper_id_or_doi or "").strip()
         if not pid:
             return None
-        # Look up in SQLite (single source of truth for paper metadata)
+        # Look up in memory cache first; fall back to direct DB read
         sqlite_meta = self._paper_meta_by_id.get(pid, {})
-        if not sqlite_meta:
-            return None
-        # Merge with graph_views extraction data
         gv = self._paper_map_unique.get(pid, {}) if isinstance(self._paper_map_unique.get(pid), dict) else {}
+        if not sqlite_meta and not gv:
+            # Paper may have been added by a pipeline job after server started;
+            # try reading directly from SQLite.
+            db_path = self._settings.workspaces_dir / library_id / "kn_gragh.db"
+            if db_path.exists():
+                import sqlite3
+                conn = sqlite3.connect(str(db_path))
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cur.execute("SELECT paper_id, title, doi, source_pdf_path, source_md_path, source_html_path, offline_html_path, article_url FROM papers WHERE paper_id = ?", (pid,))
+                row = cur.fetchone()
+                conn.close()
+                if row:
+                    sqlite_meta = dict(row)
+            if not sqlite_meta:
+                return None
+        # Merge graph_views extraction data with SQLite metadata
         payload = dict(gv)
         payload["paper_id"] = pid
-        payload["title"] = str(sqlite_meta.get("title", "") or "").strip() or pid
+        payload["paper_key"] = str(gv.get("paper_key", "") or "").strip() or pid
+        payload["title"] = str(sqlite_meta.get("title", "") or gv.get("title", "") or "").strip() or pid
         payload["display_title"] = payload["title"]
-        payload["doi"] = str(sqlite_meta.get("doi", "") or pid)
-        payload["source_pdf_path"] = str(sqlite_meta.get("source_pdf_path", "") or "")
-        payload["source_md_path"] = str(sqlite_meta.get("source_md_path", "") or "")
-        payload["source_html_path"] = str(sqlite_meta.get("source_html_path", "") or "")
-        payload["offline_html_path"] = str(sqlite_meta.get("offline_html_path", "") or "")
-        payload["article_url"] = str(sqlite_meta.get("article_url", "") or "")
+        payload["doi"] = str(sqlite_meta.get("doi", "") or gv.get("doi", "") or pid)
+        payload["source_pdf_path"] = str(sqlite_meta.get("source_pdf_path", "") or gv.get("source_pdf_path", "") or "")
+        payload["source_md_path"] = str(sqlite_meta.get("source_md_path", "") or gv.get("source_md_path", "") or "")
+        payload["source_html_path"] = str(sqlite_meta.get("source_html_path", "") or gv.get("source_html_path", "") or "")
+        payload["offline_html_path"] = str(sqlite_meta.get("offline_html_path", "") or gv.get("offline_html_path", "") or "")
+        payload["article_url"] = str(sqlite_meta.get("article_url", "") or gv.get("article_url", "") or "")
         payload["library_id"] = library_id
         return payload
 

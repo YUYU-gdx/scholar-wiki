@@ -28,8 +28,12 @@ def main():
         uvicorn.run(app, host=settings.host, port=settings.port, reload=args.reload)
 
     elif args.command == "worker":
-        from kn_graph.workers.celery_app import celery_app
-        celery_app.worker_main(sys.argv[2:])
+        from kn_graph.config import Settings
+        settings = Settings()
+        settings.load_global_settings()
+        from kn_graph.workers.celery_app import get_celery_app
+        app = get_celery_app(settings)
+        app.worker_main(sys.argv[2:])
 
     else:
         parser.print_help()

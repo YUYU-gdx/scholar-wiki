@@ -334,6 +334,15 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
             }
         )
 
+    # ── ensure variable nodes from definitions (even without edges) ──
+    for pid, defs in var_defs.items():
+        for vd in defs:
+            cid = _canonical_var_id(vd["variable"])
+            variable_nodes.setdefault(cid, {"id": cid, "type": "variable", "label": vd["variable"], "name": vd["variable"]})
+            vd_aliases = vd.get("aliases", [])
+            if vd_aliases:
+                node_aliases.setdefault(cid, set()).update(a for a in vd_aliases if a)
+
     # ── compute first-year per node ──
     years_by_node: dict[str, list[int]] = {}
     for edge in edges:
@@ -356,6 +365,16 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
             node["aliases"] = sorted(aliases)
             node["alias_count"] = len(aliases)
 
+    # ── merge variable definitions into nodes ──
+    for pid, defs in var_defs.items():
+        for vd in defs:
+            cid = _canonical_var_id(vd["variable"])
+            node = variable_nodes.get(cid)
+            if node is not None:
+                node.setdefault("definition", vd.get("definition", ""))
+                node.setdefault("measurement", vd.get("measurement", ""))
+                node.setdefault("aliases_from_paper", vd.get("aliases", []))
+
     return {
         "meta": {
             "paper_count": len(papers),
@@ -367,6 +386,7 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
         "moderation_links": moderation_links,
         "interaction_links": interaction_links,
         "papers": list(papers_map.values()),
+        "var_defs": var_defs,
     }
 
 
@@ -437,6 +457,14 @@ def run_build_from_artifact(data: dict[str, Any], output_json: Path) -> Path:
             ids.append(out)
         for nid in ids:
             d = node_paper_counts.setdefault(nid, {})
+            d[pid] = d.get(pid, 0) + 1
+
+    # Also count variable-definition associations (papers with no edges still own their vars)
+    var_defs = data.get("var_defs", {}) if isinstance(data.get("var_defs"), dict) else {}
+    for pid, defs in var_defs.items():
+        for vd in defs:
+            cid = _canonical_var_id(vd["variable"])
+            d = node_paper_counts.setdefault(cid, {})
             d[pid] = d.get(pid, 0) + 1
 
     for node_id, node in node_map.items():

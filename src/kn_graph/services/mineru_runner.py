@@ -4,7 +4,6 @@ import argparse
 from datetime import datetime
 import html
 import json
-import os
 from pathlib import Path
 import time
 from typing import Any, Callable
@@ -23,45 +22,9 @@ class MinerUSinglePdfError(RuntimeError):
         super().__init__(f"{self.code}:{self.detail}" if self.detail else self.code)
 
 
-def _parse_dotenv_value(raw: str) -> str:
-    text = str(raw).strip()
-    if not text:
-        return ""
-    if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
-        return text[1:-1]
-    return text
 
-
-def _read_env_key_from_dotenv(dotenv_path: Path, key: str) -> str:
-    if not dotenv_path.exists():
-        return ""
-    try:
-        for line in dotenv_path.read_text(encoding="utf-8").splitlines():
-            row = line.strip()
-            if not row or row.startswith("#") or "=" not in row:
-                continue
-            name, value = row.split("=", 1)
-            if name.strip() == key:
-                return _parse_dotenv_value(value)
-    except Exception:
-        return ""
-    return ""
-
-
-def _resolve_api_key(env_name: str) -> str:
-    key = str(os.getenv(env_name, "")).strip()
-    if key:
-        return key
-    candidates = [
-        Path.cwd() / ".env",
-        Path(__file__).resolve().parents[2] / ".env",
-    ]
-    for dotenv_path in candidates:
-        val = _read_env_key_from_dotenv(dotenv_path, env_name).strip()
-        if val:
-            os.environ[env_name] = val
-            return val
-    return ""
+def _resolve_api_key(direct_key: str = "") -> str:
+    return str(direct_key or "").strip()
 
 
 def _page_count(pdf_path: Path) -> int:
@@ -131,10 +94,9 @@ def parse_single_pdf(
     if page_count <= 0:
         raise MinerUSinglePdfError("pdf_unreadable", str(pdf_path))
 
-    api_key_env = str(opts.get("api_key_env", "MINERU_API_KEY")).strip() or "MINERU_API_KEY"
-    api_key = _resolve_api_key(api_key_env)
+    api_key = _resolve_api_key(str(opts.get("mineru_api_key", "") or ""))
     if not api_key:
-        raise MinerUSinglePdfError("mineru_api_key_missing", api_key_env)
+        raise MinerUSinglePdfError("mineru_api_key_missing", "mineru_api_key")
 
     args = _build_args(opts)
     retry_delays = _parse_retry_delays(str(opts.get("retry_delays", "8,20,60")))

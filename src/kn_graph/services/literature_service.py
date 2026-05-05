@@ -256,12 +256,14 @@ class ZhipuEmbeddingClient:
     base_url: str = "https://open.bigmodel.cn/api/paas/v4/embeddings"
     timeout_seconds: int = 120
     max_retries: int = 3
+    max_chars: int = 8000
+    batch_size: int = 32
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        max_chars = int(os.getenv("LITERATURE_EMBED_MAX_CHARS", "8000") or 8000)
-        batch_size = max(1, int(os.getenv("LITERATURE_EMBED_BATCH_SIZE", "32") or 32))
+        max_chars = self.max_chars
+        batch_size = max(1, self.batch_size)
         prepared = [str(t or "")[:max_chars] for t in texts]
         vectors: list[list[float]] = []
         for i in range(0, len(prepared), batch_size):
@@ -588,10 +590,10 @@ class LiteratureService:
         return text.replace("\\", "/")
 
     def _default_library_id(self) -> str:
-        return (os.getenv("LITERATURE_DEFAULT_LIBRARY_ID", "") or "").strip()
+        return (self._settings.literature_default_library_id or "").strip()
 
     def _library_index_root(self) -> Path:
-        root = os.getenv("LITERATURE_LIBRARY_INDEX_ROOT", "outputs/literature_libraries").strip() or "outputs/literature_libraries"
+        root = self._settings.literature_library_index_root.strip() or "outputs/literature_libraries"
         return Path(root)
 
     def _library_index_path(self, library_id: str) -> Path:
@@ -710,7 +712,7 @@ class LiteratureService:
             shutil.rmtree(work_dir, ignore_errors=True)
 
         try:
-            result = parse_single_pdf(source_pdf, work_dir, options={})
+            result = parse_single_pdf(source_pdf, work_dir, options={"mineru_api_key": self._settings.mineru_api_key})
         except Exception as exc:
             raise RuntimeError(f"mineru_cloud_failed: {exc}") from exc
 
@@ -795,7 +797,7 @@ class LiteratureService:
             shutil.copy2(str(source_path), str(source_pdf))
             source_pdf_path = str(source_pdf.resolve())
             parser_name = "mineru"
-            parser_version = str(os.getenv("MINERU_VERSION", "") or "").strip() or "unknown"
+            parser_version = str(self._settings.mineru_version or "").strip() or "unknown"
             parser_run_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             mineru = self._run_mineru_cloud_to_dir(source_pdf, mineru_latest_dir)
             html_text = str(mineru.get("html_text", "") or "")
@@ -918,21 +920,26 @@ class LiteratureService:
                 continue
         if not base_url:
             base_url = candidates[0]
-        api_key = os.getenv("WEAVIATE_API_KEY", "").strip()
+        api_key = self._settings.weaviate_api_key
         return WeaviateRestClient(base_url=base_url, api_key=api_key)
 
     def _build_default_embedding(self) -> ZhipuEmbeddingClient:
-        api_key = os.getenv("ZHIPU_API_KEY", "").strip()
+        api_key = self._settings.zhipu_api_key.strip()
         if not api_key:
             raise RuntimeError("missing env: ZHIPU_API_KEY")
-        model = os.getenv("LITERATURE_EMBEDDING_MODEL", "embedding-3").strip() or "embedding-3"
-        return ZhipuEmbeddingClient(api_key=api_key, model=model)
+        model = self._settings.literature_embedding_model.strip() or "embedding-3"
+        return ZhipuEmbeddingClient(
+            api_key=api_key,
+            model=model,
+            max_chars=self._settings.literature_embed_max_chars,
+            batch_size=self._settings.literature_embed_batch_size,
+        )
 
     def _build_default_generator(self) -> Any:
-        api_key = os.getenv("ZHIPU_API_KEY", "").strip()
+        api_key = self._settings.zhipu_api_key.strip()
         if not api_key:
             raise RuntimeError("missing env: ZHIPU_API_KEY")
-        model = os.getenv("LITERATURE_CHAT_MODEL", "glm-4.5-flash").strip() or "glm-4.5-flash"
+        model = self._settings.literature_chat_model.strip() or "glm-4.5-flash"
         return ZhipuChatCompletionsClient(api_key=api_key, model=model)
 
     # ------------------------------------------------------------------

@@ -245,14 +245,9 @@ export default function PipelineView() {
                     </div>
                   </td>
                   <td className="px-6 py-4 shrink-0">
-                    <div className="flex flex-col gap-0.5">
-                      <span className={`text-[10px] font-mono font-black uppercase px-2 py-0.5 rounded-full whitespace-nowrap ${statusBadge(job.stage || job.status_code || '')}`}>
-                        {job.stage_label || job.stage || job.status_code || '-'}
-                      </span>
-                      <span className={`text-[8px] font-mono text-on-surface-variant ${job.status === 'completed' ? '' : 'opacity-60'}`}>
-                        {job.status === 'completed' ? 'done' : job.status}
-                      </span>
-                    </div>
+                    <span className={`text-[10px] font-mono font-black uppercase px-2 py-0.5 rounded-full whitespace-nowrap ${statusBadge(job.status || '')}`}>
+                      {job.stage_label || job.stage || job.status_code || '-'}
+                    </span>
                   </td>
                   <td className="px-6 py-4 shrink-0" style={{minWidth: 140}}>
                     <div className="flex items-center gap-3">

@@ -11,7 +11,6 @@ from typing import Any
 
 import requests
 
-from kn_graph.config import load_repo_env
 from kn_graph.core.mineru_common import iter_jsonl, safe_id, write_json, write_json_atomic, write_jsonl
 
 
@@ -384,13 +383,15 @@ def _export_failed(run_dir: Path, checkpoint: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    load_repo_env()
+    from kn_graph.config import Settings
+    settings = Settings()
+    settings.load_global_settings()
     args = parse_args()
     random.seed(int(args.seed))
 
-    api_key = str(__import__("os").getenv(args.api_key_env, "")).strip()
+    api_key = settings.mineru_api_key
     if not api_key:
-        raise RuntimeError(f"missing env: {args.api_key_env}")
+        raise RuntimeError(f"mineru_api_key not configured in settings")
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     retry_delays = _parse_retry_delays(args.retry_delays)
 

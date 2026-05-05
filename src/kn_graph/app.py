@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
+    settings.load_global_settings()
+
+    from kn_graph.services.pipeline_runtime import init_pipeline_settings
+    init_pipeline_settings(settings)
+
+    from kn_graph.services.library_registry import configure as configure_library_registry
+    configure_library_registry(
+        workspace_root=settings.library_workspaces_root_path,
+        registry_path=settings.library_registry_path,
+        index_root=settings.library_index_root_path,
+    )
 
     ensure_data_dirs(settings)
     migrate_legacy_data(settings.data_dir)

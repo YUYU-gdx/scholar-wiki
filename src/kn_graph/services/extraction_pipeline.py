@@ -382,7 +382,9 @@ def _build_default_llm_client(args: argparse.Namespace) -> LLMClient:
 
 
 def main() -> None:
-    _ENV_UTILS.load_repo_env()
+    from kn_graph.config import Settings
+    settings = Settings()
+    settings.load_global_settings()
     args = parse_args()
     llm = _build_default_llm_client(args)
     artifacts = run(

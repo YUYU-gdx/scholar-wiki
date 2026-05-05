@@ -277,11 +277,21 @@ def _public_job_payload(job: dict[str, Any]) -> dict[str, Any]:
         "finalize": "整理中",
     }
     status = str(out.get("status", "") or "").strip().lower()
+    base_label = stage_label_map.get(stage, stage or "")
+    if status == "failed":
+        failed_label_map = {
+            "parse_pdf": "解析失败",
+            "extract_entities": "抽取失败",
+            "finalize": "入库失败",
+        }
+        base_label = failed_label_map.get(stage, f"{base_label}失败" if base_label else "失败")
+    elif status == "cancelled":
+        base_label = f"{base_label}已取消" if base_label else "已取消"
     display_name = str(out.get("file_name", "") or "").strip() or str(out.get("job_id", "") or "").strip()
     out["display_name"] = display_name
     out["status_code"] = status
     out["stage_code"] = stage
-    out["stage_label"] = stage_label_map.get(stage, stage or "")
+    out["stage_label"] = base_label
     out["can_cancel"] = status in {"queued", "running"}
     out["can_retry"] = status in {"failed", "cancelled"}
     result_obj = out.get("result")

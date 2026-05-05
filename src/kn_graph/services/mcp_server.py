@@ -203,8 +203,12 @@ def _call_tool(base_url: str, name: str, arguments: dict[str, Any]) -> dict[str,
 
 
 def main() -> None:
+    from kn_graph.config import Settings
+    boot = Settings()
+    boot.load_global_settings()
+    default_url = f"http://{boot.host}:{boot.port}"
     parser = argparse.ArgumentParser(description="KN Graph MCP server")
-    parser.add_argument("--api-base-url", default=os.getenv("KN_GRAPH_API_BASE_URL", "http://127.0.0.1:8013"))
+    parser.add_argument("--api-base-url", default=default_url)
     args = parser.parse_args()
     base_url = str(args.api_base_url or "").strip() or "http://127.0.0.1:8013"
     tools = _build_tools()

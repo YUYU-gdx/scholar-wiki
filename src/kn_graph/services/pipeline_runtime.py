@@ -50,21 +50,22 @@ def _is_cancel_requested(store: JobStore, job_id: str) -> bool:
     return bool(row and row.get("requested_cancel"))
 
 
-def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore) -> dict[str, Any]:
+def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore, options: dict[str, Any] | None = None) -> dict[str, Any]:
     _stage_update(store, job_id, "parse_pdf", 5, "stage_started", status="running")
     if _is_cancel_requested(store, job_id):
         raise RuntimeError("job_cancelled")
 
+    # Merge injected settings on top of stored options
+    merged = dict(options or {})
     opts_raw = store.get_job(job_id) or {}
-    options = {}
     raw_options = str(opts_raw.get("options_json", "") or "").strip()
     if raw_options:
         try:
             obj = json.loads(raw_options)
             if isinstance(obj, dict):
-                options = obj
+                merged = {**obj, **merged}
         except Exception:
-            options = {}
+            pass
 
     def _progress(pct: int, _label: str) -> None:
         _stage_update(store, job_id, "parse_pdf", max(5, min(45, int(pct))), "stage_progress", status="running")
@@ -76,7 +77,7 @@ def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore)
         meta = parse_single_pdf(
             input_pdf,
             run_dir,
-            options=options,
+            options=merged,
             progress_cb=_progress,
             cancel_cb=_cancel,
         )
@@ -180,7 +181,7 @@ def _run_finalize(
         try:
             _stage_update(store, job_id, "finalize", 97, "stage_progress", status="running")
             from kn_graph.services.literature_service import LiteratureService
-            literature = LiteratureService()
+            literature = LiteratureService(settings=_pipeline_settings)
             manifest_path = run_dir / "import_manifest.jsonl"
             paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
             doi = str(options.get("doi", "") or f"job::{job_id}").strip()
@@ -219,48 +220,66 @@ def _run_finalize(
             conn = _sqlite3.connect(str(db_path))
             repo = SqliteRepo(conn)
             repo.apply_schema()
-            # Write paper metadata (title, paths) from import result
+
             mats = import_result.get("materialized_papers", []) or []
-            if isinstance(mats, list):
-                for m in mats:
-                    if not isinstance(m, dict):
-                        continue
-                    pid = str(m.get("paper_id", "") or m.get("paper_key", "") or "").strip()
-                    if not pid:
-                        continue
-                    meta_path = Path(str(m.get("meta_path", "") or ""))
-                    meta = {}
-                    if meta_path.exists():
-                        try:
-                            meta = _json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
-                        except Exception:
-                            meta = {}
-                    if not isinstance(meta, dict):
-                        meta = {}
-                    title = str(meta.get("title", "") or row.get("title", "") or "").strip()
-                    cur = conn.cursor()
-                    cur.execute(
-                        """INSERT OR REPLACE INTO papers (paper_id, doi, title,
-                           offline_html_path, source_pdf_path, source_md_path, source_html_path,
-                           metadata_source)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            pid,
-                            str(m.get("doi", "") or ""),
-                            title,
-                            str(m.get("html_path", "") or ""),
-                            str(m.get("source_pdf_path", "") or ""),
-                            str(m.get("md_library_path", "") or m.get("md_path", "") or ""),
-                            str(m.get("html_path", "") or ""),
-                            "literature_import",
-                        ),
-                    )
-                    conn.commit()
-            # Import extraction results into SQLite if available
+            mat_paper_key = str((mats[0] or {}).get("paper_key", "") if mats else "").strip()
+
+            # Import extraction results into SQLite first (writes paper metadata + variables)
             raw_jsonl = run_dir / "extract" / "raw_llm_outputs.jsonl"
             if raw_jsonl.exists():
+                # Align extraction paper_id with the materialized paper_key from import
+                # so extraction data and file paths reference the same paper record.
+                mats_list = import_result.get("materialized_papers", []) or []
+                mat_paper_key = str((mats_list[0] or {}).get("paper_key", "") if mats_list else "").strip()
+                if mat_paper_key:
+                    fixed_path = run_dir / "extract" / "raw_llm_outputs_fixed.jsonl"
+                    with open(raw_jsonl, "r", encoding="utf-8") as fin, open(str(fixed_path), "w", encoding="utf-8") as fout:
+                        for line in fin:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            obj = json.loads(line)
+                            obj["paper_id"] = mat_paper_key
+                            fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+                    raw_jsonl = fixed_path
                 _stage_update(store, job_id, "finalize", 98, "importing_to_sqlite", status="running")
                 _import_sqlite_main_inline(db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False)
+            # Write paper file paths (UPDATE to preserve extraction metadata)
+            cur = conn.cursor()
+            for m in mats:
+                if not isinstance(m, dict):
+                    continue
+                pid = str(m.get("paper_id", "") or m.get("paper_key", "") or "").strip()
+                if not pid:
+                    continue
+                meta_path = Path(str(m.get("meta_path", "") or ""))
+                meta = {}
+                if meta_path.exists():
+                    try:
+                        meta = _json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+                    except Exception:
+                        meta = {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                title = str(meta.get("title", "") or "").strip() or str(m.get("title", "") or str(m.get("paper_key", "")) or "").strip()
+                # Use UPDATE to avoid clearing extraction fields (extractability etc.)
+                cur.execute(
+                    """UPDATE papers SET doi = ?, title = ?,
+                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
+                       source_html_path = ?, metadata_source = ?
+                       WHERE paper_id = ?""",
+                    (
+                        str(m.get("doi", "") or ""),
+                        title,
+                        str(m.get("html_path", "") or ""),
+                        str(m.get("source_pdf_path", "") or ""),
+                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""),
+                        str(m.get("html_path", "") or ""),
+                        "literature_import",
+                        pid,
+                    ),
+                )
+            conn.commit()
             conn.close()
             # Always rebuild graph_views — paper metadata is now in SQLite
             _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
@@ -307,41 +326,55 @@ def _run_finalize(
     return result
 
 
+_pipeline_settings: Any = None
+
+
+def init_pipeline_settings(settings: Any) -> None:
+    global _pipeline_settings
+    _pipeline_settings = settings
+
+
 def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
-    """Read pipeline fast-mode settings from global_settings.json and inject into options."""
-    import json as _json
-    from pathlib import Path as _Path
-    import os as _os
-    data_dir = _Path(r"D:\KNGraphApp") if _os.name == "nt" else _Path.home() / ".kn_graph"
-    settings_path = data_dir / "settings" / "global_settings.json"
-    if not settings_path.exists():
-        return dict(options)
-    try:
-        store = _json.loads(settings_path.read_text(encoding="utf-8"))
-    except Exception:
-        return dict(options)
-    pipeline = store.get("categories", {}).get("pipeline", {})
-    if not isinstance(pipeline, dict):
-        return dict(options)
+    """Read pipeline settings from the Settings object and inject into options."""
+    global _pipeline_settings
+    settings = _pipeline_settings
     out = dict(options)
+
+    if settings is None:
+        if not out.get("llm_timeout_seconds"):
+            out["llm_timeout_seconds"] = 300
+        return out
+
+    # mineru_api_key — this was missing before, causing the 5% failure
+    if not str(out.get("mineru_api_key", "") or "").strip():
+        val = str(getattr(settings, "mineru_api_key", "") or "").strip()
+        if val:
+            out["mineru_api_key"] = val
+
+    # LLM provider / model / key from pipeline extraction settings
     if not str(out.get("llm_provider", "") or "").strip():
-        out["llm_provider"] = str(pipeline.get("fast_provider", "") or "").strip()
+        val = str(getattr(settings, "pipeline_fast_provider", "") or "").strip()
+        if val:
+            out["llm_provider"] = val
+
     if not str(out.get("llm_model", "") or "").strip():
-        out["llm_model"] = str(pipeline.get("fast_model", "") or "").strip()
+        val = str(getattr(settings, "pipeline_fast_model", "") or "").strip()
+        if val:
+            out["llm_model"] = val
+
     if not str(out.get("llm_api_key", "") or "").strip():
-        out["llm_api_key"] = str(pipeline.get("fast_api_key", "") or "").strip()
+        val = str(getattr(settings, "deepseek_api_key", "") or "").strip()
+        if val:
+            out["llm_api_key"] = val
+
     if not str(out.get("llm_base_url", "") or "").strip():
-        # Prefer the full endpoint URL (includes /v1/chat/completions path) over bare base_url
-        endpoint_url = str(pipeline.get("fast_endpoint_url", "") or "").strip()
-        if endpoint_url:
-            out["llm_base_url"] = endpoint_url
-        else:
-            out["llm_base_url"] = str(pipeline.get("fast_base_url", "") or "").strip()
-    if not str(out.get("llm_api_key_env", "") or "").strip() and str(out.get("llm_api_key", "") or "").strip():
-        pass
-    # Default to 300s timeout for long papers
+        val = str(getattr(settings, "pipeline_fast_endpoint_url", "") or "").strip()
+        if val:
+            out["llm_base_url"] = val
+
     if not out.get("llm_timeout_seconds"):
         out["llm_timeout_seconds"] = 300
+
     return out
 
 
@@ -352,7 +385,7 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
     run_dir.mkdir(parents=True, exist_ok=True)
     input_pdf = Path(input_path).resolve()
     try:
-        parse_meta = _run_parse_pdf(job_id, input_pdf, run_dir, job_store)
+        parse_meta = _run_parse_pdf(job_id, input_pdf, run_dir, job_store, options)
         extract_result = _run_extract_entities(job_id, parse_meta, run_dir, job_store, options)
         _run_finalize(job_id, input_pdf, parse_meta, extract_result, run_dir, job_store, options)
     except Exception as exc:
