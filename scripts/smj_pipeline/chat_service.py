@@ -1263,42 +1263,7 @@ class ChatService:
                 )
                 result = fut.result(timeout=agent_timeout_seconds)
         except Exception as exc:
-            out_trace = list(tool_trace)
-            out_trace.append(
-                {
-                    "backend": backend,
-                    "step": len(out_trace) + 1,
-                    "state": "failed",
-                    "kind": "tool",
-                    "tool": f"{backend}.run_turn",
-                    "args": {"library_id": library_id},
-                    "summary": f"{backend}.run_turn timeout/failure",
-                    "result": {"error": str(exc)},
-                }
-            )
-            fallback_flag = str(os.getenv("CHAT_AGENT_FALLBACK_TO_FAST", "0") or "0").strip().lower()
-            allow_fallback = fallback_flag in {"1", "true", "yes", "on"}
-            if not allow_fallback:
-                raise RuntimeError(f"agent_backend_unavailable:{backend}:{exc}")
-            self._emit(message_id, "citation", {"phase": "agent_degraded", "reason": str(exc)})
-            degraded = self._run_fast(
-                message_id=message_id,
-                query=query,
-                provider=provider,
-                model=model,
-                stream=stream,
-                library_id=library_id,
-            )
-            out_trace.extend(list(degraded.get("tool_trace", [])))
-            retrieval_trace = degraded.get("retrieval_trace", {}) if isinstance(degraded.get("retrieval_trace"), dict) else {}
-            retrieval_trace["backend"] = f"{backend}_degraded_to_fast"
-            retrieval_trace["degraded_reason"] = str(exc)
-            return {
-                "answer": str(degraded.get("answer", "") or "").strip(),
-                "citations": list(degraded.get("citations", []) or []),
-                "retrieval_trace": retrieval_trace,
-                "tool_trace": out_trace,
-            }
+            raise RuntimeError(f"agent_backend_unavailable:{backend}:{exc}")
         self._emit(message_id, "status", {"stage": "generate", "label": f"正在由 {backend_label} 生成回答"})
 
         answer = str(result.get("answer", "") or "").strip()

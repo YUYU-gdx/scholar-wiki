@@ -16,31 +16,60 @@ _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _MOD
 _SPEC.loader.exec_module(_MOD)
 
-default_codex_config = _MOD.default_codex_config
-load_codex_config = _MOD.load_codex_config
 
-
-class AgentRunnerConfigTest(unittest.TestCase):
-    def test_default_config_uses_app_server_args(self) -> None:
-        cfg = default_codex_config()
-        self.assertIn("app-server", list(cfg.get("app_server_args", [])))
-        self.assertNotIn("exec", list(cfg.get("app_server_args", [])))
-
-    def test_load_config_normalizes_legacy_cli_fields(self) -> None:
+class AgentRunnerFactoryTest(unittest.TestCase):
+    def test_factory_builds_all_backends(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "codex_runner_config.json"
-            payload = {
-                "cli_command": "codex",
-                "cli_args": ["exec", "--cd", "{workdir}", "{prompt}"],
-                "healthcheck_args": ["--version"],
-                "timeout_seconds": 120,
-                "install_command": "",
-                "extra_env": {},
-            }
-            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            cfg = load_codex_config(path)
-            self.assertEqual(cfg.app_server_command, "codex")
-            self.assertIn("app-server", cfg.app_server_args)
+            config_path = Path(tmpdir) / "codex_runner_config.json"
+            config_path.write_text(json.dumps({"model": "gpt-5.2"}), encoding="utf-8")
+            factory = _MOD.AgentRunnerFactory(codex_config_path=config_path)
+
+            codex_runner = factory.build("codex")
+            self.assertEqual(codex_runner.backend, "codex")
+            self.assertEqual(codex_runner._codex_bin, "codex")
+            self.assertEqual(codex_runner._model, "gpt-5.2")
+
+            claude_runner = factory.build("claude_code")
+            self.assertEqual(claude_runner.backend, "claude_code")
+
+    def test_factory_defaults_model_when_config_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "nonexistent.json"
+            factory = _MOD.AgentRunnerFactory(codex_config_path=config_path)
+            codex_runner = factory.build("codex")
+            self.assertEqual(codex_runner._model, "gpt-5.2")
+
+    def test_factory_rejects_invalid_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "codex_runner_config.json"
+            config_path.write_text("{}", encoding="utf-8")
+            factory = _MOD.AgentRunnerFactory(codex_config_path=config_path)
+            with self.assertRaises(RuntimeError):
+                factory.build("nonexistent")
+
+
+class CodexRunnerHealthTest(unittest.TestCase):
+    def test_health_reports_available_or_reason(self) -> None:
+        runner = _MOD.CodexRunner(codex_bin="codex")
+        health = runner.health()
+        self.assertEqual(health["backend"], "codex")
+        self.assertIn("available", health)
+        self.assertIn("version", health)
+
+
+class NotificationToDictTest(unittest.TestCase):
+    def test_returns_method_and_params(self) -> None:
+        class FakePayload:
+            def model_dump(self, **kwargs):
+                return {"delta": "hello", "turn_id": "t1"}
+
+        class FakeNotification:
+            method = "item/agentMessage/delta"
+            payload = FakePayload()
+
+        result = _MOD._notification_to_dict(FakeNotification())
+        self.assertEqual(result["method"], "item/agentMessage/delta")
+        self.assertEqual(result["params"]["delta"], "hello")
 
 
 if __name__ == "__main__":

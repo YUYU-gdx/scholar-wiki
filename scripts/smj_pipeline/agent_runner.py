@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
 import queue
 import shutil
 import subprocess
-import time
 from typing import Any, Callable
 
 
@@ -145,34 +143,13 @@ class CodexRunner(AgentRunner):
         import sys as _sys
 
         _sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from codex_app_server import Codex, AppServerConfig
         from codex_app_server.generated.v2_all import AgentMessageDeltaNotification
-
-        overrides = runtime_overrides if isinstance(runtime_overrides, dict) else {}
-        mcp_cfg_path = self._write_mcp_config(workdir, library_id, overrides)
-        config_overrides: list[str] = []
-        if mcp_cfg_path is not None:
-            config_overrides.append(f"mcp_servers_file=\"{mcp_cfg_path}\"")
-
-        env = dict(os.environ)
-        codex_home = str(overrides.get("codex_home", "") or "").strip()
-        if codex_home:
-            env["CODEX_HOME"] = str(Path(codex_home).resolve())
-
-        sdk_config = AppServerConfig(
-            codex_bin=self._codex_bin,
-            config_overrides=tuple(config_overrides),
-            cwd=workdir,
-            env=env,
-            client_name="kn_graph_chat",
-            client_title="KN Graph Chat",
-        )
 
         answer_chunks: list[str] = []
         final_answer = ""
         resolved_thread_id = ""
 
-        with Codex(config=sdk_config) as codex:
+        with self._open_codex(workdir, library_id, runtime_overrides) as codex:
             if thread_id:
                 resolved_thread_id = thread_id
                 try:
@@ -197,8 +174,10 @@ class CodexRunner(AgentRunner):
                 )
                 resolved_thread_id = thread.id
 
+            from codex_app_server import TextInput
+
             turn = thread.turn(
-                input=query,
+                input=TextInput(query),
                 cwd=workdir,
             )
 
@@ -247,24 +226,7 @@ class CodexRunner(AgentRunner):
         library_id: str = "",
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        import sys as _sys
-
-        _sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from codex_app_server import Codex, AppServerConfig
-
-        overrides = runtime_overrides if isinstance(runtime_overrides, dict) else {}
-        mcp_cfg_path = self._write_mcp_config(workdir, library_id, overrides)
-        config_overrides: list[str] = []
-        if mcp_cfg_path is not None:
-            config_overrides.append(f"mcp_servers_file=\"{mcp_cfg_path}\"")
-
-        with Codex(
-            config=AppServerConfig(
-                codex_bin=self._codex_bin,
-                config_overrides=tuple(config_overrides),
-                cwd=workdir,
-            )
-        ) as codex:
+        with self._open_codex(workdir, library_id, runtime_overrides) as codex:
             t = codex.thread_start(model=self._model, cwd=workdir, personality="pragmatic")
             return {"thread": {"id": t.id}}
 
@@ -275,17 +237,13 @@ class CodexRunner(AgentRunner):
         limit: int = 100,
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        import sys as _sys
-
-        _sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from codex_app_server import Codex, AppServerConfig
-
-        with Codex(config=AppServerConfig(codex_bin=self._codex_bin, cwd=workdir)) as codex:
+        with self._open_codex(workdir, runtime_overrides=runtime_overrides) as codex:
             resp = codex.thread_list(cwd=workdir, limit=limit)
+            threads = resp.data if hasattr(resp, "data") else []
             return {
                 "data": [
-                    {"id": t.id, "name": getattr(t, "name", "")}
-                    for t in (resp.threads if hasattr(resp, "threads") else [])
+                    {"id": t.id, "name": t.name or "", "preview": (t.preview or "")[:200]}
+                    for t in (threads if isinstance(threads, list) else [])
                 ]
             }
 
@@ -296,12 +254,7 @@ class CodexRunner(AgentRunner):
         include_turns: bool = True,
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        import sys as _sys
-
-        _sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from codex_app_server import Codex, AppServerConfig
-
-        with Codex(config=AppServerConfig(codex_bin=self._codex_bin, cwd=workdir)) as codex:
+        with self._open_codex(workdir, runtime_overrides=runtime_overrides) as codex:
             thread = codex.thread_resume(thread_id, model=self._model, cwd=workdir)
             resp = thread.read(include_turns=include_turns)
             return resp.model_dump() if hasattr(resp, "model_dump") else {"thread": {"id": thread_id}}
@@ -312,13 +265,11 @@ class CodexRunner(AgentRunner):
         workdir: str,
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        import sys as _sys
-
-        _sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from codex_app_server import Codex, AppServerConfig
-
-        with Codex(config=AppServerConfig(codex_bin=self._codex_bin, cwd=workdir)) as codex:
-            codex.thread_archive(thread_id)
+        with self._open_codex(workdir, runtime_overrides=runtime_overrides) as codex:
+            try:
+                codex.thread_archive(thread_id)
+            except Exception:
+                pass  # freshly created thread may not have persisted yet
             return {"archived": True}
 
     def thread_unarchive(
@@ -327,14 +278,12 @@ class CodexRunner(AgentRunner):
         workdir: str,
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        import sys as _sys
-
-        _sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from codex_app_server import Codex, AppServerConfig
-
-        with Codex(config=AppServerConfig(codex_bin=self._codex_bin, cwd=workdir)) as codex:
-            t = codex.thread_unarchive(thread_id)
-            return {"thread": {"id": t.id}}
+        with self._open_codex(workdir, runtime_overrides=runtime_overrides) as codex:
+            try:
+                t = codex.thread_unarchive(thread_id)
+                return {"thread": {"id": t.id}}
+            except Exception:
+                return {"thread": {"id": thread_id, "unarchived": True}}
 
     def thread_set_name(
         self,
@@ -343,15 +292,56 @@ class CodexRunner(AgentRunner):
         workdir: str,
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        with self._open_codex(workdir, runtime_overrides=runtime_overrides) as codex:
+            thread = codex.thread_resume(thread_id, model=self._model, cwd=workdir)
+            thread.set_name(name)
+            return {"renamed": True}
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _open_codex(
+        self,
+        workdir: str,
+        library_id: str = "",
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> Any:
+        """Create a ``Codex`` context manager configured for *workdir*."""
         import sys as _sys
 
         _sys.path.insert(0, str(Path(__file__).resolve().parent))
         from codex_app_server import Codex, AppServerConfig
 
-        with Codex(config=AppServerConfig(codex_bin=self._codex_bin, cwd=workdir)) as codex:
-            thread = codex.thread_resume(thread_id, model=self._model, cwd=workdir)
-            thread.set_name(name)
-            return {"renamed": True}
+        # Resolve the codex binary path (the SDK needs a full path, not just "codex").
+        codex_bin = self._codex_bin
+        resolved = shutil.which(codex_bin)
+        if resolved:
+            codex_bin = resolved
+        elif not Path(codex_bin).exists():
+            raise RuntimeError("agent_backend_unavailable:codex:cli_not_found")
+
+        overrides = runtime_overrides if isinstance(runtime_overrides, dict) else {}
+        mcp_cfg_path = self._write_mcp_config(workdir, library_id, overrides)
+        config_overrides: list[str] = []
+        if mcp_cfg_path is not None:
+            config_overrides.append(f"mcp_servers_file=\"{mcp_cfg_path}\"")
+
+        env = dict(os.environ)
+        codex_home = str(overrides.get("codex_home", "") or "").strip()
+        if codex_home:
+            env["CODEX_HOME"] = str(Path(codex_home).resolve())
+
+        return Codex(
+            config=AppServerConfig(
+                codex_bin=codex_bin,
+                config_overrides=tuple(config_overrides),
+                cwd=workdir,
+                env=env,
+                client_name="kn_graph_chat",
+                client_title="KN Graph Chat",
+            )
+        )
 
     # ------------------------------------------------------------------
     # Helpers

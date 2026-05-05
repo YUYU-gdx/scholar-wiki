@@ -854,41 +854,32 @@ def make_handler(
         _agent_runner_mod = None
 
     def _load_codex_config_payload() -> dict[str, Any]:
-        if _agent_runner_mod is None:
-            return {}
-        cfg = _agent_runner_mod.load_codex_config(codex_config_path)
+        if codex_config_path.exists():
+            try:
+                data = json.loads(codex_config_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    data["config_path"] = str(codex_config_path.resolve())
+                    return data
+            except Exception:
+                pass
         return {
-            "app_server_command": str(cfg.app_server_command or ""),
-            "app_server_args": list(cfg.app_server_args),
-            "healthcheck_args": list(cfg.healthcheck_args),
-            "timeout_seconds": int(cfg.timeout_seconds),
-            "install_command": str(cfg.install_command or ""),
-            "extra_env": dict(cfg.extra_env),
-            "model": str(cfg.model or ""),
-            "approval_policy": str(cfg.approval_policy or ""),
-            "sandbox_mode": str(cfg.sandbox_mode or ""),
-            "personality": str(cfg.personality or ""),
-            "mcp_servers": list(cfg.mcp_servers),
+            "model": "gpt-5.2",
             "config_path": str(codex_config_path.resolve()),
+            "mcp_servers": [
+                {
+                    "name": "kn_graph_tools",
+                    "command": "uv",
+                    "args": ["run", "python", "-m", "scripts.smj_pipeline.kn_mcp_server"],
+                    "env": {},
+                }
+            ],
         }
 
     def _save_codex_config_payload(body: dict[str, Any]) -> dict[str, Any]:
         codex_config_path.parent.mkdir(parents=True, exist_ok=True)
         existing = _load_codex_config_payload()
         next_payload = dict(existing)
-        for key in (
-            "app_server_command",
-            "app_server_args",
-            "healthcheck_args",
-            "timeout_seconds",
-            "install_command",
-            "extra_env",
-            "model",
-            "approval_policy",
-            "sandbox_mode",
-            "personality",
-            "mcp_servers",
-        ):
+        for key in ("model", "mcp_servers", "install_command"):
             if key in body:
                 next_payload[key] = body.get(key)
         to_write = {k: v for k, v in next_payload.items() if k != "config_path"}
@@ -903,8 +894,7 @@ def make_handler(
             payload["suggestion"] = "check scripts/smj_pipeline/agent_runner.py exists and is importable"
             return payload
         try:
-            cfg = _agent_runner_mod.load_codex_config(codex_config_path)
-            runner = _agent_runner_mod.CodexRunner(cfg)
+            runner = _agent_runner_mod.CodexRunner(codex_bin="codex")
             health = runner.health()
             payload["detail"] = json.dumps(health, ensure_ascii=False)
             payload["version"] = str(health.get("version", "") or "")
@@ -1929,8 +1919,7 @@ def make_handler(
                 if _agent_runner_mod is None:
                     return _json(self, {"backend": "codex", "available": False, "reason": "agent_runner_module_unavailable"}, status=503)
                 try:
-                    cfg = _agent_runner_mod.load_codex_config(codex_config_path)
-                    runner = _agent_runner_mod.CodexRunner(cfg)
+                    runner = _agent_runner_mod.CodexRunner(codex_bin="codex")
                     payload = runner.health()
                     payload["config_path"] = str(codex_config_path.resolve())
                     status = 200 if bool(payload.get("available")) else 503

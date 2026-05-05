@@ -24,16 +24,7 @@ def _load_chat_service_class():
     return mod.ChatService, mod.InMemoryChatStore
 
 
-def _load_provider_registry_class():
-    module_path = _SCRIPTS_DIR / "llm" / "provider_registry.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_provider_registry_for_chat_service", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if spec.name not in sys.modules:
-        sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod.ProviderRegistry
+from kn_graph.providers.registry import ProviderRegistry  # noqa: E402
 
 
 def _load_agent_runner_module():
@@ -60,16 +51,7 @@ def _load_library_codex_config_module():
     return mod
 
 
-def _load_library_registry_module():
-    module_path = _SCRIPTS_DIR / "library_registry.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_library_registry_for_chat_svc", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if spec.name not in sys.modules:
-        sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+from kn_graph.services.library_registry import ensure_registry, resolve_workspace_root  # noqa: E402
 
 
 class ChatService:
@@ -122,11 +104,10 @@ class ChatService:
         if not target:
             return ""
         try:
-            reg_mod = _load_library_registry_module()
-            registry = reg_mod.ensure_registry(
+            registry = ensure_registry(
                 registry_path=self._settings.registry_path,
             )
-            return str(reg_mod.resolve_workspace_root(registry, target) or "").strip()
+            return str(resolve_workspace_root(registry, target) or "").strip()
         except Exception:
             return ""
 
