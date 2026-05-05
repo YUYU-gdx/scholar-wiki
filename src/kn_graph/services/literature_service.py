@@ -940,11 +940,11 @@ class LiteratureService:
     # ------------------------------------------------------------------
 
     def list_libraries(self) -> dict[str, Any]:
-        try:
-            registry = ensure_registry()
-            return list_libraries_payload(registry)
-        except Exception:
-            return {"libraries": [], "default_library_id": ""}
+        registry = ensure_registry(
+            registry_path=self._settings.registry_path,
+            legacy_index_root=self._settings.indexes_dir,
+        )
+        return list_libraries_payload(registry)
 
     def create_library(self, library_id: str, workspace_root: str = "", set_default: bool = True) -> dict[str, Any]:
         lib = str(library_id or "").strip()
