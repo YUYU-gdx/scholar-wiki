@@ -1,22 +1,20 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
-import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
 from kn_graph.providers.registry import ProviderRegistry
+from kn_graph.services.extraction_pipeline import run as run_extraction_mvp, NullLLMClient
 from kn_graph.services.graph_builder import _build_artifact_from_sqlite, run_build_from_artifact
 from kn_graph.services.import_sqlite import main_inline as _import_sqlite_main_inline
 from kn_graph.services.mineru_runner import parse_single_pdf
 from kn_graph.services.sqlite_repo import SqliteRepo
 
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
 
 
 class JobStore(Protocol):
@@ -35,21 +33,6 @@ def _norm_status(raw: Any) -> str:
 def _safe_json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-
-def _load_script_module(module_name: str, rel_path: str):
-    module_path = _SCRIPTS_DIR / rel_path
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if spec.name not in sys.modules:
-        sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _maybe_load_run_extraction_mvp():
-    return _load_script_module("smj_pipeline_run_extraction_mvp_for_kn_graph_runtime", "run_extraction_mvp.py")
 
 
 
@@ -108,7 +91,7 @@ def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore)
     return meta
 
 
-def _build_llm_client(run_mod: Any, options: dict[str, Any]) -> Any:
+def _build_llm_client(options: dict[str, Any]) -> Any:
     provider = str(options.get("llm_provider", "")).strip().lower() or None
     model = str(options.get("llm_model", "")).strip() or None
     provider_options = {
@@ -129,7 +112,7 @@ def _build_llm_client(run_mod: Any, options: dict[str, Any]) -> Any:
             options=provider_options,
         )
     except Exception:
-        return run_mod.NullLLMClient()
+        return NullLLMClient()
 
 
 def _run_extract_entities(job_id: str, parse_meta: dict[str, Any], run_dir: Path, store: JobStore, options: dict[str, Any]) -> dict[str, Any]:
@@ -138,7 +121,6 @@ def _run_extract_entities(job_id: str, parse_meta: dict[str, Any], run_dir: Path
         store.update_job(job_id, {"status": "cancelled", "last_event": "cancelled", "stage": "extract_entities"})
         raise RuntimeError("job_cancelled")
 
-    run_mod = _maybe_load_run_extraction_mvp()
     html_path = Path(str(parse_meta.get("html_path", "")))
     if not html_path.exists():
         raise RuntimeError(f"missing_html_for_extraction:{html_path}")
@@ -150,8 +132,8 @@ def _run_extract_entities(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     report_path = extract_dir / "acceptance_report.md"
 
     row = {"paper_id": job_id, "doi": f"job::{job_id}", "html": html_path.read_text(encoding="utf-8", errors="ignore")}
-    client = _build_llm_client(run_mod, options)
-    artifacts = run_mod.run(
+    client = _build_llm_client(options)
+    artifacts = run_extraction_mvp(
         [row],
         sample_size=1,
         llm_client=client,

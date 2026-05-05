@@ -1,0 +1,9 @@
+Verdict: PASS
+Timestamp: 2026-05-04T23:31:50.347773
+Summary: Jobs persist after navigation (17 rows)
+Details:
+  - Navigated to Library: True
+  - Intermediate screenshot at Library view saved
+  - Navigated back to Pipeline: True
+  - Job rows after navigation: 17
+  - Empty state hidden when jobs present: True

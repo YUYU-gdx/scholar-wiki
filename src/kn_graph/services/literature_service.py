@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import html
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -17,6 +16,7 @@ from typing import Any
 import requests
 
 from kn_graph.core.runtime import build_weaviate_base_url_candidates
+from kn_graph.providers.zhipu import ZhipuChatCompletionsClient
 from kn_graph.services.library_registry import (
     create_library as _libreg_create_library,
     delete_library as _libreg_delete_library,
@@ -25,18 +25,6 @@ from kn_graph.services.library_registry import (
     resolve_workspace_root,
 )
 from kn_graph.services.mineru_runner import parse_single_pdf
-
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
-
-
-def _load_zhipu_client_class():
-    module_path = _SCRIPTS_DIR / "llm" / "zhipu_client.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_llm_zhipu_client_for_literature", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.ZhipuChatCompletionsClient
 
 
 _SENTENCE_END_RE = re.compile(r"[^。！？!?\.]+[。！？!?\.]?")
@@ -945,8 +933,7 @@ class LiteratureService:
         if not api_key:
             raise RuntimeError("missing env: ZHIPU_API_KEY")
         model = os.getenv("LITERATURE_CHAT_MODEL", "glm-4.5-flash").strip() or "glm-4.5-flash"
-        zhipu_cls = _load_zhipu_client_class()
-        return zhipu_cls(api_key=api_key, model=model)
+        return ZhipuChatCompletionsClient(api_key=api_key, model=model)
 
     # ------------------------------------------------------------------
     # Library CRUD (delegates to kn_graph.services.library_registry)

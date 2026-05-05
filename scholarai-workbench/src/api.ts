@@ -107,7 +107,7 @@ export const api = {
       const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
       return jsonFetch(`/chat/sessions/${encodeURIComponent(sessionId)}/restore${params}`, { method: 'POST' });
     },
-    sendMessage(sessionId: string, content: string, libraryId: string = '', mode: string = 'agent', provider: string = 'codex', model: string = 'codex-local', stream: boolean = true): Promise<SendMessageResponse> {
+    sendMessage(sessionId: string, content: string, libraryId: string = '', mode: string = 'agent', provider: string = '', model: string = 'codex-local', stream: boolean = true): Promise<SendMessageResponse> {
       return jsonFetch(`/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: 'POST',
         body: JSON.stringify({ content, library_id: libraryId, mode, provider, model, stream }),

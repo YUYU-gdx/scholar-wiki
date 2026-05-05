@@ -1,0 +1,7 @@
+Verdict: PASS
+Timestamp: 2026-05-04T23:31:30.596858
+Summary: After selecting PDF: filename shown, Import enabled
+Details:
+  - Filename 'STRATEGIC MANAGEMENT JOURNAL_83.pdf' shown: True
+  - File size in KB shown: True
+  - Import button enabled: True

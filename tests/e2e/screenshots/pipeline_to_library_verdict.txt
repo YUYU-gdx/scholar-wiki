@@ -1,0 +1,27 @@
+PIPELINE-TO-LIBRARY E2E VERDICT
+======================================================================
+Timestamp: 2026-05-05T00:20:14.697113
+Verdict: PASS
+
+--- Test PDF ---
+File: A framework for supply chain sustainability in service industry with Confirmatory Factor Analysis.pdf
+Size: 839,060 bytes
+Library: e2e_test
+
+--- Results ---
+  [PASS] step1_upload
+  [PASS] step2_job_completed
+  [PASS] step3_graph_reloaded
+  [PASS] step4_api_contains_paper
+  [PASS] step5_title_visible
+  [PASS] step5_variables_section
+  [PASS] step5_cards_visible
+  [PASS] step6_expand_variables
+
+--- Details ---
+Upload: job_id=job_c5ed36990ab54efc8e047a24500f52a5
+Pipeline: completed (stage=finalize)
+API: OK: Real title: A framework for supply chain sustainability in service industry with Confirmatory Factor Analysis
+
+--- Console Errors ---
+none

@@ -1,25 +1,9 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
 from typing import Any
 
 from kn_graph.config import Settings
-
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
-
-
-def _load_workspace_layout_store_class():
-    module_path = _SCRIPTS_DIR / "workspace_layout_store.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_workspace_layout_store_for_service", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if spec.name not in sys.modules:
-        sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod.WorkspaceLayoutStore
+from kn_graph.services.workspace_layout_store import WorkspaceLayoutStore
 
 
 class WorkspaceService:
@@ -32,9 +16,8 @@ class WorkspaceService:
         if self._store is not None:
             return self._store
         try:
-            cls = _load_workspace_layout_store_class()
             storage_path = self._settings.workspace_layouts_path
-            self._store = cls(storage_path=storage_path)
+            self._store = WorkspaceLayoutStore(storage_path=storage_path)
         except Exception as exc:
             self._store = _InMemoryWorkspaceLayoutStore()
             self._degraded_reason = f"workspace_layout_store_load_failed:{exc}"

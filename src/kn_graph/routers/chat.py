@@ -241,11 +241,11 @@ def create_router(chat_service: ChatService) -> APIRouter:
             "code": "mcp_probe_failed",
             "detail": "",
         }
-        probe_script = Path("scripts/smj_pipeline/mcp_probe.py")
+        probe_script = Path(__file__).resolve().parent.parent / "services" / "mcp_probe.py"
         if not probe_script.exists():
             mcp_check["code"] = "mcp_probe_script_missing"
             mcp_check["detail"] = str(probe_script)
-            mcp_check["suggestion"] = "确认 scripts/smj_pipeline/mcp_probe.py 已存在"
+            mcp_check["suggestion"] = "确认 kn_graph/services/mcp_probe.py 已存在"
         else:
             base_url = f"http://127.0.0.1:8013"
             try:

@@ -1,56 +1,17 @@
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 import time
 from pathlib import Path
 from typing import Any, Iterator
 
 from kn_graph.config import Settings
 
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
-
-
-def _load_chat_service_class():
-    module_path = _SCRIPTS_DIR / "chat_service.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_chat_service_for_service", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if spec.name not in sys.modules:
-        sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod.ChatService, mod.InMemoryChatStore
-
-
+from kn_graph.services.chat_legacy import ChatService as LegacyChatService, InMemoryChatStore
+from kn_graph.services.agent_runner import AgentRunnerFactory
+from kn_graph.services.codex_library_config import load_or_init_library_codex_config, bootstrap_library_codex_config, save_library_codex_config as _save_cfg
 from kn_graph.providers.registry import ProviderRegistry  # noqa: E402
-
-
-def _load_agent_runner_module():
-    module_path = _SCRIPTS_DIR / "agent_runner.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_agent_runner_for_chat_service", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if spec.name not in sys.modules:
-        sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _load_library_codex_config_module():
-    module_path = _SCRIPTS_DIR / "codex_library_config.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_codex_library_config_for_chat_service", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if spec.name not in sys.modules:
-        sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
+from kn_graph.services.agent_runner import CodexRunner  # noqa: E402
 from kn_graph.services.library_registry import ensure_registry, resolve_workspace_root  # noqa: E402
 
 
@@ -67,7 +28,7 @@ class ChatService:
             if current:
                 self._chat._agent_backend = current
             return self._chat
-        ChatServiceCls, _ = _load_chat_service_class()
+        ChatServiceCls = LegacyChatService
 
         from kn_graph.services.literature_service import LiteratureService
         literature = LiteratureService(self._settings)
@@ -112,8 +73,7 @@ class ChatService:
 
     def _resolve_library_codex_config(self, workspace_path: str, library_id: str) -> dict[str, Any]:
         try:
-            codex_cfg_mod = _load_library_codex_config_module()
-            return codex_cfg_mod.load_or_init_library_codex_config(workspace_path=workspace_path, library_id=library_id)
+            return load_or_init_library_codex_config(workspace_path=workspace_path, library_id=library_id)
         except Exception:
             return {}
 
@@ -142,7 +102,7 @@ class ChatService:
         session_id: str,
         content: str,
         mode: str = "agent",
-        provider: str = "codex",
+        provider: str = "",
         model: str = "codex-local",
         stream: bool = True,
         library_id: str = "",
@@ -179,7 +139,7 @@ class ChatService:
                 {
                     "name": "kn_graph_tools",
                     "command": "uv",
-                    "args": ["run", "python", "-m", "scripts.smj_pipeline.kn_mcp_server"],
+                    "args": ["run", "python", str(Path(__file__).resolve().parent / "mcp_server.py")],
                     "env": {},
                 }
             ],
@@ -328,8 +288,7 @@ class ChatService:
 
     def check_codex_health(self) -> dict[str, Any]:
         try:
-            agent_runner_mod = _load_agent_runner_module()
-            runner = agent_runner_mod.CodexRunner(codex_bin="codex")
+            runner = CodexRunner(codex_bin="codex")
             health = runner.health()
             return {
                 "backend": "codex",
@@ -524,8 +483,7 @@ class ChatService:
         if not workspace:
             return {"error": "codex_workspace_path_missing", "library_id": lib}
         try:
-            codex_cfg_mod = _load_library_codex_config_module()
-            cfg = codex_cfg_mod.load_or_init_library_codex_config(workspace_path=workspace, library_id=lib)
+            cfg = load_or_init_library_codex_config(workspace_path=workspace, library_id=lib)
             cfg["workspace_path"] = workspace
             return cfg
         except Exception:
@@ -539,14 +497,13 @@ class ChatService:
         if not workspace:
             return {"error": "codex_workspace_path_missing", "library_id": lib}
         try:
-            codex_cfg_mod = _load_library_codex_config_module()
-            current = codex_cfg_mod.load_or_init_library_codex_config(workspace_path=workspace, library_id=lib)
+            current = load_or_init_library_codex_config(workspace_path=workspace, library_id=lib)
             next_payload = dict(current)
             for key in ("codex_home", "mcp_servers", "project_skills"):
                 if key in body:
                     next_payload[key] = body.get(key)
             next_payload["library_id"] = lib
-            saved = codex_cfg_mod.save_library_codex_config(workspace_path=workspace, payload=next_payload)
+            saved = _save_cfg(workspace_path=workspace, payload=next_payload)
             saved["workspace_path"] = workspace
             return saved
         except Exception:
@@ -560,8 +517,7 @@ class ChatService:
         if not workspace:
             return {"error": "codex_workspace_path_missing", "library_id": lib}
         try:
-            codex_cfg_mod = _load_library_codex_config_module()
-            cfg = codex_cfg_mod.bootstrap_library_codex_config(workspace_path=workspace, library_id=lib)
+            cfg = bootstrap_library_codex_config(workspace_path=workspace, library_id=lib)
             skills = cfg.get("project_skills", [])
             return {
                 "ok": True,

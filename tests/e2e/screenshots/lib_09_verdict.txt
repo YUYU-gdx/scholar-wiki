@@ -1,0 +1,8 @@
+VERDICT: PASS
+Timestamp: 2026-05-04T23:49:31.591496
+
+Variables heading found: True
+Table rows: 5
+Sample cells: ['Digital Transformation', 'Integration of digital technology into all areas of a business.', 'doi_10_5678_digi_2025', '跳转', 'Firm Performance', 'Overall operational and financial outcomes of a firm.']
+Switch back to Papers ok: True
+

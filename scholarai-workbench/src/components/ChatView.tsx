@@ -158,7 +158,7 @@ export default function ChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [mode, setMode] = useState<'fast' | 'agent'>('agent');
-  const [provider, setProvider] = useState('codex');
+  const [provider, setProvider] = useState('');
   const [model, setModel] = useState('codex-local');
   const [submitting, setSubmitting] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
