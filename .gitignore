@@ -39,3 +39,4 @@ skills/
 frontend_legacy/**/node_modules/
 frontend_legacy/**/dist/
 .tmp/
+scripts/
