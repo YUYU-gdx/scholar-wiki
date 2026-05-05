@@ -559,6 +559,46 @@ def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
     if not out.get("llm_timeout_seconds"):
         out["llm_timeout_seconds"] = 300
 
+    # extraction_mode
+    if not str(out.get("extraction_mode", "") or "").strip():
+        val = str(getattr(settings, "pipeline_extraction_mode", "fast") or "fast").strip()
+        out["extraction_mode"] = val
+
+    # pipeline_agent_backend
+    if not str(out.get("pipeline_agent_backend", "") or "").strip():
+        val = str(getattr(settings, "pipeline_agent_backend", "codex") or "codex").strip()
+        out["pipeline_agent_backend"] = val
+
+    # pipeline_agent_provider
+    if not str(out.get("pipeline_agent_provider", "") or "").strip():
+        val = str(getattr(settings, "pipeline_agent_provider", "") or "").strip()
+        if val:
+            out["pipeline_agent_provider"] = val
+
+    # pipeline_agent_model
+    if not str(out.get("pipeline_agent_model", "") or "").strip():
+        val = str(getattr(settings, "pipeline_agent_model", "") or "").strip()
+        if val:
+            out["pipeline_agent_model"] = val
+
+    # pipeline_agent_api_key
+    if not str(out.get("pipeline_agent_api_key", "") or "").strip():
+        val = str(getattr(settings, "pipeline_agent_api_key", "") or "").strip()
+        if val:
+            out["pipeline_agent_api_key"] = val
+
+    # pipeline_agent_base_url
+    if not str(out.get("pipeline_agent_base_url", "") or "").strip():
+        val = str(getattr(settings, "pipeline_agent_base_url", "") or "").strip()
+        if val:
+            out["pipeline_agent_base_url"] = val
+
+    # pipeline_agent_endpoint_url
+    if not str(out.get("pipeline_agent_endpoint_url", "") or "").strip():
+        val = str(getattr(settings, "pipeline_agent_endpoint_url", "") or "").strip()
+        if val:
+            out["pipeline_agent_endpoint_url"] = val
+
     return out
 
 
