@@ -3,30 +3,30 @@
     "passed": true,
     "detail": "All 6 panels rendered content (no blank pages)",
     "screenshot": "D:\\Code\\kn_gragh\\tests\\e2e\\oracle_screenshots\\01_panel_settings_final.png",
-    "timestamp": "2026-05-04T23:34:50"
+    "timestamp": "2026-05-05T16:24:06"
   },
   "test_02_settings_persistence": {
     "passed": true,
-    "detail": "target_lang persisted as 'ja' (expected 'ja')",
+    "detail": "target_lang persisted as 'en' (expected 'en')",
     "screenshot": "D:\\Code\\kn_gragh\\tests\\e2e\\oracle_screenshots\\02_settings_final.png",
-    "timestamp": "2026-05-04T23:35:18"
+    "timestamp": "2026-05-05T16:24:37"
   },
   "test_03_sidebar_headings": {
     "passed": true,
     "detail": "OK: Library; OK: Graph; OK: Chat; OK: Reader; OK: Pipeline; OK: Settings",
     "screenshot": "D:\\Code\\kn_gragh\\tests\\e2e\\oracle_screenshots\\03_heading_settings.png",
-    "timestamp": "2026-05-04T23:35:48"
+    "timestamp": "2026-05-05T16:25:10"
   },
   "test_04_full_round_trip": {
     "passed": true,
     "detail": "Round trip: OK: Graph; OK: Library; OK: Pipeline; OK: Settings; OK: Chat; OK: Reader",
     "screenshot": "D:\\Code\\kn_gragh\\tests\\e2e\\oracle_screenshots\\04_roundtrip_final.png",
-    "timestamp": "2026-05-04T23:36:25"
+    "timestamp": "2026-05-05T16:25:51"
   },
   "test_05_sidebar_counts": {
     "passed": true,
     "detail": "Stats: Nodes=0, Edges=0, Papers=0",
     "screenshot": "D:\\Code\\kn_gragh\\tests\\e2e\\oracle_screenshots\\05_sidebar_final.png",
-    "timestamp": "2026-05-04T23:36:32"
+    "timestamp": "2026-05-05T16:26:00"
   }
 }
