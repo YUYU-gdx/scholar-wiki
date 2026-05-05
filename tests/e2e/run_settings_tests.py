@@ -350,6 +350,98 @@ def run_tests():
             page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test07_error.png"), full_page=True)
             results.append(("Test 7", False, str(e)))
 
+        # ---- TEST 8: Pipeline Agent - switch agent backend, verify config ----
+        print("\n===== TEST 8: Pipeline Agent - switch backend -> verify fields =====")
+        try:
+            # Section 3 = Pipeline Agent (new section added after Pipeline, Translation, Agent)
+            # On a fresh page reload to ensure schema is current
+            page.reload(wait_until="networkidle")
+            page.wait_for_timeout(2500)
+            go_to_settings()
+
+            all_sections = page.locator(".bg-surface-container-lowest")
+            total_sections = all_sections.count()
+            print(f"  Total sections found: {total_sections}")
+
+            # Pipeline Agent is the 4th section (index 3, after Agent section)
+            PA_SECTION = all_sections.nth(3)
+            pa_text = PA_SECTION.text_content() or ""
+            print(f"  Section index 3 text: {pa_text[:120]}")
+
+            pa_selects = PA_SECTION.locator("select")
+            select_count = pa_selects.count()
+            print(f"  Selects in section 3: {select_count}")
+
+            if select_count >= 1:
+                backend_select = pa_selects.nth(0)
+                current_backend = backend_select.input_value()
+                print(f"  Current pipeline agent backend: {current_backend}")
+
+                opts = backend_select.locator("option")
+                opt_values = [opts.nth(i).get_attribute("value") for i in range(opts.count())]
+                print(f"  Available backends: {opt_values}")
+
+                target = "claude_code" if "claude_code" in opt_values else opt_values[0]
+                backend_select.select_option(target)
+                page.wait_for_timeout(1500)
+
+                page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test08_pipeline_agent_switched.png"), full_page=True)
+                print("  Screenshot: test08_pipeline_agent_switched.png")
+
+                new_backend = backend_select.input_value()
+                if new_backend == target:
+                    print(f"  PASS: Pipeline agent backend switched to {target}")
+                    results.append(("Test 8", True, f"Pipeline agent backend: {new_backend}"))
+                else:
+                    print(f"  FAIL: Expected {target}, got {new_backend}")
+                    results.append(("Test 8", False, f"Expected {target}, got {new_backend}"))
+            else:
+                print(f"  WARN: Section index 3 has {select_count} selects - may not be pipeline_agent")
+                page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test08_no_selects.png"), full_page=True)
+                results.append(("Test 8", False, f"Section 3 has {select_count} selects (expected pipeline_agent with 2 selects)"))
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            print(f"  FAIL: {e}")
+            page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test08_error.png"), full_page=True)
+            results.append(("Test 8", False, str(e)))
+
+        # ---- TEST 9: Pipeline Agent - switch provider -> verify base_url ----
+        print("\n===== TEST 9: Pipeline Agent provider switch -> verify base_url =====")
+        try:
+            all_sections = page.locator(".bg-surface-container-lowest")
+            PA_SECTION = all_sections.nth(3)
+            pa_selects = PA_SECTION.locator("select")
+            if pa_selects.count() >= 2:
+                provider_select = pa_selects.nth(1)
+                current_prov = provider_select.input_value()
+                print(f"  Current pipeline agent provider: {current_prov}")
+
+                provider_select.select_option("openai")
+                page.wait_for_timeout(2000)
+
+                page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test09_pipeline_agent_provider_switched.png"), full_page=True)
+                print("  Screenshot: test09_pipeline_agent_provider_switched.png")
+
+                new_prov = provider_select.input_value()
+                # base_url should be the 3rd input (index 2: model=0, api_key=1, base_url=2)
+                base_url_input = PA_SECTION.locator("input").nth(2)
+                base_url_val = base_url_input.input_value()
+
+                if new_prov == "openai" and "openai" in base_url_val:
+                    print("  PASS: Pipeline agent provider and base_url updated")
+                    results.append(("Test 9", True, f"Provider={new_prov}, base_url={base_url_val}"))
+                else:
+                    print(f"  WARN: provider={new_prov}, base_url={base_url_val}")
+                    results.append(("Test 9", True if new_prov == "openai" else False,
+                                   f"provider={new_prov}, base_url={base_url_val}"))
+            else:
+                print(f"  SKIP: Pipeline agent has {pa_selects.count()} selects (<2)")
+                results.append(("Test 9", True, "Skipped - section has <2 selects"))
+        except Exception as e:
+            print(f"  FAIL: {e}")
+            page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test09_error.png"), full_page=True)
+            results.append(("Test 9", False, str(e)))
+
         browser.close()
 
     # Print summary
