@@ -129,6 +129,70 @@ class SettingsService:
                     self._settings.deepseek_api_key = str(body["fast_api_key"]).strip()
         return self._get_pipeline_category()
 
+    def _get_pipeline_agent_category(self) -> dict[str, Any]:
+        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map, provider_presets  # noqa: F811
+        store = self._read_store()
+        saved = store.get("categories", {}).get("pipeline_agent", {})
+        if not isinstance(saved, dict):
+            saved = {}
+        backend = str(saved.get("backend", "") or "codex").strip().lower()
+        if backend not in ("codex", "claude_code", "gemini_cli"):
+            backend = "codex"
+        provider = str(saved.get("provider", "") or "deepseek").strip()
+        base_url = str(saved.get("base_url", "") or "").strip()
+        if not base_url:
+            base_url = (provider_map().get(provider, {})).get("base_url", "")
+        return {
+            "backend": backend,
+            "provider": provider,
+            "model": str(saved.get("model", "") or ""),
+            "api_key": str(saved.get("api_key", "") or ""),
+            "base_url": base_url,
+            "endpoint_url": str(saved.get("endpoint_url", "") or default_endpoint_url(base_url)),
+            "provider_presets": provider_presets(),
+        }
+
+    def _save_pipeline_agent_category(self, body: dict[str, Any]) -> dict[str, Any]:
+        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map  # noqa: F811
+        store = self._read_store()
+        categories = store.get("categories", {}) if isinstance(store.get("categories"), dict) else {}
+        saved = categories.get("pipeline_agent", {}) if isinstance(categories.get("pipeline_agent"), dict) else {}
+        if not isinstance(saved, dict):
+            saved = {}
+        if "backend" in body:
+            backend = str(body.get("backend", "") or "codex").strip().lower()
+            if backend not in ("codex", "claude_code", "gemini_cli"):
+                raise ValueError("settings_validation_failed: pipeline_agent.backend")
+            saved["backend"] = backend
+        for key in ("provider", "model", "api_key", "base_url", "endpoint_url"):
+            if key in body:
+                saved[key] = str(body.get(key, "") or "").strip()
+        provider = str(saved.get("provider", "") or "deepseek").strip()
+        base_url = str(saved.get("base_url", "") or "").strip()
+        if not base_url:
+            base_url = (provider_map().get(provider, {})).get("base_url", "")
+            if base_url:
+                saved["base_url"] = base_url
+        if not str(saved.get("endpoint_url", "") or "").strip():
+            saved["endpoint_url"] = default_endpoint_url(base_url)
+        categories["pipeline_agent"] = saved
+        store["categories"] = categories
+        self._write_store(store)
+        # Sync to live Settings
+        if "backend" in body:
+            self._settings.pipeline_agent_backend = str(body.get("backend", "")).strip()
+        if "provider" in body:
+            self._settings.pipeline_agent_provider = str(body.get("provider", "")).strip()
+        if "model" in body:
+            self._settings.pipeline_agent_model = str(body.get("model", "")).strip()
+        if "api_key" in body:
+            self._settings.pipeline_agent_api_key = str(body.get("api_key", "")).strip()
+        if "base_url" in body:
+            self._settings.pipeline_agent_base_url = str(body.get("base_url", "")).strip()
+        if "endpoint_url" in body:
+            self._settings.pipeline_agent_endpoint_url = str(body.get("endpoint_url", "")).strip()
+        return self._get_pipeline_agent_category()
+
     def _get_translation_category(self) -> dict[str, Any]:
         return self._chat_service.get_translation_provider_config()
 
@@ -152,6 +216,7 @@ class SettingsService:
             "version": 2,
             "categories": [
                 {"id": "pipeline", "title": "Pipeline", "restart_required": False},
+                {"id": "pipeline_agent", "title": "Pipeline Agent", "restart_required": False},
                 {"id": "translation", "title": "翻译", "restart_required": False},
                 {"id": "agent_settings", "title": "Agent 设置", "restart_required": True},
             ],
@@ -164,6 +229,7 @@ class SettingsService:
             "schema": self.get_schema(),
             "settings": {
                 "pipeline": pipeline,
+                "pipeline_agent": attach_provider_meta(self._get_pipeline_agent_category()),
                 "translation": translation,
                 "agent_settings": self._chat_service.get_agent_settings(),
             },
@@ -175,6 +241,8 @@ class SettingsService:
         payload = body if isinstance(body, dict) else {}
         if key == "pipeline":
             return self._save_pipeline_category(payload)
+        if key == "pipeline_agent":
+            return self._save_pipeline_agent_category(payload)
         if key == "translation":
             return self._save_translation_category(payload)
         if key == "agent_settings":
