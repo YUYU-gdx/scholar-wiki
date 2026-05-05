@@ -39,6 +39,17 @@ class Settings(BaseModel):
     pipeline_fast_model: str = ""
     pipeline_fast_endpoint_url: str = ""
 
+    # Pipeline extraction mode: "fast" (direct LLM) or "agent" (agent-driven)
+    pipeline_extraction_mode: str = "fast"
+
+    # Pipeline agent (used when extraction_mode == "agent")
+    pipeline_agent_backend: str = "codex"
+    pipeline_agent_provider: str = "deepseek"
+    pipeline_agent_model: str = ""
+    pipeline_agent_api_key: str = ""
+    pipeline_agent_base_url: str = ""
+    pipeline_agent_endpoint_url: str = ""
+
     # API Keys
     mineru_api_key: str = ""
     zhipu_api_key: str = ""
@@ -122,6 +133,33 @@ class Settings(BaseModel):
                     key = str(provider_data.get("api_key", "") or "").strip()
                     if key and not getattr(self, field_name, ""):
                         setattr(self, field_name, key)
+
+        # extraction_mode
+        mode = str(pipeline.get("extraction_mode", "") or "").strip().lower()
+        if mode in ("fast", "agent"):
+            self.pipeline_extraction_mode = mode
+
+        # pipeline_agent
+        pa = store.get("categories", {}).get("pipeline_agent", {})
+        if isinstance(pa, dict):
+            backend = str(pa.get("backend", "") or "").strip()
+            if backend in ("codex", "claude_code", "gemini_cli"):
+                self.pipeline_agent_backend = backend
+            provider = str(pa.get("provider", "") or "").strip()
+            if provider:
+                self.pipeline_agent_provider = provider
+            model = str(pa.get("model", "") or "").strip()
+            if model:
+                self.pipeline_agent_model = model
+            api_key = str(pa.get("api_key", "") or "").strip()
+            if api_key:
+                self.pipeline_agent_api_key = api_key
+            base_url = str(pa.get("base_url", "") or "").strip()
+            if base_url:
+                self.pipeline_agent_base_url = base_url
+            endpoint_url = str(pa.get("endpoint_url", "") or "").strip()
+            if endpoint_url:
+                self.pipeline_agent_endpoint_url = endpoint_url
 
     # ------------------------------------------------------------------
     # Derived paths
