@@ -50,8 +50,8 @@ def create_router(chat_service: ChatService) -> APIRouter:
             mode = str(body.mode or "agent").strip().lower() or "agent"
             if mode not in {"agent", "fast"}:
                 mode = "agent"
-            provider = str(body.provider or "codex").strip() or "codex"
-            model = str(body.model or "").strip() or ("codex-local" if provider == "codex" else "")
+            provider = str(body.provider or "").strip() or ""
+            model = str(body.model or "").strip() or ""
             payload = chat_service.send_message(
                 session_id=session_id,
                 content=content,
@@ -247,7 +247,7 @@ def create_router(chat_service: ChatService) -> APIRouter:
             mcp_check["detail"] = str(probe_script)
             mcp_check["suggestion"] = "确认 kn_graph/services/mcp_probe.py 已存在"
         else:
-            base_url = f"http://127.0.0.1:8013"
+            base_url = f"http://{chat_service._settings.host}:{chat_service._settings.port}"
             try:
                 proc = subprocess.run(
                     [sys.executable, str(probe_script), "--api-base-url", base_url, "--library-id", library_id, "--query", "supply chain resilience", "--top-k", "1"],

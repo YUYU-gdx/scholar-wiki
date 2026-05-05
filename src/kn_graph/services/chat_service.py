@@ -53,6 +53,8 @@ class ChatService:
             library_workspace_resolver_fn=self._resolve_library_workspace,
             library_codex_config_resolver_fn=self._resolve_library_codex_config,
         )
+        # Inject settings so legacy chat can access non-agent config
+        self._chat._settings = self._settings
         # Set the initial backend from persisted settings.
         current = self._get_current_agent()
         if current:

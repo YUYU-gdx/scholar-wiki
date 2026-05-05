@@ -161,6 +161,7 @@ export default function ChatView() {
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('codex-local');
   const [submitting, setSubmitting] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const [showModeSwitcher, setShowModeSwitcher] = useState(false);
   const [citationModal, setCitationModal] = useState<CitationType | null>(null);
@@ -201,12 +202,15 @@ export default function ChatView() {
   }, [setActiveSessionId]);
 
   const createSession = async () => {
+    if (creating) return;
+    setCreating(true);
     try {
       const session = await api.chat.createSession('新会话', activeLibraryId, mode);
       setSessions(prev => [session, ...prev]);
       setActiveSessionId(session.session_id);
       setMessages([]);
     } catch { /* ignore */ }
+    finally { setCreating(false); }
   };
 
   const deleteSession = async (sessionId: string) => {
@@ -341,7 +345,7 @@ export default function ChatView() {
       <aside className="w-72 border-r border-outline-variant bg-surface-container-low flex flex-col">
         <div className="p-4 border-b border-outline-variant flex justify-between items-center">
           <h2 className="text-[10px] font-bold text-on-surface uppercase tracking-widest font-mono">Sessions</h2>
-          <button onClick={createSession} className="text-secondary hover:bg-secondary-container/20 p-1.5 rounded-lg transition-all">
+          <button onClick={createSession} disabled={creating} className="text-secondary hover:bg-secondary-container/20 p-1.5 rounded-lg transition-all disabled:opacity-40">
             <PlusSquare className="w-4 h-4" />
           </button>
         </div>
@@ -376,9 +380,9 @@ export default function ChatView() {
               </div>
               <h3 className="text-lg font-medium text-on-surface">Select or create a session</h3>
               <p className="text-sm text-on-surface-variant">Choose a session from the sidebar or create a new one.</p>
-              <button onClick={createSession} className="bg-secondary text-on-secondary px-6 py-2.5 rounded-xl text-sm font-bold hover:opacity-90 transition-all flex items-center gap-2 mx-auto">
-                <PlusSquare className="w-4 h-4" />
-                New Session
+              <button onClick={createSession} disabled={creating} className="bg-secondary text-on-secondary px-6 py-2.5 rounded-xl text-sm font-bold hover:opacity-90 transition-all flex items-center gap-2 mx-auto disabled:opacity-50">
+                {creating ? <span className="inline-block w-4 h-4 border-2 border-on-secondary/30 border-t-on-secondary rounded-full animate-spin" /> : <PlusSquare className="w-4 h-4" />}
+                {creating ? 'Creating...' : 'New Session'}
               </button>
             </div>
           </div>

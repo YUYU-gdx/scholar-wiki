@@ -101,9 +101,10 @@ class CodexRunner(AgentRunner):
 
     backend = "codex"
 
-    def __init__(self, codex_bin: str = "codex", model: str = "gpt-5.2") -> None:
+    def __init__(self, codex_bin: str = "codex", model: str = "gpt-5.2", agent_config: dict[str, Any] | None = None) -> None:
         self._codex_bin = codex_bin
         self._model = model
+        self._agent_config = dict(agent_config or {})
 
     # ------------------------------------------------------------------
     # AgentRunner interface
@@ -334,6 +335,14 @@ class CodexRunner(AgentRunner):
         codex_home = str(overrides.get("codex_home", "") or "").strip()
         if codex_home:
             env["CODEX_HOME"] = str(Path(codex_home).resolve())
+        # Inject agent provider config as env vars
+        ac = self._agent_config
+        agent_api_key = str(ac.get("api_key", "") or "").strip()
+        agent_base_url = str(ac.get("base_url", "") or "").strip()
+        if agent_api_key:
+            env["CODEX_API_KEY"] = agent_api_key
+        if agent_base_url:
+            env["CODEX_BASE_URL"] = agent_base_url
 
         return Codex(
             config=AppServerConfig(
@@ -485,11 +494,27 @@ class ClaudeCodeRunner(AgentRunner):
                 pass
             return {}
 
+        stderr_lines: list[str] = []
+
+        def _on_stderr(line: str) -> None:
+            stderr_lines.append(line)
+
         async def _run() -> dict[str, Any]:
             answer_chunks: list[str] = []
             final_answer = ""
             session_id = ""
             tool_steps: dict[str, dict[str, Any]] = {}
+
+            cfg = self._config
+            claude_model = str(cfg.get("model", "") or "").strip()
+            claude_api_key = str(cfg.get("api_key", "") or "").strip()
+            claude_base_url = str(cfg.get("base_url", "") or "").strip()
+
+            sdk_env: dict[str, str] = {}
+            if claude_api_key:
+                sdk_env["ANTHROPIC_AUTH_TOKEN"] = claude_api_key
+            if claude_base_url:
+                sdk_env["ANTHROPIC_BASE_URL"] = claude_base_url
 
             options = ClaudeAgentOptions(
                 allowed_tools=_DEFAULT_AGENT_SDK_TOOLS,
@@ -502,9 +527,16 @@ class ClaudeCodeRunner(AgentRunner):
                         HookMatcher(matcher=".*", hooks=[_on_post_tool_use])
                     ],
                 },
+                model=claude_model or None,
+                env=sdk_env,
+                stderr=_on_stderr,
             )
-            if thread_id:
-                options.resume = thread_id
+            tid = str(thread_id or "").strip()
+            if tid:
+                parts = tid.split("-")
+                is_uuid = len(parts) == 5 and all(len(p) in (8, 4, 4, 4, 12) for p in parts) and all(c in "0123456789abcdef-" for c in tid.lower())
+                if is_uuid:
+                    options.resume = tid
 
             async for message in claude_query(prompt=query, options=options):
                 # Drain pending tool results from hook callbacks
@@ -619,8 +651,11 @@ class ClaudeCodeRunner(AgentRunner):
                     self._drain_tool_results(tool_result_queue, tool_steps, on_event)
                     if message.is_error:
                         errs = message.errors or [message.result or "unknown_error"]
+                        detail = ";".join(errs)
+                        if stderr_lines:
+                            detail = detail + " | stderr: " + "".join(stderr_lines)[-500:]
                         raise RuntimeError(
-                            f"agent_backend_unavailable:claude_code:{';'.join(errs)}"
+                            f"agent_backend_unavailable:claude_code:{detail}"
                         )
                     final_answer = str(message.result or "").strip() or "".join(
                         answer_chunks
@@ -645,14 +680,25 @@ class ClaudeCodeRunner(AgentRunner):
             self._drain_tool_results(tool_result_queue, tool_steps, on_event)
             final_answer = "".join(answer_chunks).strip()
             if not final_answer:
-                raise RuntimeError("agent_backend_unavailable:claude_code:empty_output")
+                detail = "empty_output"
+                if stderr_lines:
+                    detail = detail + " | stderr: " + "".join(stderr_lines)[-500:]
+                raise RuntimeError(f"agent_backend_unavailable:claude_code:{detail}")
             return {
                 "answer": final_answer,
                 "thread_id": session_id,
                 "turn_id": session_id,
             }
 
-        return asyncio.run(_run())
+        try:
+            return asyncio.run(_run())
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            detail = str(exc)
+            if stderr_lines:
+                detail = detail + " | stderr: " + "".join(stderr_lines)[-500:]
+            raise RuntimeError(f"agent_backend_unavailable:claude_code:{detail}") from exc
 
     @staticmethod
     def _drain_tool_results(
@@ -698,10 +744,9 @@ class ClaudeCodeRunner(AgentRunner):
         library_id: str = "",
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        # Session is created lazily in run_turn; return a reserved ID.
         import uuid
 
-        tid = f"cc_{uuid.uuid4().hex}"
+        tid = str(uuid.uuid4())
         return {"thread": {"id": tid}}
 
     def thread_list(
@@ -818,6 +863,265 @@ class ClaudeCodeRunner(AgentRunner):
         return servers
 
 
+class GeminiCLIRunner(AgentRunner):
+    """Agent runner using the Gemini CLI (``gemini``) subprocess.
+
+    Spawns ``gemini`` with stream-json output, injects provider config via
+    environment variables, and translates CLI events to the AgentRunner
+    notification format.
+    """
+
+    backend = "gemini_cli"
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self._config = dict(config or {})
+
+    # ------------------------------------------------------------------
+    # AgentRunner interface
+    # ------------------------------------------------------------------
+
+    def health(self) -> dict[str, Any]:
+        try:
+            proc = subprocess.run(
+                ["gemini", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            version = (proc.stdout or proc.stderr or "").strip().splitlines()
+            available = int(proc.returncode) == 0
+            return {
+                "backend": self.backend,
+                "available": available,
+                "version": version[0] if version and available else "",
+                "reason": "" if available else f"exit_code={proc.returncode}",
+            }
+        except FileNotFoundError:
+            api_key = (
+                os.environ.get("GEMINI_API_KEY", "")
+                or str(self._config.get("api_key", "") or "").strip()
+            )
+            return {
+                "backend": self.backend,
+                "available": False,
+                "reason": "gemini_cli_not_found" if not api_key else "gemini_cli_not_found (GEMINI_API_KEY set)",
+            }
+        except Exception as exc:
+            return {"backend": self.backend, "available": False, "reason": str(exc)}
+
+    def run_turn(
+        self,
+        query: str,
+        workdir: str,
+        library_id: str = "",
+        thread_id: str = "",
+        runtime_overrides: dict[str, Any] | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        cfg = self._config
+        api_key = str(cfg.get("api_key", "") or "").strip()
+        model = str(cfg.get("model", "") or "").strip()
+        base_url = str(cfg.get("base_url", "") or "").strip()
+
+        resolved = shutil.which("gemini")
+        if not resolved:
+            raise RuntimeError("agent_backend_unavailable:gemini_cli:cli_not_found")
+
+        cmd = [resolved, "--output-format", "stream-json", "--verbose"]
+        if model:
+            cmd.extend(["--model", model])
+        if thread_id:
+            cmd.extend(["--resume", thread_id])
+
+        env = dict(os.environ)
+        if api_key:
+            env["GEMINI_API_KEY"] = api_key
+        if base_url:
+            env["GEMINI_BASE_URL"] = base_url
+
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=workdir,
+            env=env,
+        )
+
+        try:
+            if proc.stdin:
+                proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": query}}) + "\n")
+                proc.stdin.flush()
+                proc.stdin.close()
+
+            answer_chunks: list[str] = []
+            final_answer = ""
+            resolved_thread_id = thread_id
+
+            if proc.stdout:
+                for line in proc.stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(msg, dict):
+                        continue
+
+                    msg_type = str(msg.get("type", "") or "")
+                    if msg_type in ("assistant", "content_block_delta"):
+                        delta = ""
+                        if msg_type == "assistant":
+                            content = msg.get("content", [])
+                            if isinstance(content, list):
+                                for block in content:
+                                    if isinstance(block, dict):
+                                        delta = str(block.get("text", "") or "")
+                                        if delta:
+                                            break
+                        else:
+                            delta_data = msg.get("delta", {})
+                            if isinstance(delta_data, dict):
+                                delta = str(delta_data.get("text", "") or "")
+                        if delta:
+                            answer_chunks.append(delta)
+                            if on_event:
+                                on_event({
+                                    "method": "item/agentMessage/delta",
+                                    "params": {"delta": delta},
+                                })
+
+                    elif msg_type in ("session",):
+                        sid = str(msg.get("session_id", "") or "")
+                        if sid:
+                            resolved_thread_id = sid
+                            if on_event:
+                                on_event({
+                                    "method": "system/init",
+                                    "params": {"session_id": sid, "model": model},
+                                })
+
+                    elif msg_type in ("tool_call", "tool_use"):
+                        tool_id = str(msg.get("id", "") or f"tc_{len(answer_chunks)}")
+                        tool_name = str(msg.get("name", "") or "")
+                        if on_event:
+                            on_event({
+                                "method": "item/started",
+                                "params": {
+                                    "item": {
+                                        "id": tool_id,
+                                        "type": "toolCall",
+                                        "tool": tool_name,
+                                        "arguments": msg.get("input", {}),
+                                    }
+                                },
+                            })
+
+                    elif msg_type in ("tool_result",):
+                        tool_id = str(msg.get("tool_use_id", "") or "")
+                        is_error = bool(msg.get("is_error", False))
+                        if on_event:
+                            on_event({
+                                "method": "item/completed",
+                                "params": {
+                                    "item": {
+                                        "id": tool_id,
+                                        "type": "toolCall",
+                                        "tool": str(msg.get("name", "") or ""),
+                                        "status": "failed" if is_error else "completed",
+                                        "result": {"content": msg.get("content", "")},
+                                        "isError": is_error,
+                                    }
+                                },
+                            })
+
+                    elif msg_type in ("result", "done"):
+                        final_answer = str(msg.get("result", "") or "").strip()
+                        if not final_answer and msg_type == "result":
+                            final_answer = str(msg.get("text", "") or "").strip()
+                        if on_event:
+                            on_event({
+                                "method": "turn/completed",
+                                "params": {"turn": {"id": resolved_thread_id, "status": "completed"}},
+                            })
+                        break
+
+            answer = final_answer or "".join(answer_chunks).strip()
+            if not answer:
+                raise RuntimeError("agent_backend_unavailable:gemini_cli:empty_output")
+            return {
+                "answer": answer,
+                "thread_id": resolved_thread_id,
+                "turn_id": resolved_thread_id,
+            }
+
+        finally:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+            except Exception:
+                pass
+
+    def thread_start(
+        self,
+        workdir: str,
+        library_id: str = "",
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        import uuid
+
+        tid = str(uuid.uuid4())
+        return {"thread": {"id": tid}}
+
+    def thread_list(
+        self,
+        workdir: str,
+        archived: bool = False,
+        limit: int = 100,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {"data": []}
+
+    def thread_read(
+        self,
+        thread_id: str,
+        workdir: str,
+        include_turns: bool = True,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {"thread": {"id": thread_id}}
+
+    def thread_archive(
+        self,
+        thread_id: str,
+        workdir: str,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {"archived": True}
+
+    def thread_unarchive(
+        self,
+        thread_id: str,
+        workdir: str,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {"unarchived": True}
+
+    def thread_set_name(
+        self,
+        thread_id: str,
+        name: str,
+        workdir: str,
+        runtime_overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {"renamed": True}
+
+
 _DEFAULT_AGENT_SDK_TOOLS = [
     "Read", "Write", "Edit", "Bash", "Glob", "Grep",
     "WebSearch", "WebFetch", "Agent",
@@ -828,7 +1132,12 @@ _DEFAULT_AGENT_SDK_TOOLS = [
 class AgentRunnerFactory:
     def __init__(self, codex_config_path: Path) -> None:
         self._codex_config_path = Path(codex_config_path)
+        self._config_dir = self._codex_config_path.parent
         self._codex_model = self._read_model_from_config(codex_config_path)
+
+    # ------------------------------------------------------------------
+    # Config helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _read_model_from_config(config_path: Path) -> str:
@@ -843,12 +1152,34 @@ class AgentRunnerFactory:
             pass
         return "gpt-5.2"
 
+    def _read_agent_config(self, agent_id: str) -> dict[str, Any]:
+        """Read the agent-specific config file (provider/model/api_key/base_url)."""
+        if agent_id == "codex":
+            path = self._codex_config_path
+        else:
+            path = self._config_dir / f"{agent_id}_config.json"
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
+
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
+
     def build(self, backend: str) -> AgentRunner:
         b = str(backend or "").strip().lower()
+        config = self._read_agent_config(b)
         if b == "hermes":
             return HermesRunner()
         if b == "codex":
-            return CodexRunner(codex_bin="codex", model=self._codex_model)
+            model = str(config.get("model", "") or "").strip() or self._codex_model
+            return CodexRunner(codex_bin="codex", model=model, agent_config=config)
         if b == "claude_code":
-            return ClaudeCodeRunner()
+            return ClaudeCodeRunner(config=config)
+        if b == "gemini_cli":
+            return GeminiCLIRunner(config=config)
         raise RuntimeError(f"agent_backend_invalid:{b}")

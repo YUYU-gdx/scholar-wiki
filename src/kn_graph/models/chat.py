@@ -55,8 +55,8 @@ class SendMessageRequest(BaseModel):
     mode: str = "agent"
     stream: bool = True
     library_id: str = ""
-    provider: str = "codex"
-    model: str = "codex-local"
+    provider: str = ""
+    model: str = ""
 
 
 class SendMessageResponse(BaseModel):
