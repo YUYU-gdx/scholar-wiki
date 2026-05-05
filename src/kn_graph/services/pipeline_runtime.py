@@ -116,7 +116,18 @@ def _build_llm_client(options: dict[str, Any]) -> Any:
         return NullLLMClient()
 
 
+def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path, store: JobStore, options: dict[str, Any]) -> dict[str, Any]:
+    raise RuntimeError("agent_extraction_not_implemented")
+
+
 def _run_extract_entities(job_id: str, parse_meta: dict[str, Any], run_dir: Path, store: JobStore, options: dict[str, Any]) -> dict[str, Any]:
+    mode = str(options.get("extraction_mode", "fast") or "fast").strip().lower()
+    if mode == "agent":
+        return _run_agent_extraction(job_id, parse_meta, run_dir, store, options)
+    return _run_extract_entities_fast(job_id, parse_meta, run_dir, store, options)
+
+
+def _run_extract_entities_fast(job_id: str, parse_meta: dict[str, Any], run_dir: Path, store: JobStore, options: dict[str, Any]) -> dict[str, Any]:
     _stage_update(store, job_id, "extract_entities", 55, "stage_started", status="running")
     if _is_cancel_requested(store, job_id):
         store.update_job(job_id, {"status": "cancelled", "last_event": "cancelled", "stage": "extract_entities"})
