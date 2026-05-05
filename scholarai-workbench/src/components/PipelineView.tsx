@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { CloudUpload, FileText, RefreshCw, CheckCircle, XCircle, Info, Terminal } from 'lucide-react';
+import { CloudUpload, FileText, RefreshCw, CheckCircle, XCircle, Info, Terminal, Trash2 } from 'lucide-react';
 import { useApp } from '../App';
 import { api } from '../api';
 import type { PipelineJob } from '../types';
@@ -30,6 +30,14 @@ export default function PipelineView() {
     setRefreshing(true);
     await fetchJobs();
     setRefreshing(false);
+  };
+
+  const deleteJob = async (jobId: string, fileName: string) => {
+    if (!confirm(`删除任务「${fileName || jobId.slice(0, 12)}」？`)) return;
+    try {
+      await api.pipeline.deleteJob(jobId);
+      setPipelineJobs((prev) => prev.filter((j) => j.job_id !== jobId));
+    } catch { /* ignore */ }
   };
 
   const submitJob = async () => {
@@ -206,7 +214,7 @@ export default function PipelineView() {
       </div>
 
       <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-hidden glass-shadow mb-8">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[50vh] overflow-y-auto">
           <table className="w-full text-left border-collapse table-fixed">
             <thead>
               <tr className="bg-surface-container-low/10 text-[10px] font-mono font-black text-outline uppercase tracking-widest border-b border-outline-variant/10">
@@ -260,6 +268,7 @@ export default function PipelineView() {
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2">
+                      <button onClick={() => deleteJob(job.job_id, job.file_name || '')} className="text-outline hover:text-red-500 hover:scale-110 transition-all" title="删除"><Trash2 className="w-4 h-4" /></button>
                       {job.status === 'completed' && (
                         <button onClick={() => setSelectedJob(job)} className="text-secondary hover:scale-110 transition-transform"><CheckCircle className="w-4 h-4" /></button>
                       )}

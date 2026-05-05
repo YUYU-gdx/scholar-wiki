@@ -281,6 +281,13 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
                 return JSONResponse(status_code=400, content=result)
         return result
 
+    @router.delete("/jobs/{job_id}")
+    async def delete_job(job_id: str):
+        result = pipeline_service.delete_job(job_id)
+        if result is None:
+            return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
+        return result
+
     @router.get("/jobs/{job_id}/events")
     async def stream_job_events(job_id: str):
         async def event_generator():

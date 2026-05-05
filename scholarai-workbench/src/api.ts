@@ -244,6 +244,9 @@ export const api = {
     retryJob(jobId: string): Promise<Record<string, unknown>> {
       return jsonFetch(`/v1/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' });
     },
+    deleteJob(jobId: string): Promise<Record<string, unknown>> {
+      return jsonFetch(`/v1/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+    },
     streamJobEvents(jobId: string): EventSource {
       return new EventSource(`${API_BASE}/v1/jobs/${encodeURIComponent(jobId)}/events`);
     },

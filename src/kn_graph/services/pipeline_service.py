@@ -117,6 +117,10 @@ class _InMemoryJobStore:
         end = start + max(1, int(page_size))
         return filtered[start:end], total
 
+    def delete_job(self, job_id: str) -> None:
+        with self._lock:
+            self._jobs.pop(job_id, None)
+
 
 class _SQLiteJobStore:
     def __init__(self, db_path: Path) -> None:
@@ -226,6 +230,11 @@ class _SQLiteJobStore:
 
     def request_cancel(self, job_id: str) -> dict[str, Any]:
         return self.update_job(job_id, {"requested_cancel": True})
+
+    def delete_job(self, job_id: str) -> None:
+        conn = self._conn()
+        conn.execute("DELETE FROM pipeline_jobs WHERE job_id = ?", (job_id,))
+        conn.commit()
 
     def list_jobs(
         self,
@@ -429,6 +438,26 @@ class PipelineService:
             return {"job_id": job_id, "status": updated.get("status", ""), "cancel_requested": bool(updated.get("requested_cancel"))}
         except KeyError:
             return {"error": "job_not_found", "job_id": job_id}
+
+    def delete_job(self, job_id: str) -> dict[str, Any] | None:
+        store = self._ensure_store()
+        row = store.get_job(job_id)
+        if row is None:
+            return None
+        # Clean up job directory
+        import shutil
+        input_path = str(row.get("input_path", "") or "").strip()
+        if input_path:
+            job_dir = Path(input_path).resolve().parent.parent
+            if job_dir.exists():
+                try:
+                    shutil.rmtree(job_dir, ignore_errors=True)
+                except Exception:
+                    pass
+        # Remove from store
+        if hasattr(store, "delete_job"):
+            store.delete_job(job_id)
+        return {"job_id": job_id, "deleted": True}
 
     def retry_job(self, job_id: str) -> dict[str, Any] | None:
         row = self.get_job(job_id)
