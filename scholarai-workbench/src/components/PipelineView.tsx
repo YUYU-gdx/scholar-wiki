@@ -288,37 +288,6 @@ export default function PipelineView() {
         </div>
       </div>
 
-      <div className="bg-primary-container rounded-2xl overflow-hidden glass-shadow border border-primary/20">
-        <div className="px-6 py-3 border-b border-white/5 flex justify-between items-center bg-primary-container-variant/50">
-          <div className="flex items-center gap-3">
-            <Terminal className="w-4 h-4 text-secondary" />
-            <h4 className="text-[10px] font-mono font-bold text-outline-variant uppercase tracking-widest">Pipeline Stream</h4>
-          </div>
-{sseConnected && (
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-secondary animate-pulse shadow-[0_0_8px_#14b8a6]" />
-              <span className="text-[10px] font-mono font-bold text-secondary tracking-widest">CONNECTED</span>
-            </div>
-          )}
-        </div>
-        <div ref={logRef} className="p-6 font-mono text-[11px] text-on-primary-container bg-primary-container h-48 overflow-y-auto leading-relaxed custom-scrollbar-dark">
-          {sseLog.length === 0 && (
-            <p className="text-outline">Submit a job to see pipeline events.</p>
-          )}
-          {sseLog.map((log, i) => (
-            <div key={i} className="flex gap-4 mb-1.5 opacity-80 hover:opacity-100 transition-opacity">
-              <span className="text-outline min-w-[70px]">{log.time}</span>
-              <span className={`font-black min-w-[50px] uppercase ${
-                log.type === 'info' ? 'text-secondary' :
-                log.type === 'event' ? 'text-on-tertiary-container' :
-                log.type === 'warn' ? 'text-amber-400' : 'text-blue-400'
-              }`}>{log.type}:</span>
-              <span className="tracking-tight">{log.msg}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {selectedJob && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center" onClick={() => setSelectedJob(null)}>
           <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl p-8 max-w-lg w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
