@@ -1,8 +1,6 @@
 ﻿from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,23 +9,8 @@ from kn_graph.config import Settings
 from kn_graph.services.chat_service import ChatService
 from kn_graph.services.cherry_provider_catalog import attach_provider_meta, default_endpoint_url, provider_map
 
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _load_library_registry_module():
-    module_path = _SCRIPTS_DIR / "library_registry.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_library_registry_for_settings_service", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if spec.name not in sys.modules:
-        sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
 
 
 class SettingsService:

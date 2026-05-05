@@ -70,8 +70,7 @@ class ChatService:
         ChatServiceCls, _ = _load_chat_service_class()
 
         from kn_graph.services.literature_service import LiteratureService
-        literature_svc = LiteratureService(self._settings)
-        literature = literature_svc._ensure_service()
+        literature = LiteratureService(self._settings)
 
         self._chat = ChatServiceCls(
             literature_search_fn=lambda q, k, library_id="": (
@@ -347,7 +346,6 @@ class ChatService:
 
     def get_provider_config(self) -> dict[str, Any]:
         try:
-            ProviderRegistry = _load_provider_registry_class()
             registry = ProviderRegistry(config_path=Path(self._settings.llm_provider_config_path))
             registry.reload()
             payload = registry.get_config()
@@ -357,7 +355,6 @@ class ChatService:
             return {}
 
     def update_provider_config(self, body: dict[str, Any]) -> dict[str, Any]:
-        ProviderRegistry = _load_provider_registry_class()
         registry = ProviderRegistry(config_path=Path(self._settings.llm_provider_config_path))
         saved = registry.update_config(body)
         saved["config_path"] = str(registry.config_path)
@@ -466,7 +463,6 @@ class ChatService:
         if not resolved_base_url:
             resolved_base_url = resolved_endpoint.rsplit("/", 3)[0] if "/v1/" in resolved_endpoint else resolved_endpoint
 
-        ProviderRegistry = _load_provider_registry_class()
         registry = ProviderRegistry(config_path=Path(self._settings.llm_provider_config_path))
         options = {
             "api_key": resolved_api_key,
@@ -493,7 +489,6 @@ class ChatService:
     def test_provider(self, provider: str, model: str = "", options: dict[str, Any] | None = None, prompt: str = "") -> dict[str, Any]:
         if options is None:
             options = {}
-        ProviderRegistry = _load_provider_registry_class()
         registry = ProviderRegistry(config_path=Path(self._settings.llm_provider_config_path))
         if not provider:
             return {"error": "provider_required"}

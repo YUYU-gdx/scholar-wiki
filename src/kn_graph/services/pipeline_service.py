@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import sqlite3
-import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,8 +10,6 @@ from typing import Any, Callable, Protocol
 import uuid
 
 from kn_graph.config import Settings
-
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
 
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -28,18 +24,6 @@ def _norm_status(raw: Any) -> str:
 
 def _safe_json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-
-
-def _load_env_utils():
-    module_path = _SCRIPTS_DIR / "env_utils.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_env_utils_for_pipeline_service", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if spec.name not in sys.modules:
-        sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
 
 
 class _InMemoryJobStore:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import math
 import os
@@ -20,21 +19,6 @@ def _resolve_storage_uri(uri: str) -> str:
     return text
 
 
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
-
-def _load_module(name: str, relative_path: str):
-    module_path = _SCRIPTS_DIR / relative_path
-    spec = importlib.util.spec_from_file_location(name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if name not in sys.modules:
-        sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-import sys
 
 
 def _tokenize(text: str) -> list[str]:
@@ -973,10 +957,7 @@ class GraphService:
         db_path = ws / "kn_gragh.db"
         if db_path.exists():
             try:
-                _scripts_dir = str((Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline").resolve())
-                if _scripts_dir not in sys.path:
-                    sys.path.insert(0, _scripts_dir)
-                from build_graph_views import _build_artifact_from_sqlite, run_build_from_artifact  # noqa: E402
+                from kn_graph.services.graph_builder import _build_artifact_from_sqlite, run_build_from_artifact
                 artifact = _build_artifact_from_sqlite(db_path)
                 views_out = ws / "graph_views.json"
                 run_build_from_artifact(artifact, views_out)

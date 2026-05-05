@@ -17,21 +17,11 @@ from kn_graph.services import pipeline_runtime
 
 
 def _resolve_library_workspace(library_id: str, registry_path: str = "") -> Path:
-    import importlib.util
-    import sys
+    from kn_graph.services.library_registry import ensure_registry, resolve_workspace_root
 
-    scripts_dir = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
-    module_path = scripts_dir / "library_registry.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_library_registry_for_pipeline_router", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {module_path}")
-    mod = importlib.util.module_from_spec(spec)
-    if spec.name not in sys.modules:
-        sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
     registry_path_arg = Path(registry_path) if registry_path else None
-    registry = mod.ensure_registry(registry_path=registry_path_arg)
-    root = str(mod.resolve_workspace_root(registry, library_id) or "").strip()
+    registry = ensure_registry(registry_path=registry_path_arg)
+    root = str(resolve_workspace_root(registry, library_id) or "").strip()
     if not root:
         raise RuntimeError(f"library_workspace_missing:{library_id}")
     path = Path(root).resolve()

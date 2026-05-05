@@ -9,10 +9,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+from kn_graph.providers.registry import ProviderRegistry
+from kn_graph.services.graph_builder import _build_artifact_from_sqlite, run_build_from_artifact
+from kn_graph.services.import_sqlite import main_inline as _import_sqlite_main_inline
+from kn_graph.services.mineru_runner import parse_single_pdf
+from kn_graph.services.sqlite_repo import SqliteRepo
+
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 _SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
 
 
 class JobStore(Protocol):
@@ -48,18 +52,6 @@ def _maybe_load_run_extraction_mvp():
     return _load_script_module("smj_pipeline_run_extraction_mvp_for_kn_graph_runtime", "run_extraction_mvp.py")
 
 
-def _maybe_load_provider_registry():
-    return _load_script_module("smj_pipeline_provider_registry_for_kn_graph_runtime", "llm/provider_registry.py")
-
-
-def _maybe_load_mineru_single_runner():
-    return _load_script_module("smj_pipeline_mineru_single_runner_for_kn_graph_runtime", "mineru_single_pdf_runner.py")
-
-
-def _maybe_load_literature_service_class():
-    mod = _load_script_module("smj_pipeline_literature_service_for_kn_graph_runtime", "literature/service.py")
-    return mod.LiteratureService
-
 
 def _stage_update(store: JobStore, job_id: str, stage: str, progress: int, event: str, **extra: Any) -> None:
     existing = store.get_job(job_id) or {}
@@ -80,7 +72,6 @@ def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore)
     if _is_cancel_requested(store, job_id):
         raise RuntimeError("job_cancelled")
 
-    runner_mod = _maybe_load_mineru_single_runner()
     opts_raw = store.get_job(job_id) or {}
     options = {}
     raw_options = str(opts_raw.get("options_json", "") or "").strip()
@@ -99,7 +90,7 @@ def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore)
         return _is_cancel_requested(store, job_id)
 
     try:
-        meta = runner_mod.parse_single_pdf(
+        meta = parse_single_pdf(
             input_pdf,
             run_dir,
             options=options,
@@ -131,8 +122,7 @@ def _build_llm_client(run_mod: Any, options: dict[str, Any]) -> Any:
     }
     provider_options = {k: v for k, v in provider_options.items() if v not in (None, "")}
     try:
-        registry_mod = _maybe_load_provider_registry()
-        registry = registry_mod.ProviderRegistry()
+        registry = ProviderRegistry()
         return registry.create_extraction_client(
             provider=provider,
             model=model,
@@ -207,8 +197,8 @@ def _run_finalize(
     if library_id:
         try:
             _stage_update(store, job_id, "finalize", 97, "stage_progress", status="running")
-            lit_cls = _maybe_load_literature_service_class()
-            literature = lit_cls()
+            from kn_graph.services.literature_service import LiteratureService
+            literature = LiteratureService()
             manifest_path = run_dir / "import_manifest.jsonl"
             paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
             doi = str(options.get("doi", "") or f"job::{job_id}").strip()
@@ -245,8 +235,6 @@ def _run_finalize(
             import json as _json
             db_path = Path(workspace_path) / "kn_gragh.db"
             conn = _sqlite3.connect(str(db_path))
-            repo_mod = _load_script_module("smj_pipeline_sqlite_repo_persist", "storage/sqlite_repo.py")
-            SqliteRepo = getattr(repo_mod, "SqliteRepo")
             repo = SqliteRepo(conn)
             repo.apply_schema()
             # Write paper metadata (title, paths) from import result
@@ -290,15 +278,13 @@ def _run_finalize(
             raw_jsonl = run_dir / "extract" / "raw_llm_outputs.jsonl"
             if raw_jsonl.exists():
                 _stage_update(store, job_id, "finalize", 98, "importing_to_sqlite", status="running")
-                import_mod = _load_script_module("smj_pipeline_import_to_sqlite_finalize", "import_raw_outputs_to_sqlite.py")
-                import_mod.main_inline(db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False)
+                _import_sqlite_main_inline(db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False)
             conn.close()
             # Always rebuild graph_views — paper metadata is now in SQLite
             _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
-            build_mod = _load_script_module("smj_pipeline_build_graph_views_finalize", "build_graph_views.py")
-            artifact = build_mod._build_artifact_from_sqlite(db_path)
+            artifact = _build_artifact_from_sqlite(db_path)
             views_out = Path(workspace_path) / "graph_views.json"
-            build_mod.run_build_from_artifact(artifact, views_out)
+            run_build_from_artifact(artifact, views_out)
             graph_output_path = str(views_out.resolve())
             graph_updated = views_out.exists()
             if graph_updated:
