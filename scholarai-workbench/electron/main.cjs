@@ -183,6 +183,10 @@ async function startBackendServer() {
     "--port",
     String(runtimePort),
   ];
+  // In development, enable backend hot-reload
+  if (process.env.NODE_ENV === "development" && !process.env.DISABLE_BACKEND_RELOAD) {
+    args.push("--reload");
+  }
 
   console.log(`[desktop] repoRoot=${repoRoot}`);
   console.log(`[desktop] backend_port=${runtimePort}`);

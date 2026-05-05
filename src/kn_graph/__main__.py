@@ -9,6 +9,7 @@ def main():
     serve_parser = sub.add_parser("serve", help="Start the API server")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8013)
+    serve_parser.add_argument("--reload", action="store_true", help="Enable auto-reload on code changes")
 
     sub.add_parser("worker", help="Start the Celery worker")
 
@@ -24,7 +25,7 @@ def main():
         )
         from kn_graph.app import create_app
         app = create_app(settings)
-        uvicorn.run(app, host=settings.host, port=settings.port)
+        uvicorn.run(app, host=settings.host, port=settings.port, reload=args.reload)
 
     elif args.command == "worker":
         from kn_graph.workers.celery_app import celery_app
