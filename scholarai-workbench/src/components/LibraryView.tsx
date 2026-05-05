@@ -46,12 +46,9 @@ export default function LibraryView() {
   const deletePaper = async (p: { paperId: string; libraryId: string; scopedKey: string }) => {
     if (!confirm(`确定删除「${p.paperId}」吗？\n将同时删除数据库记录和磁盘文件。`)) return;
     try {
-      const res = await fetch(`/paper/${encodeURIComponent(p.paperId)}?library_id=${encodeURIComponent(p.libraryId)}`, { method: 'DELETE' });
-      if (res.ok) {
-        setPaperFilesByScopedKey((prev) => { const n = { ...prev }; delete n[p.scopedKey]; return n; });
-        // Trigger graph data refresh via the parent
-        window.dispatchEvent(new CustomEvent('paper-deleted', { detail: { libraryId: p.libraryId } }));
-      }
+      await api.graph.deletePaper(p.paperId, p.libraryId);
+      setPaperFilesByScopedKey((prev) => { const n = { ...prev }; delete n[p.scopedKey]; return n; });
+      window.dispatchEvent(new CustomEvent('paper-deleted', { detail: { libraryId: p.libraryId } }));
     } catch { /* ignore */ }
   };
 

@@ -78,6 +78,10 @@ export const api = {
       const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
       return jsonFetch<import('./types').PaperFiles>(`/paper/${encodeURIComponent(id)}/files${params}`);
     },
+    deletePaper(id: string, libraryId: string = ''): Promise<Record<string, unknown>> {
+      const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
+      return jsonFetch<Record<string, unknown>>(`/paper/${encodeURIComponent(id)}${params}`, { method: 'DELETE' });
+    },
   },
 
   chat: {
