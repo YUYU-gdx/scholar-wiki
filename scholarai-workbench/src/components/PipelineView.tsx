@@ -16,15 +16,37 @@ export default function PipelineView() {
   const sseRef = useRef<EventSource | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const [selectedJob, setSelectedJob] = useState<PipelineJob | null>(null);
+  const autoReconnectedRef = useRef(false);
 
   const fetchJobs = useCallback(async () => {
     try {
       const res = await api.pipeline.listJobs(page, 25, statusFilter || undefined, activeLibraryId);
       setPipelineJobs(res.jobs || []);
+      // Reconnect SSE for running jobs when navigating back to this view
+      if (!autoReconnectedRef.current && !sseRef.current) {
+        autoReconnectedRef.current = true;
+        const running = (res.jobs || []).filter(
+          (j) => j.status === 'queued' || j.status === 'running',
+        );
+        if (running.length > 0) {
+          streamJobEvents(running[0].job_id);
+        }
+      }
     } catch { /* ignore */ }
   }, [page, statusFilter, activeLibraryId, setPipelineJobs]);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  // Tear down SSE when leaving the view
+  useEffect(() => {
+    return () => {
+      if (sseRef.current) {
+        sseRef.current.close();
+        sseRef.current = null;
+        setSseConnected(false);
+      }
+    };
+  }, []);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -38,6 +60,28 @@ export default function PipelineView() {
       await api.pipeline.deleteJob(jobId);
       setPipelineJobs((prev) => prev.filter((j) => j.job_id !== jobId));
     } catch { /* ignore */ }
+  };
+
+  const updateJobInList = (jobId: string, data: Record<string, unknown>) => {
+    setPipelineJobs((prev) =>
+      prev.map((j) =>
+        j.job_id === jobId
+          ? {
+              ...j,
+              status: (data.status_code as PipelineJob['status']) ?? j.status,
+              status_code: (data.status_code as string) ?? j.status_code,
+              stage: (data.stage as string) ?? j.stage,
+              stage_code: (data.stage_code as string) ?? j.stage_code,
+              stage_label: (data.stage_label as string) ?? j.stage_label,
+              progress: (data.progress as number) ?? j.progress,
+              error_code: (data.error_code as string) ?? j.error_code,
+              error_detail: (data.error_detail as string) ?? j.error_detail,
+              can_cancel: (data.can_cancel as boolean) ?? j.can_cancel,
+              can_retry: (data.can_retry as boolean) ?? j.can_retry,
+            }
+          : j,
+      ),
+    );
   };
 
   const submitJob = async () => {
@@ -56,41 +100,46 @@ export default function PipelineView() {
 
   const streamJobEvents = (jobId: string, jobLibraryId?: string) => {
     if (sseRef.current) sseRef.current.close();
+
+    const refreshList = () => { fetchJobs(); };
     const es = api.pipeline.streamJobEvents(jobId);
 
     es.addEventListener('accepted', (evt) => {
+      try { const p = JSON.parse(evt.data || '{}'); updateJobInList(jobId, p); } catch {/* */}
       appendLog('info', `Job accepted: ${jobId}`);
     });
     es.addEventListener('stage_started', (evt) => {
-      try { const p = JSON.parse(evt.data || '{}'); appendLog('event', `Stage started: ${p.stage || p.stage_code || ''}`); } catch { appendLog('event', 'Stage started'); }
+      try { const p = JSON.parse(evt.data || '{}'); updateJobInList(jobId, p); appendLog('event', `Stage started: ${p.stage || p.stage_code || ''}`); } catch { appendLog('event', 'Stage started'); }
     });
     es.addEventListener('stage_progress', (evt) => {
-      try { const p = JSON.parse(evt.data || '{}'); appendLog('data', `Progress: ${p.progress ?? 0}%`); } catch { appendLog('data', 'Progress update'); }
+      try { const p = JSON.parse(evt.data || '{}'); updateJobInList(jobId, p); appendLog('data', `Progress: ${p.progress ?? 0}%`); } catch { appendLog('data', 'Progress update'); }
     });
     es.addEventListener('stage_done', (evt) => {
-      try { const p = JSON.parse(evt.data || '{}'); appendLog('info', `Stage done: ${p.stage || ''}`); } catch { appendLog('info', 'Stage done'); }
+      try { const p = JSON.parse(evt.data || '{}'); updateJobInList(jobId, p); appendLog('info', `Stage done: ${p.stage || ''}`); } catch { appendLog('info', 'Stage done'); }
     });
-    es.addEventListener('completed', () => {
+    es.addEventListener('completed', (evt) => {
+      try { const p = JSON.parse(evt.data || '{}'); updateJobInList(jobId, p); } catch {/* */}
       appendLog('info', `Job ${jobId} completed`);
       window.dispatchEvent(new CustomEvent('pipeline-completed', { detail: { libraryId: jobLibraryId || activeLibraryId } }));
       es.close();
       sseRef.current = null;
       setSseConnected(false);
-      fetchJobs();
+      refreshList();
     });
     es.addEventListener('failed', (evt) => {
-      try { const p = JSON.parse(evt.data || '{}'); appendLog('warn', `Job failed: ${p.error || 'unknown'}`); } catch { appendLog('warn', 'Job failed'); }
+      try { const p = JSON.parse(evt.data || '{}'); updateJobInList(jobId, p); appendLog('warn', `Job failed: ${p.error || 'unknown'}`); } catch { appendLog('warn', 'Job failed'); }
       es.close();
       sseRef.current = null;
       setSseConnected(false);
-      fetchJobs();
+      refreshList();
     });
-    es.addEventListener('cancelled', () => {
+    es.addEventListener('cancelled', (evt) => {
+      try { const p = JSON.parse(evt.data || '{}'); updateJobInList(jobId, p); } catch {/* */}
       appendLog('info', `Job ${jobId} cancelled`);
       es.close();
       sseRef.current = null;
       setSseConnected(false);
-      fetchJobs();
+      refreshList();
     });
     es.onerror = () => {
       es.close();

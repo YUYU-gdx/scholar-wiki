@@ -138,13 +138,17 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     if not library_id:
         raise RuntimeError("agent_extraction_failed:library_id_required")
 
-    # Find the library workspace path (parent of corpus/papers/)
+    # Find the library workspace path (parent of corpus/papers/).
+    # Fall back to _workspace_path from options for new libraries that have
+    # no papers imported yet (corpus/papers/ doesn't exist).
     html_resolved = html_path.resolve()
     workspace_path = ""
     for ancestor in html_resolved.parents:
         if (ancestor / "corpus" / "papers").is_dir():
             workspace_path = str(ancestor)
             break
+    if not workspace_path:
+        workspace_path = str(options.get("_workspace_path", "") or "").strip()
     if not workspace_path:
         raise RuntimeError(f"agent_extraction_failed:cannot_resolve_workspace_from:{html_path}")
 
