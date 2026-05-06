@@ -4,7 +4,7 @@ from typing import Any
 
 # Snapshot from Cherry Studio provider defaults (simplified to OpenAI-compatible fields used by KN Graph).
 _PROVIDER_LIST: list[dict[str, str]] = [
-    {"id": "deepseek", "name": "DeepSeek", "base_url": "https://api.deepseek.com"},
+    {"id": "deepseek", "name": "DeepSeek", "base_url": "https://api.deepseek.com", "anthropic_base_url": "https://api.deepseek.com/anthropic"},
     {"id": "openai", "name": "OpenAI", "base_url": "https://api.openai.com"},
     {"id": "anthropic", "name": "Anthropic", "base_url": "https://api.anthropic.com"},
     {"id": "gemini", "name": "Gemini", "base_url": "https://generativelanguage.googleapis.com"},

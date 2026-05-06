@@ -77,6 +77,23 @@ def deploy_to_root_workspace(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_anthropic_base_url(provider: str, base_url: str) -> str:
+    """Return the Anthropic-compatible base URL for *provider*.
+
+    Looks up ``anthropic_base_url`` from the provider catalog.  Falls back
+    to the generic *base_url* when the provider doesn't declare one.
+    """
+    try:
+        from kn_graph.services.cherry_provider_catalog import provider_map
+        catalog = provider_map().get(provider, {})
+        anthro = str(catalog.get("anthropic_base_url", "") or "").strip()
+        if anthro:
+            return anthro
+    except Exception:
+        pass
+    return str(base_url or "").strip()
+
+
 def _build_claude_code_payload(
     provider: str,
     model: str,
@@ -84,8 +101,9 @@ def _build_claude_code_payload(
     base_url: str,
 ) -> dict[str, Any]:
     env: dict[str, str] = {}
-    if base_url:
-        env["ANTHROPIC_BASE_URL"] = base_url
+    anthro_url = _resolve_anthropic_base_url(provider, base_url)
+    if anthro_url:
+        env["ANTHROPIC_BASE_URL"] = anthro_url
     if api_key:
         env["ANTHROPIC_API_KEY"] = api_key
     if model:
