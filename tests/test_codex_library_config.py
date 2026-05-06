@@ -1,43 +1,46 @@
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 
-
-_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "smj_pipeline" / "codex_library_config.py"
-_SPEC = importlib.util.spec_from_file_location("smj_pipeline_codex_library_config_tests", _SCRIPT_PATH)
-if _SPEC is None or _SPEC.loader is None:
-    raise RuntimeError(f"Unable to load module: {_SCRIPT_PATH}")
-_MOD = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = _MOD
-_SPEC.loader.exec_module(_MOD)
+from kn_graph.services.codex_library_config import (
+    bootstrap_workspace_project_skills,
+    bootstrap_library_codex_config,
+    config_path_for_workspace,
+)
 
 
 class CodexLibraryConfigTest(unittest.TestCase):
     def test_bootstrap_workspace_project_skills_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            first = _MOD.bootstrap_workspace_project_skills(str(workspace))
-            second = _MOD.bootstrap_workspace_project_skills(str(workspace))
-            self.assertGreaterEqual(len(first), 1)
+            first = bootstrap_workspace_project_skills(str(workspace))
+            second = bootstrap_workspace_project_skills(str(workspace))
+            self.assertGreaterEqual(len(first), 2)  # at least .claude + .agents
             self.assertEqual(len(first), len(second))
-            first_path = Path(str(first[0].get("path", "")))
-            self.assertTrue(first_path.exists())
-            self.assertTrue((first_path / "SKILL.md").exists())
-            self.assertIn(".codex_project_skills", str(first_path))
+            # Verify both backends get deployed
+            paths = [str(p.get("path", "")) for p in first]
+            claude_paths = [p for p in paths if ".claude" in p]
+            agents_paths = [p for p in paths if ".agents" in p]
+            self.assertGreaterEqual(len(claude_paths), 1)
+            self.assertGreaterEqual(len(agents_paths), 1)
+            for p in first:
+                skill_dir = Path(str(p.get("path", "")))
+                self.assertTrue(skill_dir.exists())
+                self.assertTrue((skill_dir / "SKILL.md").exists())
+            # Legacy path should be cleaned up
+            self.assertFalse((workspace / ".codex_project_skills").exists())
 
     def test_bootstrap_library_codex_config_persists_project_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            payload = _MOD.bootstrap_library_codex_config(str(workspace), library_id="lib_a")
+            payload = bootstrap_library_codex_config(str(workspace), library_id="lib_a")
             self.assertEqual(payload.get("library_id"), "lib_a")
             project_skills = payload.get("project_skills", [])
             self.assertTrue(isinstance(project_skills, list))
-            self.assertGreaterEqual(len(project_skills), 1)
-            cfg_path = _MOD.config_path_for_workspace(str(workspace))
+            self.assertGreaterEqual(len(project_skills), 2)  # at least .claude + .agents
+            cfg_path = config_path_for_workspace(str(workspace))
             self.assertTrue(cfg_path.exists())
 
 

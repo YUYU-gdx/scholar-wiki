@@ -242,7 +242,7 @@ class CodexRunner(AgentRunner):
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with self._open_codex(workdir, runtime_overrides=runtime_overrides) as codex:
-            resp = codex.thread_list(cwd=workdir, limit=limit)
+            resp = codex.thread_list(cwd=workdir, archived=archived, limit=limit)
             threads = resp.data if hasattr(resp, "data") else []
             return {
                 "data": [
@@ -862,11 +862,10 @@ class ClaudeCodeRunner(AgentRunner):
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
-            import asyncio
             from claude_agent_sdk import delete_session
         except ImportError:
             return {"archived": True}
-        asyncio.run(delete_session(session_id=thread_id))
+        delete_session(session_id=thread_id, directory=workdir)
         return {"archived": True}
 
     def thread_unarchive(
@@ -886,11 +885,10 @@ class ClaudeCodeRunner(AgentRunner):
         runtime_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
-            import asyncio
             from claude_agent_sdk import rename_session
         except ImportError:
             return {"renamed": True}
-        asyncio.run(rename_session(session_id=thread_id, name=name))
+        rename_session(session_id=thread_id, title=name, directory=workdir)
         return {"renamed": True}
 
     # ------------------------------------------------------------------

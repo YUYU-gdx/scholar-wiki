@@ -285,6 +285,15 @@ def create_library(
         ws_base = configured_ws.resolve() if configured_ws is not None else workspace_root_base_from_env().resolve()
         ws_path = ws_base / target
     ws_path.mkdir(parents=True, exist_ok=True)
+
+    # Deploy skills to .claude/skills/ and .agents/skills/ so both Claude Code
+    # and Codex auto-discover them when working in this workspace.
+    try:
+        from kn_graph.services.codex_library_config import bootstrap_workspace_project_skills
+        bootstrap_workspace_project_skills(str(ws_path))
+    except Exception:
+        pass
+
     index_path = (idx_root / f"{target}.json").resolve()
 
     index_payload = {

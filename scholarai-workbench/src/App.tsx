@@ -276,6 +276,7 @@ export default function App() {
             {creatingLibrary && (
               <div className="mb-2 flex items-center gap-1.5">
                 <input
+                  autoFocus
                   value={newLibraryId}
                   onChange={(e) => setNewLibraryId(e.target.value)}
                   placeholder="library_id"

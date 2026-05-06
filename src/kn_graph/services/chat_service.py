@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 from kn_graph.config import Settings
 
-from kn_graph.services.chat_legacy import ChatService as LegacyChatService, InMemoryChatStore
+from kn_graph.services.chat_legacy import ChatService as LegacyChatService
 from kn_graph.services.agent_runner import AgentRunnerFactory
 from kn_graph.services.codex_library_config import load_or_init_library_codex_config, bootstrap_library_codex_config, save_library_codex_config as _save_cfg
 from kn_graph.providers.registry import ProviderRegistry  # noqa: E402

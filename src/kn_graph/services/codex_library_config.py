@@ -81,14 +81,32 @@ def _copy_single_skill(src: Path, target: Path) -> None:
 
 
 def bootstrap_workspace_project_skills(workspace_path: str) -> list[dict[str, str]]:
+    """Deploy skill templates to the correct auto-discovery paths for each backend.
+
+    Claude Code: .claude/skills/<name>/SKILL.md
+    Codex:       .agents/skills/<name>/SKILL.md
+    """
     ws = Path(workspace_path).resolve()
-    root = ws / ".codex_project_skills"
-    root.mkdir(parents=True, exist_ok=True)
     loaded: list[dict[str, str]] = []
-    for folder_name, src in _iter_skill_template_sources():
-        target = root / folder_name
-        _copy_single_skill(src, target)
-        loaded.append({"name": SKILL_NAME, "path": str(target.resolve())})
+
+    targets = [
+        ws / ".claude" / "skills",   # Claude Code
+        ws / ".agents" / "skills",   # Codex
+    ]
+
+    for skills_root in targets:
+        skills_root.mkdir(parents=True, exist_ok=True)
+        for folder_name, src in _iter_skill_template_sources():
+            target = skills_root / folder_name
+            _copy_single_skill(src, target)
+            loaded.append({"name": folder_name, "path": str(target.resolve())})
+
+    # Clean up legacy path
+    legacy_root = ws / ".codex_project_skills"
+    if legacy_root.exists():
+        import shutil
+        shutil.rmtree(str(legacy_root), ignore_errors=True)
+
     return loaded
 
 

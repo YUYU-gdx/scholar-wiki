@@ -15,151 +15,163 @@ def _default_data_dir() -> Path:
 
 
 class Settings(BaseModel):
-    """Single source of truth for all non-agent application configuration.
+    """Application configuration.
 
-    Populated at startup from {data_dir}/settings/global_settings.json.
-    Only data_dir can be discovered from the KN_GRAPH_DATA_DIR env var
-    (boot necessity); all other values must come from the JSON file.
+    Static fields (boot / derived paths) are Pydantic model fields.
+    Dynamic fields (user-configurable via the UI) are @property getters
+    that read from {data_dir}/settings/global_settings.json on every access,
+    so changes take effect immediately without a restart.
     """
 
-    # Boot (data_dir can be overridden via constructor arg from env/CLI)
+    # ------------------------------------------------------------------
+    # Boot config (not persisted to global_settings.json)
+    # ------------------------------------------------------------------
     host: str = "127.0.0.1"
     port: int = 8013
     data_dir: Path = Field(default_factory=_default_data_dir)
 
-    # Chat
+    # ------------------------------------------------------------------
+    # Static config — defaults only, not user-modifiable via UI
+    # ------------------------------------------------------------------
     chat_store_dsn: str = ""
     chat_agent_backend: str = "codex"
 
-    # Pipeline
     pipeline_job_store_dsn: str = ""
     pipeline_executor: str = "inline"
     pipeline_redis_url: str = "redis://127.0.0.1:6379/0"
-    pipeline_fast_provider: str = "deepseek"
-    pipeline_fast_model: str = ""
-    pipeline_fast_endpoint_url: str = ""
 
-    # Pipeline extraction mode: "fast" (direct LLM) or "agent" (agent-driven)
-    pipeline_extraction_mode: str = "fast"
-
-    # Pipeline agent (used when extraction_mode == "agent")
-    pipeline_agent_backend: str = "codex"
-    pipeline_agent_provider: str = "deepseek"
-    pipeline_agent_model: str = ""
-    pipeline_agent_api_key: str = ""
-    pipeline_agent_base_url: str = ""
-    pipeline_agent_endpoint_url: str = ""
-
-    # API Keys
-    mineru_api_key: str = ""
-    zhipu_api_key: str = ""
     nvidia_api_key: str = ""
-    deepseek_api_key: str = ""
     chromadb_path: str = ""
-    mineru_api_base_url: str = "https://mineru.net/api/v4"
 
-    # LLM Provider config
     llm_provider_config_path: str = "config/llm_providers.json"
 
-    # Literature paths
     literature_library_index_root: str = "outputs/literature_libraries"
     literature_library_registry_path: str = ""
     literature_library_workspaces_root: str = ""
     literature_default_library_id: str = ""
 
-    # Models
     graph_embedding_model: str = ""
     literature_embedding_model: str = "embedding-3"
     literature_chat_model: str = "glm-4.5-flash"
 
-    # Limits
     literature_embed_max_chars: int = 8000
     literature_embed_batch_size: int = 32
 
-    # Misc
     mineru_version: str = ""
+    mineru_api_base_url: str = "https://mineru.net/api/v4"
 
     # ------------------------------------------------------------------
-    # Load from persistent store
+    # Dynamic config — reads from global_settings.json on every access
+    # ------------------------------------------------------------------
+
+    @property
+    def _store(self) -> dict:
+        """Read global_settings.json from disk (no caching)."""
+        path = self.data_dir / "settings" / "global_settings.json"
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _cat(self, name: str) -> dict:
+        cat = self._store.get("categories", {}).get(name, {})
+        return cat if isinstance(cat, dict) else {}
+
+    # -- pipeline category --
+
+    @property
+    def mineru_api_key(self) -> str:
+        return str(self._cat("pipeline").get("mineru_api_key", "") or "").strip()
+
+    @property
+    def pipeline_fast_provider(self) -> str:
+        return str(self._cat("pipeline").get("fast_provider", "") or "deepseek").strip()
+
+    @property
+    def pipeline_fast_model(self) -> str:
+        active = self.pipeline_fast_provider
+        providers = self._cat("pipeline").get("fast_providers", {})
+        if isinstance(providers, dict):
+            p = providers.get(active, {})
+            if isinstance(p, dict):
+                return str(p.get("model", "") or "").strip()
+        return ""
+
+    @property
+    def pipeline_fast_endpoint_url(self) -> str:
+        active = self.pipeline_fast_provider
+        providers = self._cat("pipeline").get("fast_providers", {})
+        if isinstance(providers, dict):
+            p = providers.get(active, {})
+            if isinstance(p, dict):
+                return str(p.get("endpoint_url", "") or "").strip()
+        return ""
+
+    @property
+    def pipeline_extraction_mode(self) -> str:
+        mode = str(self._cat("pipeline").get("extraction_mode", "") or "fast").strip().lower()
+        return mode if mode in ("fast", "agent") else "fast"
+
+    def _provider_api_key(self, provider_id: str) -> str:
+        providers = self._cat("pipeline").get("fast_providers", {})
+        if isinstance(providers, dict):
+            p = providers.get(provider_id, {})
+            if isinstance(p, dict):
+                return str(p.get("api_key", "") or "").strip()
+        return ""
+
+    @property
+    def deepseek_api_key(self) -> str:
+        return self._provider_api_key("deepseek")
+
+    @property
+    def zhipu_api_key(self) -> str:
+        return self._provider_api_key("zhipu")
+
+    # -- pipeline_agent category --
+
+    @property
+    def pipeline_agent_backend(self) -> str:
+        backend = str(self._cat("pipeline_agent").get("backend", "") or "codex").strip().lower()
+        return backend if backend in ("codex", "claude_code", "gemini_cli") else "codex"
+
+    @property
+    def pipeline_agent_provider(self) -> str:
+        return str(self._cat("pipeline_agent").get("provider", "") or "deepseek").strip()
+
+    @property
+    def pipeline_agent_model(self) -> str:
+        return str(self._cat("pipeline_agent").get("model", "") or "").strip()
+
+    @property
+    def pipeline_agent_api_key(self) -> str:
+        return str(self._cat("pipeline_agent").get("api_key", "") or "").strip()
+
+    @property
+    def pipeline_agent_base_url(self) -> str:
+        return str(self._cat("pipeline_agent").get("base_url", "") or "").strip()
+
+    @property
+    def pipeline_agent_endpoint_url(self) -> str:
+        return str(self._cat("pipeline_agent").get("endpoint_url", "") or "").strip()
+
+    # ------------------------------------------------------------------
+    # load_global_settings — kept as no-op for backward compatibility
     # ------------------------------------------------------------------
 
     def load_global_settings(self) -> None:
-        """Merge {data_dir}/settings/global_settings.json into this object."""
-        store_path = self.data_dir / "settings" / "global_settings.json"
-        if not store_path.exists():
-            return
-        try:
-            store = json.loads(store_path.read_text(encoding="utf-8"))
-        except Exception:
-            return
+        """No-op: dynamic fields read from disk on every access.
 
-        # pipeline_agent (loaded before pipeline guard — independent category)
-        pa = store.get("categories", {}).get("pipeline_agent", {})
-        if isinstance(pa, dict):
-            backend = str(pa.get("backend", "") or "").strip()
-            if backend in ("codex", "claude_code", "gemini_cli"):
-                self.pipeline_agent_backend = backend
-            provider = str(pa.get("provider", "") or "").strip()
-            if provider:
-                self.pipeline_agent_provider = provider
-            model = str(pa.get("model", "") or "").strip()
-            if model:
-                self.pipeline_agent_model = model
-            api_key = str(pa.get("api_key", "") or "").strip()
-            if api_key:
-                self.pipeline_agent_api_key = api_key
-            base_url = str(pa.get("base_url", "") or "").strip()
-            if base_url:
-                self.pipeline_agent_base_url = base_url
-            endpoint_url = str(pa.get("endpoint_url", "") or "").strip()
-            if endpoint_url:
-                self.pipeline_agent_endpoint_url = endpoint_url
-
-        pipeline = store.get("categories", {}).get("pipeline", {})
-        if not isinstance(pipeline, dict):
-            return
-
-        # mineru_api_key
-        val = str(pipeline.get("mineru_api_key", "") or "").strip()
-        if val:
-            self.mineru_api_key = val
-
-        # pipeline extraction settings
-        fast = str(pipeline.get("fast_provider", "") or "").strip()
-        if fast:
-            self.pipeline_fast_provider = fast
-        model = str(pipeline.get("fast_model", "") or "").strip()
-        if model:
-            self.pipeline_fast_model = model
-        endpoint = str(pipeline.get("fast_endpoint_url", "") or "").strip()
-        if endpoint:
-            self.pipeline_fast_endpoint_url = endpoint
-
-        # fast_provider configs → provider-specific API keys
-        fast_providers = pipeline.get("fast_providers", {})
-        if isinstance(fast_providers, dict):
-            for provider_id, field_name in [
-                ("deepseek", "deepseek_api_key"),
-                ("zhipu", "zhipu_api_key"),
-                ("openai", ""),
-                ("gemini", ""),
-                ("anthropic", ""),
-            ]:
-                if not field_name:
-                    continue
-                provider_data = fast_providers.get(provider_id, {})
-                if isinstance(provider_data, dict):
-                    key = str(provider_data.get("api_key", "") or "").strip()
-                    if key and not getattr(self, field_name, ""):
-                        setattr(self, field_name, key)
-
-        # extraction_mode
-        mode = str(pipeline.get("extraction_mode", "") or "").strip().lower()
-        if mode in ("fast", "agent"):
-            self.pipeline_extraction_mode = mode
+        Kept for backward compatibility with existing callers
+        (app.py, __main__.py, celery_app.py, etc.).
+        """
+        return
 
     # ------------------------------------------------------------------
-    # Derived paths
+    # Derived paths (computed from data_dir, not stored)
     # ------------------------------------------------------------------
 
     @property

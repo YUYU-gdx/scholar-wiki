@@ -179,12 +179,13 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     existing.update(agent_config)
     config_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # Inject skill into workspace
-    from kn_graph.services import codex_library_config as _codex_lib_cfg
-    skill_src = Path(__file__).resolve().parents[3] / "skills" / "templates" / "scholarly-paper-extraction"
-    skill_target = Path(workspace_path) / ".codex_project_skills" / "scholarly-paper-extraction"
-    if skill_src.exists():
-        _codex_lib_cfg._copy_single_skill(skill_src, skill_target)
+    # Ensure skills are deployed to .claude/skills/ and .agents/skills/.
+    # bootstrap_workspace_project_skills is idempotent — it overwrites with
+    # the latest template content on every call, so skill updates propagate
+    # automatically. Both Claude Code and Codex auto-discover skills from
+    # these convention paths, so no explicit project_skills override is needed.
+    from kn_graph.services.codex_library_config import bootstrap_workspace_project_skills as _deploy_skills
+    _deploy_skills(workspace_path)
 
     # Build runner
     codex_config_path = config_dir / "codex_runner_config.json"
@@ -202,9 +203,6 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
                 "args": ["run", "python", str(mcp_server_script)],
                 "env": {},
             }
-        ],
-        "project_skills": [
-            {"name": "scholarly-paper-extraction", "path": str(skill_target.resolve())}
         ],
     }
 

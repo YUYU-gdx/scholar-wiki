@@ -52,10 +52,6 @@ class SettingsService:
         if not isinstance(provider_data, dict):
             provider_data = {}
         defaults_base = (provider_map().get(active, {})).get("base_url", "")
-        # Sync to live Settings object
-        saved_key = str(saved.get("mineru_api_key", "") or "").strip()
-        if saved_key and not self._settings.mineru_api_key:
-            self._settings.mineru_api_key = saved_key
         return {
             "extraction_mode": mode,
             "mineru_api_key": str(saved.get("mineru_api_key", "") or ""),
@@ -113,20 +109,6 @@ class SettingsService:
         categories["pipeline"] = saved
         store["categories"] = categories
         self._write_store(store)
-        # Sync back to live Settings object
-        if "mineru_api_key" in body:
-            self._settings.mineru_api_key = str(body["mineru_api_key"]).strip()
-        if "fast_provider" in body:
-            self._settings.pipeline_fast_provider = str(body["fast_provider"]).strip()
-        if "fast_model" in body:
-            self._settings.pipeline_fast_model = str(body["fast_model"]).strip()
-        if "fast_endpoint_url" in body:
-            self._settings.pipeline_fast_endpoint_url = str(body["fast_endpoint_url"]).strip()
-        if "fast_provider" in body:
-            active = str(body.get("fast_provider", "")).strip()
-            if "fast_api_key" in body:
-                if active == "deepseek":
-                    self._settings.deepseek_api_key = str(body["fast_api_key"]).strip()
         return self._get_pipeline_category()
 
     def _get_pipeline_agent_category(self) -> dict[str, Any]:
@@ -178,19 +160,6 @@ class SettingsService:
         categories["pipeline_agent"] = saved
         store["categories"] = categories
         self._write_store(store)
-        # Sync to live Settings
-        if "backend" in body:
-            self._settings.pipeline_agent_backend = str(body.get("backend", "")).strip()
-        if "provider" in body:
-            self._settings.pipeline_agent_provider = str(body.get("provider", "")).strip()
-        if "model" in body:
-            self._settings.pipeline_agent_model = str(body.get("model", "")).strip()
-        if "api_key" in body:
-            self._settings.pipeline_agent_api_key = str(body.get("api_key", "")).strip()
-        if "base_url" in body:
-            self._settings.pipeline_agent_base_url = str(body.get("base_url", "")).strip()
-        if "endpoint_url" in body:
-            self._settings.pipeline_agent_endpoint_url = str(body.get("endpoint_url", "")).strip()
         return self._get_pipeline_agent_category()
 
     def _get_translation_category(self) -> dict[str, Any]:

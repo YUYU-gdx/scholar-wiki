@@ -1,15 +1,13 @@
 ﻿from __future__ import annotations
 
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import threading
-import time
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 import uuid
 
 
@@ -42,124 +40,6 @@ from kn_graph.services.agent_runner import AgentRunnerFactory  # noqa: E402
 from kn_graph.services import codex_library_config as _codex_lib_cfg  # noqa: E402
 
 
-class ChatStore(Protocol):
-    def create_session(self, title: str, default_mode: str, library_id: str) -> dict[str, Any]: ...
-
-    def list_sessions(self, library_id: str) -> list[dict[str, Any]]: ...
-
-    def get_session(self, session_id: str, library_id: str) -> dict[str, Any] | None: ...
-    def soft_delete_session(self, session_id: str, deleted_at: str, library_id: str) -> dict[str, Any] | None: ...
-    def restore_session(self, session_id: str, library_id: str) -> dict[str, Any] | None: ...
-
-    def create_message(self, payload: dict[str, Any]) -> dict[str, Any]: ...
-
-    def update_message(self, message_id: str, updates: dict[str, Any]) -> dict[str, Any]: ...
-
-    def get_message(self, message_id: str) -> dict[str, Any] | None: ...
-
-    def list_messages(self, session_id: str) -> list[dict[str, Any]]: ...
-
-
-class InMemoryChatStore:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._sessions: dict[str, dict[str, Any]] = {}
-        self._messages: dict[str, dict[str, Any]] = {}
-        self._session_messages: dict[str, list[str]] = defaultdict(list)
-
-    def create_session(self, title: str, default_mode: str, library_id: str) -> dict[str, Any]:
-        with self._lock:
-            now = _now_iso()
-            session_id = f"sess_{uuid.uuid4().hex}"
-            row = {
-                "session_id": session_id,
-                "title": title.strip() or "新会话",
-                "default_mode": default_mode,
-                "library_id": str(library_id or "").strip(),
-                "created_at": now,
-                "updated_at": now,
-                "deleted_at": None,
-            }
-            self._sessions[session_id] = dict(row)
-            return dict(row)
-
-    def list_sessions(self, library_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            target_library = str(library_id or "").strip()
-            rows = list(self._sessions.values())
-            rows = [r for r in rows if not str(r.get("deleted_at", "") or "").strip()]
-            rows = [r for r in rows if str(r.get("library_id", "") or "").strip() == target_library]
-            rows.sort(key=lambda x: str(x.get("updated_at", "")), reverse=True)
-            return [dict(r) for r in rows]
-
-    def get_session(self, session_id: str, library_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._sessions.get(session_id)
-            if isinstance(row, dict) and str(row.get("deleted_at", "") or "").strip():
-                return None
-            if isinstance(row, dict) and str(row.get("library_id", "") or "").strip() != str(library_id or "").strip():
-                return None
-            return dict(row) if isinstance(row, dict) else None
-
-    def soft_delete_session(self, session_id: str, deleted_at: str, library_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._sessions.get(str(session_id))
-            if not isinstance(row, dict):
-                return None
-            if str(row.get("library_id", "") or "").strip() != str(library_id or "").strip():
-                return None
-            if str(row.get("deleted_at", "") or "").strip():
-                return None
-            row["deleted_at"] = str(deleted_at or _now_iso())
-            row["updated_at"] = _now_iso()
-            return dict(row)
-
-    def restore_session(self, session_id: str, library_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._sessions.get(str(session_id))
-            if not isinstance(row, dict):
-                return None
-            if str(row.get("library_id", "") or "").strip() != str(library_id or "").strip():
-                return None
-            if not str(row.get("deleted_at", "") or "").strip():
-                return None
-            row["deleted_at"] = None
-            row["updated_at"] = _now_iso()
-            return dict(row)
-
-    def create_message(self, payload: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
-            row = dict(payload)
-            self._messages[str(row["message_id"])] = row
-            self._session_messages[str(row["session_id"])].append(str(row["message_id"]))
-            session_id = str(row["session_id"])
-            if session_id in self._sessions:
-                self._sessions[session_id]["updated_at"] = _now_iso()
-            return dict(row)
-
-    def update_message(self, message_id: str, updates: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
-            key = str(message_id)
-            if key not in self._messages:
-                raise KeyError(message_id)
-            self._messages[key].update(dict(updates))
-            self._messages[key]["updated_at"] = _now_iso()
-            session_id = str(self._messages[key].get("session_id", ""))
-            if session_id in self._sessions:
-                self._sessions[session_id]["updated_at"] = _now_iso()
-            return dict(self._messages[key])
-
-    def get_message(self, message_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._messages.get(str(message_id))
-            return dict(row) if isinstance(row, dict) else None
-
-    def list_messages(self, session_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            ids = list(self._session_messages.get(str(session_id), []))
-            rows = [dict(self._messages[mid]) for mid in ids if mid in self._messages]
-            rows.sort(key=lambda x: str(x.get("created_at", "")))
-            return rows
 
 
 @dataclass(slots=True)
@@ -238,6 +118,12 @@ class ModelRouter:
 
 
 class ChatService:
+    """Chat service backed entirely by the agent SDK (Codex / Claude Code / Gemini CLI).
+
+    Sessions and messages are stored and managed natively by the agent —
+    no separate chat store is maintained.
+    """
+
     def __init__(
         self,
         literature_search_fn: Callable[[str, int], dict[str, Any]],
@@ -248,7 +134,6 @@ class ChatService:
         library_codex_config_resolver_fn: Callable[[str, str], dict[str, Any]] | None = None,
         agent_backend: str | None = None,
     ) -> None:
-        self._store = self._build_store()
         self._events = EventHub()
         self._models = ModelRouter()
         self._literature_search = literature_search_fn
@@ -270,13 +155,6 @@ class ChatService:
         self._agent_backend = str(agent_backend or os.getenv("CHAT_AGENT_BACKEND", "codex")).strip().lower() or "codex"
         config_path = Path(os.getenv("CHAT_CODEX_CONFIG_PATH", "outputs/chat/codex_runner_config.json") or "outputs/chat/codex_runner_config.json")
         self._runner_factory = AgentRunnerFactory(codex_config_path=config_path)
-        self._restore_deadline_by_session: dict[str, float] = {}
-        self._session_thread_by_session_id: dict[str, str] = {}
-        self._pending_agent_sessions: set[str] = set()
-
-    @staticmethod
-    def _session_scope_id() -> str:
-        return "__global__"
 
     def _agent_workspace_dir(self) -> str:
         root = str(os.getenv("CHAT_CODEX_WORKSPACE_ROOT", "") or "").strip()
@@ -289,11 +167,6 @@ class ChatService:
             return str(ws.resolve())
         return str(Path.cwd().resolve())
 
-    @staticmethod
-    def _sync_codex_thread_on_session_ops() -> bool:
-        flag = str(os.getenv("CHAT_SESSION_SYNC_CODEX_THREAD", "0") or "0").strip().lower()
-        return flag in {"1", "true", "yes", "on"}
-
     def _effective_library_id(self, library_id: str = "") -> str:
         lib = str(library_id or "").strip()
         if lib:
@@ -303,209 +176,156 @@ class ChatService:
             or "supply_chain"
         )
 
-    def _build_store(self) -> ChatStore:
-        return InMemoryChatStore()
-
     def create_session(self, title: str = "", default_mode: str = "agent", library_id: str = "") -> dict[str, Any]:
+        """Create a session backed by the agent.
+
+        For Codex, ``thread_start()`` creates a real thread immediately.
+        For Claude Code / Gemini CLI, a UUID is generated — the agent
+        creates its session lazily on the first ``run_turn()`` call.
+        """
         _ = default_mode
         lib = self._effective_library_id(library_id)
         backend = self._agent_backend
-        if backend in ("codex", "claude_code", "gemini_cli"):
-            local = self._store.create_session(title=title, default_mode="agent", library_id=self._session_scope_id())
-            workspace = self._agent_workspace_dir()
+        workspace = self._agent_workspace_dir()
+        try:
+            library_workspace = str(self._resolve_library_workspace_path(lib))
+        except Exception:
+            library_workspace = ""
+        runner = self._runner_factory.build(backend)
+        overrides = self._build_codex_runtime_overrides(library_workspace, lib)
+        thread_res = runner.thread_start(
+            workdir=workspace,
+            library_id=lib,
+            runtime_overrides=overrides,
+        )
+        thread = thread_res.get("thread") if isinstance(thread_res.get("thread"), dict) else {}
+        thread_id = str(thread.get("id", "") or "").strip()
+        if not thread_id:
+            raise RuntimeError(f"{backend}_thread_start_failed")
+        title_text = str(title or "").strip()
+        if title_text:
             try:
-                library_workspace = str(self._resolve_library_workspace_path(lib))
+                runner.thread_set_name(
+                    thread_id=thread_id,
+                    name=title_text,
+                    workdir=workspace,
+                    runtime_overrides=overrides,
+                )
             except Exception:
-                library_workspace = ""
-            runner = self._runner_factory.build(backend)
-            overrides = self._build_codex_runtime_overrides(library_workspace, lib)
-            thread_res = runner.thread_start(
-                workdir=workspace,
-                library_id=lib,
-                runtime_overrides=overrides,
-            )
-            thread = thread_res.get("thread") if isinstance(thread_res.get("thread"), dict) else {}
-            thread_id = str(thread.get("id", "") or "").strip()
-            if not thread_id:
-                raise RuntimeError(f"{backend}_thread_start_failed")
-            self._session_thread_by_session_id[str(local.get("session_id", ""))] = thread_id
-            self._pending_agent_sessions.add(thread_id)
-            title_text = str(title or "").strip()
-            if title_text:
-                try:
-                    runner.thread_set_name(
-                        thread_id=thread_id,
-                        name=title_text,
-                        workdir=workspace,
-                        runtime_overrides=overrides,
-                    )
-                except Exception:
-                    pass
-            now = _now_iso()
-            return {
-                "session_id": str(local.get("session_id", "") or thread_id),
-                "title": str(title_text or thread.get("name", "") or f"Session {thread_id[:8]}"),
-                "default_mode": "agent",
-                "library_id": "",
-                "created_at": str(local.get("created_at", "") or now),
-                "updated_at": str(local.get("updated_at", "") or now),
-                "deleted_at": local.get("deleted_at"),
-                "source": backend,
-            }
-        return self._store.create_session(title=title, default_mode="agent", library_id=self._session_scope_id())
+                pass
+        now = _now_iso()
+        return {
+            "session_id": thread_id,
+            "title": str(title_text or thread.get("name", "") or f"Session {thread_id[:8]}"),
+            "default_mode": "agent",
+            "library_id": "",
+            "created_at": now,
+            "updated_at": now,
+            "deleted_at": None,
+            "source": backend,
+        }
 
     def list_sessions(self, library_id: str = "") -> list[dict[str, Any]]:
-        self._cleanup_restore_deadlines()
-        lib = self._effective_library_id(library_id)
+        """List sessions from the agent.  Codex threads are filtered to
+        exclude archived ones (soft-delete); Claude Code has no archive
+        concept so all sessions are returned."""
         backend = self._agent_backend
-        if backend in ("codex", "claude_code", "gemini_cli"):
-            workdir = self._agent_workspace_dir()
-            runner = self._runner_factory.build(backend)
-            result = runner.thread_list(workdir=workdir)
-            sessions: list[dict[str, Any]] = []
-            for t in result.get("data", []):
-                tid = str(t.get("id", "") or "")
-                sessions.append({
-                    "session_id": tid,
-                    "title": str(t.get("name", "") or "").strip() or f"Session {tid[:8]}",
-                    "default_mode": "agent",
-                    "library_id": "",
-                    "created_at": t.get("created_at", ""),
-                    "updated_at": t.get("last_modified", ""),
-                    "source": backend,
-                })
-            return sessions
-        return self._store.list_sessions(library_id=self._session_scope_id())
+        workdir = self._agent_workspace_dir()
+        runner = self._runner_factory.build(backend)
+        result = runner.thread_list(workdir=workdir)
+        sessions: list[dict[str, Any]] = []
+        for t in result.get("data", []):
+            # Codex returns archived threads in its list when asked explicitly;
+            # the default (archived=False) already filters them out.
+            tid = str(t.get("id", "") or "")
+            sessions.append({
+                "session_id": tid,
+                "title": str(t.get("name", "") or "").strip() or f"Session {tid[:8]}",
+                "default_mode": "agent",
+                "library_id": "",
+                "created_at": t.get("created_at", ""),
+                "updated_at": t.get("last_modified", ""),
+                "source": backend,
+            })
+        return sessions
 
     def delete_session(self, session_id: str, undo_window_seconds: int = 5, library_id: str = "") -> dict[str, Any]:
+        """Delete a session via the agent.
+
+        Codex: ``thread_archive`` (soft delete, recoverable with ``restore_session``).
+        Claude Code: ``thread_archive`` calls ``delete_session`` (permanent, not recoverable).
+        """
         lib = self._effective_library_id(library_id)
         backend = self._agent_backend
-        if backend in ("codex", "claude_code", "gemini_cli"):
-            thread_id = self._session_thread_by_session_id.get(str(session_id), "").strip()
-            if thread_id and self._sync_codex_thread_on_session_ops():
-                workspace = self._agent_workspace_dir()
-                try:
-                    library_workspace = str(self._resolve_library_workspace_path(lib))
-                except Exception:
-                    library_workspace = ""
-                runner = self._runner_factory.build(backend)
-                try:
-                    runner.thread_archive(
-                        thread_id=thread_id,
-                        workdir=workspace,
-                        runtime_overrides=self._build_codex_runtime_overrides(library_workspace, lib),
-                    )
-                except Exception:
-                    pass
-            now = datetime.now(timezone.utc)
-            self._store.soft_delete_session(session_id=session_id, deleted_at=now.isoformat(), library_id=self._session_scope_id())
-            return {
-                "session_id": str(session_id),
-                "library_id": "",
-                "deleted_at": now.isoformat(),
-                "undo_window_seconds": int(max(1, undo_window_seconds)),
-                "undo_deadline": (now + timedelta(seconds=max(1, int(undo_window_seconds)))).isoformat(),
-                "source": backend,
-            }
-        sess = self._store.get_session(session_id, library_id=self._session_scope_id())
-        if sess is None:
-            raise KeyError("session_not_found")
-        now = datetime.now(timezone.utc)
-        deleted = self._store.soft_delete_session(session_id=session_id, deleted_at=now.isoformat(), library_id=self._session_scope_id())
-        if deleted is None:
-            raise KeyError("session_not_found")
-        window = max(1, int(undo_window_seconds))
-        deadline = now + timedelta(seconds=window)
-        self._restore_deadline_by_session[f"{lib}:{str(session_id)}"] = deadline.timestamp()
+        workspace = self._agent_workspace_dir()
+        try:
+            library_workspace = str(self._resolve_library_workspace_path(lib))
+        except Exception:
+            library_workspace = ""
+        runner = self._runner_factory.build(backend)
+        runner.thread_archive(
+            thread_id=str(session_id),
+            workdir=workspace,
+            runtime_overrides=self._build_codex_runtime_overrides(library_workspace, lib),
+        )
         return {
             "session_id": str(session_id),
-            "library_id": lib,
-            "deleted_at": now.isoformat(),
-            "undo_window_seconds": window,
-            "undo_deadline": deadline.isoformat(),
+            "library_id": "",
+            "deleted_at": _now_iso(),
+            "source": backend,
         }
 
     def restore_session(self, session_id: str, library_id: str = "") -> dict[str, Any]:
-        lib = self._effective_library_id(library_id)
+        """Restore an archived session.  Only works for Codex (soft-delete).
+        Claude Code sessions are permanently deleted and cannot be restored."""
         backend = self._agent_backend
-        if backend in ("codex", "claude_code", "gemini_cli"):
-            thread_id = self._session_thread_by_session_id.get(str(session_id), "").strip()
-            if thread_id and self._sync_codex_thread_on_session_ops():
-                workspace = self._agent_workspace_dir()
-                try:
-                    library_workspace = str(self._resolve_library_workspace_path(lib))
-                except Exception:
-                    library_workspace = ""
-                runner = self._runner_factory.build(backend)
-                try:
-                    runner.thread_unarchive(
-                        thread_id=thread_id,
-                        workdir=workspace,
-                        runtime_overrides=self._build_codex_runtime_overrides(library_workspace, lib),
-                    )
-                except Exception:
-                    pass
-            self._store.restore_session(session_id=session_id, library_id=self._session_scope_id())
-            return {"session_id": str(session_id), "library_id": "", "restored": True, "source": backend}
-        self._cleanup_restore_deadlines()
-        restore_key = f"{lib}:{str(session_id)}"
-        deadline_ts = self._restore_deadline_by_session.get(restore_key)
-        if deadline_ts is None:
-            return {"session_id": str(session_id), "library_id": lib, "restored": False, "error": "restore_window_expired"}
-        if time.time() > float(deadline_ts):
-            self._restore_deadline_by_session.pop(restore_key, None)
-            return {"session_id": str(session_id), "library_id": lib, "restored": False, "error": "restore_window_expired"}
-        restored = self._store.restore_session(session_id=session_id, library_id=self._session_scope_id())
-        if restored is None:
-            return {"session_id": str(session_id), "library_id": lib, "restored": False, "error": "session_not_found"}
-        self._restore_deadline_by_session.pop(restore_key, None)
-        return {"session_id": str(session_id), "library_id": lib, "restored": True}
-
-    def _cleanup_restore_deadlines(self) -> None:
-        now_ts = time.time()
-        expired = [sid for sid, ts in self._restore_deadline_by_session.items() if now_ts > float(ts)]
-        for sid in expired:
-            self._restore_deadline_by_session.pop(sid, None)
+        workspace = self._agent_workspace_dir()
+        try:
+            library_workspace = str(self._resolve_library_workspace_path(
+                self._effective_library_id(library_id)))
+        except Exception:
+            library_workspace = ""
+        runner = self._runner_factory.build(backend)
+        runner.thread_unarchive(
+            thread_id=str(session_id),
+            workdir=workspace,
+            runtime_overrides=self._build_codex_runtime_overrides(library_workspace, self._effective_library_id(library_id)),
+        )
+        return {"session_id": str(session_id), "library_id": "", "restored": True, "source": backend}
 
     def get_session_with_messages(self, session_id: str, library_id: str = "") -> dict[str, Any] | None:
-        lib = self._effective_library_id(library_id)
+        """Read a session and its message history from the agent."""
         backend = self._agent_backend
-        if backend in ("codex", "claude_code", "gemini_cli"):
-            workdir = self._agent_workspace_dir()
-            runner = self._runner_factory.build(backend)
-            result = runner.thread_read(thread_id=str(session_id), workdir=workdir)
-            thread = result.get("thread", {}) if isinstance(result, dict) else {}
-            tid = str(thread.get("id", "") or session_id)
-            session = {
+        workdir = self._agent_workspace_dir()
+        runner = self._runner_factory.build(backend)
+        result = runner.thread_read(thread_id=str(session_id), workdir=workdir)
+        thread = result.get("thread", {}) if isinstance(result, dict) else {}
+        tid = str(thread.get("id", "") or session_id)
+        session = {
+            "session_id": tid,
+            "title": str(thread.get("title", "") or "").strip() or f"Session {str(session_id)[:8]}",
+            "default_mode": "agent",
+            "library_id": "",
+            "created_at": thread.get("created_at", ""),
+            "updated_at": "",
+            "source": backend,
+        }
+        messages: list[dict[str, Any]] = []
+        for m in (result.get("messages", []) if isinstance(result, dict) else []):
+            messages.append({
+                "message_id": str(m.get("message_id", "") or ""),
                 "session_id": tid,
-                "title": str(thread.get("title", "") or "").strip() or f"Session {str(session_id)[:8]}",
-                "default_mode": "agent",
-                "library_id": "",
-                "created_at": thread.get("created_at", ""),
+                "role": str(m.get("role", "user") or "user"),
+                "content": str(m.get("content", "") or ""),
+                "status": str(m.get("status", "completed") or "completed"),
+                "citations_json": "[]",
+                "retrieval_json": "{}",
+                "tool_trace_json": "[]",
+                "error_detail": "",
+                "created_at": "",
                 "updated_at": "",
-                "source": backend,
-            }
-            messages: list[dict[str, Any]] = []
-            for m in (result.get("messages", []) if isinstance(result, dict) else []):
-                messages.append({
-                    "message_id": str(m.get("message_id", "") or ""),
-                    "session_id": tid,
-                    "role": str(m.get("role", "user") or "user"),
-                    "content": str(m.get("content", "") or ""),
-                    "status": str(m.get("status", "completed") or "completed"),
-                    "citations_json": "[]",
-                    "retrieval_json": "{}",
-                    "tool_trace_json": "[]",
-                    "error_detail": "",
-                    "created_at": "",
-                    "updated_at": "",
-                })
-            return {"session": session, "messages": [self._hydrate_message(m) for m in messages]}
-        sess = self._store.get_session(session_id, library_id=self._session_scope_id())
-        if sess is None:
-            return None
-        messages = [self._hydrate_message(m) for m in self._store.list_messages(session_id)]
-        return {"session": sess, "messages": messages}
+            })
+        return {"session": session, "messages": messages}
 
     def _build_codex_runtime_overrides(self, workspace: str, library_id: str) -> dict[str, Any]:
         runtime_overrides: dict[str, Any] = {}
@@ -538,60 +358,23 @@ class ChatService:
         stream: bool,
         library_id: str = "",
     ) -> dict[str, Any]:
+        """Submit a user message and start the agent response in a background thread.
+
+        Message history is fetched afterwards via ``get_session_with_messages``,
+        which reads directly from the agent SDK's native session store.
+        """
         lib = self._effective_library_id(library_id)
-        session = self._store.get_session(session_id, library_id=self._session_scope_id())
-        if session is None and self._agent_backend not in ("codex", "claude_code", "gemini_cli"):
-            raise KeyError("session_not_found")
-        if session is None:
-            session = {"session_id": session_id, "default_mode": "agent", "library_id": lib}
-        now = _now_iso()
-        normalized_mode = str(mode or session.get("default_mode", "agent") or "agent").strip().lower()
+        normalized_mode = str(mode or "agent").strip().lower()
         if normalized_mode not in {"agent", "fast"}:
             normalized_mode = "agent"
-        user_msg = {
-            "message_id": f"msg_{uuid.uuid4().hex}",
-            "session_id": session_id,
-            "role": "user",
-            "mode": normalized_mode,
-            "provider": provider,
-            "model": model,
-            "content": content,
-            "citations_json": "[]",
-            "retrieval_json": "{}",
-            "tool_trace_json": "[]",
-            "status": "completed",
-            "error_detail": "",
-            "created_at": now,
-            "updated_at": now,
-        }
-        self._store.create_message(user_msg)
-
         assistant_id = f"msg_{uuid.uuid4().hex}"
-        assistant_msg = {
-            "message_id": assistant_id,
-            "session_id": session_id,
-            "role": "assistant",
-            "mode": normalized_mode,
-            "provider": provider,
-            "model": model,
-            "content": "",
-            "citations_json": "[]",
-            "retrieval_json": "{}",
-            "tool_trace_json": "[]",
-            "status": "running",
-            "error_detail": "",
-            "created_at": now,
-            "updated_at": now,
-        }
-        self._store.create_message(assistant_msg)
-
         t = threading.Thread(
             target=self._run_assistant_message,
-            args=(assistant_id, content, normalized_mode, provider, model, stream, lib, str(self._session_thread_by_session_id.get(session_id, ""))),
+            args=(assistant_id, content, normalized_mode, provider, model, stream, lib, str(session_id)),
             daemon=True,
         )
         t.start()
-        return {"user_message_id": user_msg["message_id"], "assistant_message_id": assistant_id}
+        return {"assistant_message_id": assistant_id}
 
     def read_events(self, message_id: str, cursor: int, wait_seconds: float = 20.0) -> tuple[list[dict[str, Any]], int, bool]:
         return self._events.read_since(message_id=message_id, cursor=cursor, wait_seconds=wait_seconds)
@@ -620,27 +403,6 @@ class ChatService:
                 result = self._run_fast(message_id, query, provider, model, stream, library_id=library_id)
             else:
                 result = self._run_agent(message_id, query, provider, model, stream, library_id=library_id, thread_id=session_id)
-            self._store.update_message(
-                message_id,
-                {
-                    "status": "completed",
-                    "content": result["answer"],
-                    "citations_json": json.dumps(result.get("citations", []), ensure_ascii=False),
-                    "retrieval_json": json.dumps(result.get("retrieval_trace", {}), ensure_ascii=False),
-                    "tool_trace_json": json.dumps(result.get("tool_trace", []), ensure_ascii=False),
-                },
-            )
-            if normalized_mode == "agent":
-                thread_id = ""
-                retrieval_trace = result.get("retrieval_trace", {}) if isinstance(result.get("retrieval_trace"), dict) else {}
-                thread_id = str(retrieval_trace.get("thread_id", "") or "").strip()
-                if thread_id:
-                    sess_id = str(self._store.get_message(message_id).get("session_id", "") or "").strip() if self._store.get_message(message_id) else ""
-                    if sess_id:
-                        old_tid = self._session_thread_by_session_id.get(sess_id, "")
-                        self._session_thread_by_session_id[sess_id] = thread_id
-                        if old_tid:
-                            self._pending_agent_sessions.discard(old_tid)
             self._emit(
                 message_id,
                 "completed",
@@ -657,7 +419,6 @@ class ChatService:
             detail = str(exc)
             error_code = self._extract_error_code(detail)
             backend = self._extract_backend(detail)
-            self._store.update_message(message_id, {"status": "failed", "error_detail": detail})
             self._emit(
                 message_id,
                 "failed",
@@ -1269,12 +1030,7 @@ class ChatService:
             agent_timeout_seconds = int(os.getenv("CHAT_AGENT_TURN_TIMEOUT_SECONDS", "180") or "180")
             if agent_timeout_seconds < 30:
                 agent_timeout_seconds = 30
-            # First turn: don't pass our pre-generated thread_id to the runner.
-            # Let the CLI auto-create the session; we capture the real session_id
-            # from the response.
             effective_tid = str(thread_id or "").strip()
-            if effective_tid and effective_tid in self._pending_agent_sessions:
-                effective_tid = ""
             with ThreadPoolExecutor(max_workers=1) as pool:
                 fut = pool.submit(
                     runner.run_turn,
@@ -1355,14 +1111,4 @@ class ChatService:
             "tool_trace": tool_trace,
         }
 
-    @staticmethod
-    def _hydrate_message(row: dict[str, Any]) -> dict[str, Any]:
-        out = dict(row)
-        out["citations"] = _safe_json(out.get("citations_json", "[]"), [])
-        out["retrieval"] = _safe_json(out.get("retrieval_json", "{}"), {})
-        out["tool_trace"] = _safe_json(out.get("tool_trace_json", "[]"), [])
-        detail = str(out.get("error_detail", "") or "").strip()
-        out["error_code"] = ChatService._extract_error_code(detail) if detail else ""
-        out["error_backend"] = ChatService._extract_backend(detail) if detail else ""
-        return out
 
