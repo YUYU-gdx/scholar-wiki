@@ -40,14 +40,8 @@ class Settings(BaseModel):
     pipeline_executor: str = "inline"
     pipeline_redis_url: str = "redis://127.0.0.1:6379/0"
 
-    nvidia_api_key: str = ""
-    chromadb_path: str = ""
-
     llm_provider_config_path: str = "config/llm_providers.json"
 
-    literature_library_index_root: str = "outputs/literature_libraries"
-    literature_library_registry_path: str = ""
-    literature_library_workspaces_root: str = ""
     literature_default_library_id: str = ""
 
     graph_embedding_model: str = ""
@@ -240,21 +234,6 @@ class Settings(BaseModel):
     @property
     def codex_config_path(self) -> Path:
         return self.data_dir / "chat" / "codex_runner_config.json"
-
-    @property
-    def library_index_root_path(self) -> Path:
-        path = self.literature_library_index_root.strip()
-        return Path(path) if path else Path("outputs/literature_libraries")
-
-    @property
-    def library_registry_path(self) -> Path:
-        path = self.literature_library_registry_path.strip()
-        return Path(path) if path else self.libraries_dir / "registry.json"
-
-    @property
-    def library_workspaces_root_path(self) -> Path:
-        path = self.literature_library_workspaces_root.strip()
-        return Path(path) if path else self.workspaces_dir
 
     def resolve_graph_views_path(self, library_id: str = "") -> Path | None:
         lib = str(library_id or "").strip()

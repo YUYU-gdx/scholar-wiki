@@ -25,9 +25,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     from kn_graph.services.library_registry import configure as configure_library_registry
     configure_library_registry(
-        workspace_root=settings.library_workspaces_root_path,
-        registry_path=settings.library_registry_path,
-        index_root=settings.library_index_root_path,
+        workspace_root=settings.workspaces_dir,
+        registry_path=settings.registry_path,
+        index_root=settings.indexes_dir,
     )
 
     ensure_data_dirs(settings)

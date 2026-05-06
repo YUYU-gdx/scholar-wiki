@@ -274,13 +274,13 @@ export default function App() {
               </button>
             </div>
             {creatingLibrary && (
-              <div className="mb-2 flex items-center gap-1.5">
+              <div className="mb-2 flex items-center gap-1.5" key="create-lib">
                 <input
                   autoFocus
-                  value={newLibraryId}
-                  onChange={(e) => setNewLibraryId(e.target.value)}
+                  defaultValue={newLibraryId}
+                  onInput={(e) => setNewLibraryId((e.target as HTMLInputElement).value)}
                   placeholder="library_id"
-                  className="flex-1 bg-surface-container border border-outline-variant rounded px-2 py-1 text-xs font-mono outline-none focus:border-secondary"
+                  className="flex-1 bg-surface-container border border-outline-variant rounded px-2 py-1 text-xs font-mono text-on-surface outline-none focus:border-secondary"
                 />
                 <button
                   type="button"
