@@ -290,7 +290,7 @@ def create_library(
     # and Codex auto-discover them when working in this workspace.
     try:
         from kn_graph.services.codex_library_config import bootstrap_workspace_project_skills
-        bootstrap_workspace_project_skills(str(ws_path))
+        bootstrap_workspace_project_skills(str(ws_path), skill_names=["scholarly-paper-extraction"])
     except Exception:
         pass
 

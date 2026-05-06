@@ -153,8 +153,22 @@ class ChatService:
             except Exception:
                 self._library_codex_config_resolver = None
         self._agent_backend = str(agent_backend or os.getenv("CHAT_AGENT_BACKEND", "codex")).strip().lower() or "codex"
-        config_path = Path(os.getenv("CHAT_CODEX_CONFIG_PATH", "outputs/chat/codex_runner_config.json") or "outputs/chat/codex_runner_config.json")
-        self._runner_factory = AgentRunnerFactory(codex_config_path=config_path)
+        self.__runner_factory: AgentRunnerFactory | None = None
+
+    @property
+    def _runner_factory(self) -> AgentRunnerFactory:
+        """Lazy-init AgentRunnerFactory so it reads from the data directory
+        (``_settings.codex_config_path``) after settings are injected."""
+        if self.__runner_factory is None:
+            path_env = os.getenv("CHAT_CODEX_CONFIG_PATH", "").strip()
+            if path_env:
+                config_path = Path(path_env)
+            elif hasattr(self, "_settings") and self._settings is not None:
+                config_path = self._settings.codex_config_path
+            else:
+                config_path = Path("outputs/chat/codex_runner_config.json")
+            self.__runner_factory = AgentRunnerFactory(codex_config_path=config_path)
+        return self.__runner_factory
 
     def _agent_workspace_dir(self) -> str:
         root = str(os.getenv("CHAT_CODEX_WORKSPACE_ROOT", "") or "").strip()
@@ -367,6 +381,7 @@ class ChatService:
         normalized_mode = str(mode or "agent").strip().lower()
         if normalized_mode not in {"agent", "fast"}:
             normalized_mode = "agent"
+        user_id = f"msg_{uuid.uuid4().hex}"
         assistant_id = f"msg_{uuid.uuid4().hex}"
         t = threading.Thread(
             target=self._run_assistant_message,
@@ -374,7 +389,7 @@ class ChatService:
             daemon=True,
         )
         t.start()
-        return {"assistant_message_id": assistant_id}
+        return {"user_message_id": user_id, "assistant_message_id": assistant_id}
 
     def read_events(self, message_id: str, cursor: int, wait_seconds: float = 20.0) -> tuple[list[dict[str, Any]], int, bool]:
         return self._events.read_since(message_id=message_id, cursor=cursor, wait_seconds=wait_seconds)

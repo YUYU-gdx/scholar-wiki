@@ -56,41 +56,77 @@
 
 所有 skill 模板存放在 `skills/templates/<skill-name>/SKILL.md`。
 
+当前有两个 skill：
+
+| Skill 名称 | 用途 | 部署目标 |
+|-----------|------|---------|
+| `answer_library_question` | Chat 问答：RAG 召回 + 证据引用 | **Root workspace** |
+| `scholarly-paper-extraction` | 提取论文实体 + 回写笔记 | **Library workspace** |
+
 ### 4.2 部署时机
 
-**workspace / library 初始化时一次性部署**，而非每次 pipeline job 运行时复制。
-
-触发场景：
-- `bootstrap_library_codex_skills()` 调用（现有 API）
-- 或在 `ensure_data_dirs()` / 库创建流程中自动触发
+- **Root workspace**：应用启动时（`app.py`）和 Chat 服务首次初始化时（`ChatService._ensure_chat()`）
+- **Library workspace**：库 codex 配置首次访问时（`load_or_init_library_codex_config()`）、库创建时（`library_registry.create_library()`）、以及提取管线运行时（`_run_agent_extraction()`，幂等调用）
 
 ### 4.3 部署目标
 
-对每个 library workspace，同时部署到两个约定的路径：
+**Root workspace** (`{data_dir}/libraries/workspaces/`) — Chat 对话的 agent cwd：
 
-| Backend | 部署路径 | 说明 |
-|---------|---------|------|
-| Claude Code | `{workspace}/.claude/skills/{name}/SKILL.md` | Claude Code 从 cwd 自动发现 |
-| Codex | `{workspace}/.agents/skills/{name}/SKILL.md` | Codex 从 cwd 向上遍历发现 |
+| Backend | 部署路径 | Skill |
+|---------|---------|-------|
+| Claude Code | `{root}/.claude/skills/answer_library_question/SKILL.md` | 问答 |
+| Codex | `{root}/.agents/skills/answer_library_question/SKILL.md` | 问答 |
 
-两个 backend 都从 cwd (= workspace root) 自动扫描各自的约定目录，因此：
+**Library workspace** (`{data_dir}/libraries/workspaces/{library_id}/`) — 提取管线的 agent cwd：
+
+| Backend | 部署路径 | Skill |
+|---------|---------|-------|
+| Claude Code | `{lib}/.claude/skills/scholarly-paper-extraction/SKILL.md` | 提取 |
+| Codex | `{lib}/.agents/skills/scholarly-paper-extraction/SKILL.md` | 提取 |
+
+Agent 从 cwd 自动扫描各自的约定目录，因此：
 - **不需要** `runtime_overrides` 显式传递 skill 路径
-- **不需要** pipeline runtime 每次复制
-- agent 启动后自动发现
+- `bootstrap_workspace_project_skills()` 接受 `skill_names` 参数精确控制部署范围
+- 部署时自动清理同名目录下不在允许列表中的旧 skill
 
-### 4.4 旧路径清理
+### 4.4 cwd 与 Skill 发现关系
 
-以下路径为历史错误，应清理：
+```
+Chat 对话:
+  agent cwd = root workspace (libraries/workspaces/)
+  → 自动发现 .claude/skills/answer_library_question/
+  → 实现"回答文献库问题"功能
+
+Pipeline 提取:
+  agent cwd = library workspace (libraries/workspaces/{lib}/)
+  → 自动发现 .claude/skills/scholarly-paper-extraction/
+  → 实现"提取论文实体"功能
+```
+
+### 4.5 旧路径清理
+
+以下路径为历史错误，已通过 `bootstrap_workspace_project_skills()` 自动清理：
 
 - `{workspace}/.codex_project_skills/` — 无效路径，两边都不识别
-- `pipeline_runtime.py` 中 `_run_agent_extraction()` 的逐次复制逻辑 — 应删除
+- `pipeline_runtime.py` 中 `_run_agent_extraction()` 的调用保留但改为幂等（部署是覆盖式、非累积式）
+
+### 4.6 Skill 过滤机制
+
+`bootstrap_workspace_project_skills(workspace_path, skill_names=None)`：
+
+- `skill_names=None`：部署所有模板 skill（向后兼容）
+- `skill_names=["scholarly-paper-extraction"]`：仅部署指定的 skill，并清理不在列表中的旧 skill
+- 此机制确保 root workspace 和 library workspace 各自只有所需的 skill
 
 ## 5. 相关代码位置
 
 | 文件 | 说明 |
 |------|------|
-| `skills/templates/scholarly-paper-extraction/SKILL.md` | Skill 模板源 |
-| `src/kn_graph/services/codex_library_config.py` | Skill 部署与配置管理模块 |
-| `src/kn_graph/services/pipeline_runtime.py` | Pipeline 运行时（含错误的逐次复制逻辑） |
-| `src/kn_graph/services/chat_service.py` | `bootstrap_library_codex_skills()` |
-| `src/kn_graph/services/agent_runner.py` | Agent runner（ClaudeCodeRunner 未消费 project_skills） |
+| `skills/templates/scholarly-paper-extraction/SKILL.md` | 提取 Skill 模板源 |
+| `skills/templates/answer_library_question/SKILL.md` | 问答 Skill 模板源 |
+| `src/kn_graph/services/codex_library_config.py` | Skill 部署与配置管理（含 `skill_names` 过滤） |
+| `src/kn_graph/app.py` | 启动时向 root workspace 部署问答 skill |
+| `src/kn_graph/services/chat_service.py` | Chat 初始化时部署问答 skill；`bootstrap_library_codex_skills()` |
+| `src/kn_graph/services/pipeline_runtime.py` | Pipeline 提取时幂等部署提取 skill |
+| `src/kn_graph/services/library_registry.py` | 库创建时部署提取 skill |
+| `src/kn_graph/services/agent_runner.py` | Agent runner（通过 cwd 自动发现 skill） |

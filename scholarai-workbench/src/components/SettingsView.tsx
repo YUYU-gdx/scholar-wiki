@@ -47,7 +47,7 @@ export default function SettingsView() {
     const raw = payload?.schema?.categories ?? [];
     return raw
       .map((c) => ({ ...c, id: c.id === 'codex_global' ? 'agent_settings' : c.id }))
-      .filter((c) => c.id === 'pipeline' || c.id === 'translation' || c.id === 'agent_settings' || c.id === 'pipeline_agent');
+      .filter((c) => c.id === 'pipeline' || c.id === 'translation' || c.id === 'agent_settings' || c.id === 'pipeline_agent' || c.id === 'embedding');
   }, [payload]);
 
   useEffect(() => {
@@ -76,6 +76,7 @@ export default function SettingsView() {
     const hit = presets.find((p) => p.id === providerId);
     if (!hit) return;
     const endpoint = `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`;
+    const embEndpoint = `${hit.base_url.replace(/\/$/, '')}/embeddings`;
     // When switching providers, only send the provider identity + base_url/endpoint_url.
     // Do NOT include model/api_key from the old provider's drafts — that would pollute
     // the new provider's saved data. The backend will return the new provider's saved
@@ -83,6 +84,8 @@ export default function SettingsView() {
     let body: Record<string, unknown>;
     if (category === 'pipeline') {
       body = { fast_provider: providerId, fast_base_url: hit.base_url, fast_endpoint_url: endpoint };
+    } else if (category === 'embedding') {
+      body = { provider: providerId, endpoint_url: embEndpoint };
     } else if (category === 'agent_settings' || category === 'pipeline_agent') {
       body = { provider: providerId, base_url: hit.base_url, endpoint_url: endpoint };
     } else {
@@ -95,6 +98,8 @@ export default function SettingsView() {
       // Fallback: update local fields only, user can click Save manually
       if (category === 'pipeline') {
         setDrafts((prev) => ({ ...prev, pipeline: { ...asRecord(prev.pipeline), fast_provider: providerId, fast_base_url: hit.base_url, fast_endpoint_url: endpoint } }));
+      } else if (category === 'embedding') {
+        setDrafts((prev) => ({ ...prev, embedding: { ...asRecord(prev.embedding), provider: providerId, endpoint_url: embEndpoint } }));
       } else if (category === 'agent_settings' || category === 'pipeline_agent') {
         setDrafts((prev) => ({ ...prev, [category]: { ...asRecord(prev[category]), provider: providerId, base_url: hit.base_url, endpoint_url: endpoint } }));
       } else {
@@ -201,6 +206,16 @@ export default function SettingsView() {
                   <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField(id, 'base_url', e.target.value)} /></label>
                   <label className="md:col-span-2"><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField(id, 'endpoint_url', e.target.value)} /></label>
                   <div className="md:col-span-2 text-on-surface-variant">Pipeline Agent 配置独立于 Chat Agent，用于论文提取任务。仅当提取模式选择「agent」时生效。</div>
+                </div>
+              )}
+
+              {id === 'embedding' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                  <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('embedding', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
+                  <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
+                  <label><div className="mb-1">API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} /></label>
+                  <label className="md:col-span-2"><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField(id, 'endpoint_url', e.target.value)} /></label>
+                  <div className="md:col-span-2 text-on-surface-variant">文献向量嵌入提供商的配置。支持 OpenAI 兼容的 /embeddings 接口。常用模型：text-embedding-3-small (OpenAI)、embedding-3 (智谱)、BAAI/bge-m3 (SiliconFlow)。</div>
                 </div>
               )}
 

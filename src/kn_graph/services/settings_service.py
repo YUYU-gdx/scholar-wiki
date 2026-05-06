@@ -162,6 +162,56 @@ class SettingsService:
         self._write_store(store)
         return self._get_pipeline_agent_category()
 
+    def _get_embedding_category(self) -> dict[str, Any]:
+        from kn_graph.services.cherry_provider_catalog import default_embedding_endpoint_url, provider_presets  # noqa: F811
+        store = self._read_store()
+        saved = store.get("categories", {}).get("embedding", {})
+        if not isinstance(saved, dict):
+            saved = {}
+        provider = str(saved.get("provider", "") or "zhipu").strip()
+        providers = saved.get("providers", {}) if isinstance(saved.get("providers"), dict) else {}
+        provider_data = providers.get(provider, {}) if isinstance(providers, dict) else {}
+        if not isinstance(provider_data, dict):
+            provider_data = {}
+        endpoint_url = str(provider_data.get("endpoint_url", "") or "").strip()
+        if not endpoint_url:
+            endpoint_url = default_embedding_endpoint_url("")
+        return {
+            "provider": provider,
+            "model": str(provider_data.get("model", "") or ""),
+            "api_key": str(provider_data.get("api_key", "") or ""),
+            "endpoint_url": endpoint_url,
+            "provider_presets": provider_presets(),
+        }
+
+    def _save_embedding_category(self, body: dict[str, Any]) -> dict[str, Any]:
+        from kn_graph.services.cherry_provider_catalog import default_embedding_endpoint_url  # noqa: F811
+        store = self._read_store()
+        categories = store.get("categories", {}) if isinstance(store.get("categories"), dict) else {}
+        saved = categories.get("embedding", {}) if isinstance(categories, dict) else {}
+        if not isinstance(saved, dict):
+            saved = {}
+        requested = str(body.get("provider", "") or "").strip()
+        if requested:
+            saved["provider"] = requested
+        active = str(saved.get("provider", "") or "zhipu").strip()
+        saved.setdefault("providers", {})
+        if not isinstance(saved.get("providers"), dict):
+            saved["providers"] = {}
+        provider_data = saved["providers"].get(active, {}) if isinstance(saved["providers"], dict) else {}
+        if not isinstance(provider_data, dict):
+            provider_data = {}
+        for key in ("model", "api_key", "endpoint_url"):
+            if key in body:
+                provider_data[key] = str(body.get(key, "") or "").strip()
+        if not str(provider_data.get("endpoint_url", "") or "").strip():
+            provider_data["endpoint_url"] = default_embedding_endpoint_url("")
+        saved["providers"][active] = provider_data
+        categories["embedding"] = saved
+        store["categories"] = categories
+        self._write_store(store)
+        return self._get_embedding_category()
+
     def _get_translation_category(self) -> dict[str, Any]:
         return self._chat_service.get_translation_provider_config()
 
@@ -182,10 +232,11 @@ class SettingsService:
 
     def get_schema(self) -> dict[str, Any]:
         return {
-            "version": 2,
+            "version": 3,
             "categories": [
                 {"id": "pipeline", "title": "Pipeline", "restart_required": False},
                 {"id": "pipeline_agent", "title": "Pipeline Agent", "restart_required": False},
+                {"id": "embedding", "title": "Embedding 嵌入模型", "restart_required": False},
                 {"id": "translation", "title": "翻译", "restart_required": False},
                 {"id": "agent_settings", "title": "Agent 设置", "restart_required": True},
             ],
@@ -199,6 +250,7 @@ class SettingsService:
             "settings": {
                 "pipeline": pipeline,
                 "pipeline_agent": attach_provider_meta(self._get_pipeline_agent_category()),
+                "embedding": attach_provider_meta(self._get_embedding_category()),
                 "translation": translation,
                 "agent_settings": self._chat_service.get_agent_settings(),
             },
@@ -212,6 +264,8 @@ class SettingsService:
             return self._save_pipeline_category(payload)
         if key == "pipeline_agent":
             return self._save_pipeline_agent_category(payload)
+        if key == "embedding":
+            return self._save_embedding_category(payload)
         if key == "translation":
             return self._save_translation_category(payload)
         if key == "agent_settings":

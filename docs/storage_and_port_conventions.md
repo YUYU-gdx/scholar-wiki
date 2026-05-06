@@ -5,9 +5,9 @@
 ## 0. 存储根初始化规约
 
 - 默认存储根：
-  - Windows：`D:\KNGraphAppData`
-  - 其他系统：`~/.kn_graph_data`
-- 也可通过环境变量 `KN_STORAGE_ROOT` 显式指定。
+  - Windows：`D:\KNGraphApp`
+  - 其他系统：`~/.kn_graph`
+- 也可通过环境变量 `KN_GRAPH_DATA_DIR` 显式指定。
 - 任务创建前必须已初始化存储根；未初始化时接口返回 `storage_not_initialized`。
 - 初始化接口：
   - `GET /v1/storage/status`
@@ -73,9 +73,8 @@
 文献检索使用嵌入式 ChromaDB，以文献库为单位隔离存储：
 
 1. 每个文献库的 ChromaDB 数据存储在 `{workspace}/chromadb/` 目录下。
-2. SQLite FTS5 全文索引用作 BM25 关键词检索后端，与 ChromaDB 同目录存放。
-3. 不再依赖外部 Weaviate 服务或 Docker。
-3. 若都不可达，仍回退到第一个候选地址：`http://127.0.0.1:8080`。
+3. SQLite FTS5 全文索引用作 BM25 关键词检索后端，与 ChromaDB 同目录存放。
+4. 不再依赖外部 Weaviate 服务或 Docker。
 
 ## 6. Chat / Agent 存储规约
 
@@ -93,7 +92,8 @@
   - 含 `current_agent` 字段
 - 各 Agent 独立配置：`{data_dir}/chat/{agent_id}_config.json`
   - 如 `{data_dir}/chat/claude_code_config.json`
-  - 如 `{data_dir}/chat/codex_config.json`
+  - 如 `{data_dir}/chat/gemini_cli_config.json`
+  - 注：Codex 使用 `{data_dir}/chat/codex_runner_config.json`（不同于其他 agent 的命名）
 - 翻译提供商配置：`{data_dir}/chat/translation_provider_config.json`
 
 ### 6.3 Claude Code (Agent SDK) 环境变量

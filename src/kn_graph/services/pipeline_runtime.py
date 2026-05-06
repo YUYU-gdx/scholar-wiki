@@ -185,7 +185,7 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     # automatically. Both Claude Code and Codex auto-discover skills from
     # these convention paths, so no explicit project_skills override is needed.
     from kn_graph.services.codex_library_config import bootstrap_workspace_project_skills as _deploy_skills
-    _deploy_skills(workspace_path)
+    _deploy_skills(workspace_path, skill_names=["scholarly-paper-extraction"])
 
     # Build runner
     codex_config_path = config_dir / "codex_runner_config.json"

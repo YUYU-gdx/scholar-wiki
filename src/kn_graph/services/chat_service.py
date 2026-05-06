@@ -55,6 +55,11 @@ class ChatService:
         )
         # Inject settings so legacy chat can access non-agent config
         self._chat._settings = self._settings
+        # Deploy the chat / Q&A skill to the root workspace so Claude Code
+        # (whose cwd is the root workspace) auto-discovers it.
+        from kn_graph.services.codex_library_config import bootstrap_workspace_project_skills
+        root_ws = str(self._settings.workspaces_dir.resolve())
+        bootstrap_workspace_project_skills(root_ws, skill_names=["answer_library_question"])
         # Set the initial backend from persisted settings.
         current = self._get_current_agent()
         if current:

@@ -53,6 +53,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     workspace_service = WorkspaceService(settings)
     settings_service = SettingsService(settings, chat_service)
 
+    # Ensure the chat Q&A skill is deployed to the root workspace at startup.
+    # (Library workspaces get the extraction skill on first access.)
+    from kn_graph.services.codex_library_config import bootstrap_workspace_project_skills
+    bootstrap_workspace_project_skills(
+        str(settings.workspaces_dir.resolve()),
+        skill_names=["answer_library_question"],
+    )
+
     app.include_router(graph.create_router(graph_service))
     app.include_router(graph.create_paper_router(graph_service))
     app.include_router(chat.create_router(chat_service))

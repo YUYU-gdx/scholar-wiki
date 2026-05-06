@@ -46,7 +46,7 @@ def _default_mcp_server_args() -> list[str]:
     return ["run", "python", str(mcp_script)]
 
 
-def _iter_skill_template_sources() -> list[tuple[str, Path]]:
+def _iter_skill_template_sources(skill_names: list[str] | None = None) -> list[tuple[str, Path]]:
     out: list[tuple[str, Path]] = []
     tpl_root = _skills_template_root()
     if tpl_root.exists() and tpl_root.is_dir():
@@ -55,12 +55,15 @@ def _iter_skill_template_sources() -> list[tuple[str, Path]]:
                 continue
             if not (child / "SKILL.md").exists():
                 continue
+            if skill_names is not None and child.name not in skill_names:
+                continue
             out.append((child.name, child.resolve()))
     if out:
         return out
     fallback = Path(_default_skill_path()).resolve()
     if fallback.exists() and (fallback / "SKILL.md").exists():
-        out.append((fallback.name, fallback))
+        if skill_names is None or fallback.name in skill_names:
+            out.append((fallback.name, fallback))
     return out
 
 
@@ -80,11 +83,14 @@ def _copy_single_skill(src: Path, target: Path) -> None:
         shutil.copytree(src_dir, dst_dir)
 
 
-def bootstrap_workspace_project_skills(workspace_path: str) -> list[dict[str, str]]:
+def bootstrap_workspace_project_skills(workspace_path: str, skill_names: list[str] | None = None) -> list[dict[str, str]]:
     """Deploy skill templates to the correct auto-discovery paths for each backend.
 
     Claude Code: .claude/skills/<name>/SKILL.md
     Codex:       .agents/skills/<name>/SKILL.md
+
+    If *skill_names* is provided, only skills whose directory name is in the
+    list are deployed.
     """
     ws = Path(workspace_path).resolve()
     loaded: list[dict[str, str]] = []
@@ -96,22 +102,26 @@ def bootstrap_workspace_project_skills(workspace_path: str) -> list[dict[str, st
 
     for skills_root in targets:
         skills_root.mkdir(parents=True, exist_ok=True)
-        for folder_name, src in _iter_skill_template_sources():
+        for folder_name, src in _iter_skill_template_sources(skill_names):
             target = skills_root / folder_name
             _copy_single_skill(src, target)
             loaded.append({"name": folder_name, "path": str(target.resolve())})
+        # Remove skills that are no longer in the allowed set
+        if skill_names is not None and skills_root.is_dir():
+            for existing in sorted(skills_root.iterdir()):
+                if existing.is_dir() and existing.name not in skill_names:
+                    shutil.rmtree(str(existing), ignore_errors=True)
 
     # Clean up legacy path
     legacy_root = ws / ".codex_project_skills"
     if legacy_root.exists():
-        import shutil
         shutil.rmtree(str(legacy_root), ignore_errors=True)
 
     return loaded
 
 
 def _ensure_workspace_skill_copy(workspace_path: str) -> str:
-    loaded = bootstrap_workspace_project_skills(workspace_path)
+    loaded = bootstrap_workspace_project_skills(workspace_path, skill_names=["scholarly-paper-extraction"])
     if loaded:
         return str(loaded[0]["path"])
     return _default_skill_path()
@@ -120,7 +130,7 @@ def _ensure_workspace_skill_copy(workspace_path: str) -> str:
 def default_library_codex_config(workspace_path: str = "", library_id: str = "") -> dict[str, Any]:
     ws = Path(workspace_path).resolve() if str(workspace_path or "").strip() else Path()
     codex_home = (ws / ".codex_home").resolve() if str(workspace_path or "").strip() else Path(".codex_home")
-    project_skills = bootstrap_workspace_project_skills(str(ws)) if str(workspace_path or "").strip() else [{"name": SKILL_NAME, "path": _default_skill_path()}]
+    project_skills = bootstrap_workspace_project_skills(str(ws), skill_names=["scholarly-paper-extraction"]) if str(workspace_path or "").strip() else [{"name": SKILL_NAME, "path": _default_skill_path()}]
     return {
         "library_id": _safe_library_id(library_id),
         "codex_home": str(codex_home),
@@ -145,7 +155,7 @@ def config_path_for_workspace(workspace_path: str) -> Path:
 def load_or_init_library_codex_config(workspace_path: str, library_id: str = "") -> dict[str, Any]:
     path = config_path_for_workspace(workspace_path)
     fallback = default_library_codex_config(workspace_path=workspace_path, library_id=library_id)
-    loaded_skills = bootstrap_workspace_project_skills(workspace_path)
+    loaded_skills = bootstrap_workspace_project_skills(workspace_path, skill_names=["scholarly-paper-extraction"])
     if not loaded_skills:
         loaded_skills = list(fallback.get("project_skills", []))
     if path.exists():
@@ -206,7 +216,7 @@ def save_library_codex_config(workspace_path: str, payload: dict[str, Any]) -> d
 def bootstrap_library_codex_config(workspace_path: str, library_id: str = "") -> dict[str, Any]:
     current = load_or_init_library_codex_config(workspace_path=workspace_path, library_id=library_id)
     next_payload = dict(current)
-    loaded_skills = bootstrap_workspace_project_skills(workspace_path)
+    loaded_skills = bootstrap_workspace_project_skills(workspace_path, skill_names=["scholarly-paper-extraction"])
     if loaded_skills:
         next_payload["project_skills"] = loaded_skills
     next_payload["library_id"] = _safe_library_id(str(library_id or next_payload.get("library_id", "") or ""))

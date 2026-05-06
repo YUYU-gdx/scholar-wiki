@@ -45,6 +45,13 @@ def default_endpoint_url(base_url: str) -> str:
     return f"{root}/v1/chat/completions"
 
 
+def default_embedding_endpoint_url(base_url: str) -> str:
+    root = str(base_url or "").strip().rstrip("/")
+    if not root:
+        return ""
+    return f"{root}/embeddings"
+
+
 def attach_provider_meta(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     out["provider_presets"] = provider_presets()

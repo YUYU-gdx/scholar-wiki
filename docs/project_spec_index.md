@@ -6,6 +6,7 @@
 - **API 规约**：`docs/api.md` — 图谱、文献、Chat API、Settings 全部接口
 - **数据模型规约**：`docs/data_model.md` — 抽取→存储→产物→API 四层模型 + Chat 数据模型
 - **文件存储与端口规约**：`docs/storage_and_port_conventions.md` — 落盘规则、ChromaDB 存储、Chat/Agent 存储
+- **Skill 部署规约**：`docs/reference/skill-deployment-conventions.md` — Skill 发现机制、部署策略、cwd 与 workspace 关系
 - **Run 管理**：`docs/run_management.md`
 - **可复用抽取/评测流程**：`docs/reusable_extract_eval_workflow.md`
 - **异步管线 API**：`docs/async_pipeline_api.md`
@@ -31,18 +32,20 @@
 - 入库脚本：`scripts/smj_pipeline/import_raw_outputs_to_postgres.py`
 
 ### 2.4 对话服务 (Chat)
-- Chat Service（核心）：`scripts/smj_pipeline/chat_service.py`
+- Chat Service（核心）：`src/kn_graph/services/chat_legacy.py`
 - Chat Service（FastAPI 门面）：`src/kn_graph/services/chat_service.py`
 - Chat 路由：`src/kn_graph/routers/chat.py`
 - Chat 数据模型：`src/kn_graph/models/chat.py`
-- Agent Runner 基类 + Codex Runner：`scripts/smj_pipeline/agent_runner.py`
+- Agent Runner 基类 + 各后端：`src/kn_graph/services/agent_runner.py`
   - `AgentRunner` — 抽象基类
   - `CodexRunner` — 基于 Codex CLI 子进程 + JSON-RPC stdio
-  - `ClaudeCodeRunner` — 基于 Claude Agent SDK（`claude-agent-sdk`），进程内运行
+  - `ClaudeCodeRunner` — 基于 Claude Agent SDK（`claude-agent-sdk`），进程内运行，复用本地 Claude Code 的 provider 配置
+  - `GeminiCLIRunner` — 基于 Gemini CLI 子进程
   - `HermesRunner` — 占位
-  - `AgentRunnerFactory` — 工厂，支持 `codex` / `claude_code` / `hermes`
-- Codex 库级配置：`scripts/smj_pipeline/codex_library_config.py`
-- MCP 工具服务：`scripts/smj_pipeline/kn_mcp_server.py`
+  - `AgentRunnerFactory` — 工厂，支持 `codex` / `claude_code` / `gemini_cli` / `hermes`；配置路径为 `{data_dir}/chat/codex_runner_config.json`
+- Codex 库级配置：`src/kn_graph/services/codex_library_config.py`
+- Skill 部署与发现：`docs/reference/skill-deployment-conventions.md`
+- MCP 工具服务：`src/kn_graph/services/mcp_server.py`（新）、`scripts/smj_pipeline/kn_mcp_server.py`（过渡期）
 
 ### 2.5 文献检索
 - 文献服务：`scripts/smj_pipeline/literature/service.py`
@@ -58,7 +61,7 @@
 - 提示词唯一加载源为 `prompt/` 目录。
 - Python 执行统一使用 `uv`。
 - 对话 Agent 后端可通过 `provider` 参数切换（`codex` / `claude_code`），无需重启服务。
-- Claude Code SDK 复用本地 Claude Code 的 `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` 配置。
+- Claude Code SDK 复用本地 Claude Code 的 provider 配置（从 `{data_dir}/chat/claude_code_config.json` 读取）。
 
 ## 4. 常用排查路径
 1. **接口字段不一致**：先查 `docs/api.md`，再核对 `serve_graph_api.py` / `src/kn_graph/routers/`。

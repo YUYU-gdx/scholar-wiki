@@ -131,6 +131,37 @@ class Settings(BaseModel):
     def zhipu_api_key(self) -> str:
         return self._provider_api_key("zhipu")
 
+    # -- embedding category --
+
+    @property
+    def embedding_provider(self) -> str:
+        return str(self._cat("embedding").get("provider", "") or "zhipu").strip()
+
+    def _embedding_provider_data(self) -> dict:
+        active = self.embedding_provider
+        providers = self._cat("embedding").get("providers", {})
+        if isinstance(providers, dict):
+            p = providers.get(active, {})
+            if isinstance(p, dict):
+                return p
+        return {}
+
+    @property
+    def embedding_model(self) -> str:
+        return str(self._embedding_provider_data().get("model", "") or "").strip()
+
+    @property
+    def embedding_api_key(self) -> str:
+        return str(self._embedding_provider_data().get("api_key", "") or "").strip()
+
+    @property
+    def embedding_base_url(self) -> str:
+        return str(self._embedding_provider_data().get("base_url", "") or "").strip()
+
+    @property
+    def embedding_endpoint_url(self) -> str:
+        return str(self._embedding_provider_data().get("endpoint_url", "") or "").strip()
+
     # -- pipeline_agent category --
 
     @property

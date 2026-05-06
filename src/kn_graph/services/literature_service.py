@@ -250,10 +250,10 @@ def weighted_rrf_merge(
 
 
 @dataclass(slots=True)
-class ZhipuEmbeddingClient:
+class OpenAICompatibleEmbeddingClient:
     api_key: str
     model: str = "embedding-3"
-    base_url: str = "https://open.bigmodel.cn/api/paas/v4/embeddings"
+    endpoint_url: str = ""
     timeout_seconds: int = 120
     max_retries: int = 3
     max_chars: int = 8000
@@ -270,7 +270,7 @@ class ZhipuEmbeddingClient:
             batch = prepared[i : i + batch_size]
             vectors.extend(self._embed_batch(batch))
         if len(vectors) != len(prepared):
-            raise ValueError("zhipu embedding response length mismatch")
+            raise ValueError("embedding response length mismatch")
         return vectors
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
@@ -279,15 +279,11 @@ class ZhipuEmbeddingClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        url = self.endpoint_url
         last_error: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                resp = requests.post(
-                    self.base_url,
-                    headers=headers,
-                    json=payload,
-                    timeout=self.timeout_seconds,
-                )
+                resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_seconds)
                 if resp.status_code == 400 and len(texts) > 1:
                     mid = len(texts) // 2
                     return self._embed_batch(texts[:mid]) + self._embed_batch(texts[mid:])
@@ -302,7 +298,7 @@ class ZhipuEmbeddingClient:
                     if isinstance(embedding, list):
                         vectors.append([float(v) for v in embedding])
                 if len(vectors) != len(texts):
-                    raise ValueError("zhipu embedding response length mismatch")
+                    raise ValueError("embedding response length mismatch")
                 return vectors
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
@@ -313,6 +309,9 @@ class ZhipuEmbeddingClient:
         if last_error is not None:
             raise last_error
         raise RuntimeError("embedding failed")
+
+
+ZhipuEmbeddingClient = OpenAICompatibleEmbeddingClient  # backward compatibility
 
 
 class _NoopEmbeddingClient:
@@ -548,8 +547,7 @@ class LiteratureService:
     def _library_index_root(self) -> Path:
         if self._settings is None:
             return Path("outputs/literature_libraries")
-        root = self._settings.literature_library_index_root.strip() or "outputs/literature_libraries"
-        return Path(root)
+        return Path(self._settings.indexes_dir)
 
     def _library_index_path(self, library_id: str) -> Path:
         safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(library_id or "").strip())
@@ -862,14 +860,24 @@ class LiteratureService:
             self._chroma_clients[lib] = ChromaDBClient(str(chroma_dir))
         return self._chroma_clients[lib]
 
-    def _build_default_embedding(self) -> ZhipuEmbeddingClient:
-        api_key = self._settings.zhipu_api_key.strip()
+    def _build_default_embedding(self) -> OpenAICompatibleEmbeddingClient:
+        provider = (getattr(self._settings, "embedding_provider", "") or "").strip() or "zhipu"
+        api_key = (getattr(self._settings, "embedding_api_key", "") or "").strip()
+        # Fallback to legacy zhipu_api_key for existing installs
         if not api_key:
-            raise RuntimeError("missing env: ZHIPU_API_KEY")
-        model = self._settings.literature_embedding_model.strip() or "embedding-3"
-        return ZhipuEmbeddingClient(
+            api_key = (getattr(self._settings, "zhipu_api_key", "") or "").strip()
+        model = (getattr(self._settings, "embedding_model", "") or "").strip()
+        if not model:
+            model = self._settings.literature_embedding_model.strip() or "embedding-3"
+        endpoint_url = (getattr(self._settings, "embedding_endpoint_url", "") or "").strip()
+        if not endpoint_url:
+            endpoint_url = "https://open.bigmodel.cn/api/paas/v4/embeddings"
+        if not api_key:
+            raise RuntimeError("missing embedding api_key: configure an embedding provider in Settings")
+        return OpenAICompatibleEmbeddingClient(
             api_key=api_key,
             model=model,
+            endpoint_url=endpoint_url,
             max_chars=self._settings.literature_embed_max_chars,
             batch_size=self._settings.literature_embed_batch_size,
         )
