@@ -58,7 +58,7 @@ uv run python -m unittest discover -s tests -p "test_*.py" -v
 | `ZHIPU_API_KEY` | 智谱 API 密钥 | — |
 | `NVIDIA_API_KEY` | NVIDIA API 密钥 | — |
 | `LLM_PROVIDER_CONFIG_PATH` | LLM 配置路径 | `config/llm_providers.json` |
-| `WEAVIATE_URL` | Weaviate 地址 | `http://127.0.0.1:8090` |
+| `CHROMADB_PATH` | ChromaDB 持久化目录 | `{data_dir}/chromadb` |
 
 ## LLM Provider 配置
 

@@ -27,6 +27,7 @@ dependencies = [
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
     "claude-agent-sdk>=0.1.72",
+    "chromadb>=1.5.9",
 ]
 
 [[tool.uv.index]]

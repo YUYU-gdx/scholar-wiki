@@ -55,8 +55,8 @@ function extractToolName(toolCall: Record<string, unknown>): string {
   if (key.includes('rag_search') || key.includes('rag')) return 'RAG';
   if (key.includes('grep') || key.includes('rg')) return 'Local File Search';
   if (key.includes('graph_search')) return 'Graph Search';
-  if (key.includes('weaviate_query')) return 'Weaviate Query';
-  if (key.includes('weaviate_fetch_object')) return 'Fetch Object';
+  if (key.includes('literature_search')) return 'Literature Search';
+  if (key.includes('literature_fetch_object')) return 'Fetch Object';
   return normalized || 'tool';
 }
 
@@ -65,7 +65,7 @@ function toolNameZh(toolName: string): string {
   if (key.includes('rag')) return 'RAG';
   if (key.includes('local file search') || key.includes('grep')) return '本地文件搜索';
   if (key.includes('graph search')) return '图谱检索';
-  if (key.includes('weaviate query')) return 'Weaviate 检索';
+  if (key.includes('literature search')) return '文献检索';
   if (key.includes('fetch object')) return '对象读取';
   return toolName || '未知工具';
 }

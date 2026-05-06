@@ -68,7 +68,7 @@ uv run python scripts/smj_pipeline/kn_mcp_server.py
 | `ZHIPU_API_KEY` | ���� API ��Կ | �� |
 | `NVIDIA_API_KEY` | NVIDIA API ��Կ | �� |
 | `LLM_PROVIDER_CONFIG_PATH` | LLM ����·�� | `config/llm_providers.json` |
-| `WEAVIATE_URL` | Weaviate ��ַ | `http://127.0.0.1:8090` |
+| `CHROMADB_PATH` | ChromaDB 持久化目录 | `{data_dir}/chromadb` |
 
 ## �ع�״̬
 

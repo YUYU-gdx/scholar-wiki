@@ -1,26 +1,34 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 from pathlib import Path
-import sys
 import tempfile
 import unittest
-import types
+from unittest.mock import patch
+
+from kn_graph.services.literature_service import (
+    ChromaDBClient,
+    LiteratureService,
+    segment_html,
+    weighted_rrf_merge,
+)
 
 
-_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "smj_pipeline" / "literature" / "service.py"
-_SPEC = importlib.util.spec_from_file_location("smj_pipeline_literature_service", _SCRIPT_PATH)
-if _SPEC is None or _SPEC.loader is None:
-    raise RuntimeError(f"Unable to load script module: {_SCRIPT_PATH}")
-_MOD = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = _MOD
-_SPEC.loader.exec_module(_MOD)
-
-segment_html = _MOD.segment_html
-weighted_rrf_merge = _MOD.weighted_rrf_merge
-LiteratureService = _MOD.LiteratureService
+class _FakeSettings:
+    literature_default_library_id: str = ""
+    literature_library_index_root: str = "outputs/literature_libraries"
+    literature_library_registry_path: str = ""
+    literature_library_workspaces_root: str = ""
+    literature_embedding_model: str = "embedding-3"
+    literature_chat_model: str = "glm-4.5-flash"
+    literature_embed_max_chars: int = 8000
+    literature_embed_batch_size: int = 32
+    zhipu_api_key: str = ""
+    mineru_api_key: str = ""
+    mineru_version: str = ""
+    registry_path: str = ""
+    indexes_dir: str = ""
 
 
 class _FakeEmbeddingClient:
@@ -42,7 +50,7 @@ class _FakeGenerator:
         return "answer-from-llm"
 
 
-class _FakeWeaviateClient:
+class _FakeChromaDBClient:
     def __init__(self) -> None:
         self.indexed: dict[str, list[dict[str, object]]] = {
             "LiteratureSentence": [],
@@ -52,10 +60,6 @@ class _FakeWeaviateClient:
 
     def ensure_literature_schema(self) -> None:
         return None
-
-    def supports_library_id(self, refresh: bool = False) -> bool:
-        _ = refresh
-        return False
 
     def upsert(self, class_name: str, object_id: str, properties: dict[str, object], vector: list[float]) -> None:
         self.indexed[class_name].append(
@@ -99,11 +103,11 @@ class LiteratureServiceTest(unittest.TestCase):
         self.assertEqual(set(ids), {"a", "b", "c"})
 
     def test_import_search_answer_flow(self) -> None:
-        fake_weaviate = _FakeWeaviateClient()
+        fake_chroma = _FakeChromaDBClient()
         fake_embed = _FakeEmbeddingClient()
         fake_gen = _FakeGenerator()
         service = LiteratureService(
-            weaviate_client=fake_weaviate,
+            settings=_FakeSettings(),
             embedding_client=fake_embed,
             generator_client=fake_gen,
         )
@@ -112,6 +116,7 @@ class LiteratureServiceTest(unittest.TestCase):
             tmp = Path(tmp_dir)
             doc_path = tmp / "a.txt"
             doc_path.write_text("One. Two.", encoding="utf-8")
+
             manifest_path = tmp / "manifest.jsonl"
             manifest_path.write_text(
                 json.dumps({"paper_id": "p-1", "doi": "10.1/test", "title": "Doc A", "source_path": str(doc_path)}, ensure_ascii=False)
@@ -119,23 +124,28 @@ class LiteratureServiceTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            import_result = service.import_manifest(manifest_path)
+            with patch.object(service, "_get_chroma", return_value=fake_chroma):
+                import_result = service.import_manifest(manifest_path)
 
         self.assertEqual(import_result["imported_count"], 1)
-        self.assertGreaterEqual(len(fake_weaviate.indexed["LiteratureSentence"]), 1)
-        search_result = service.search(query="One", top_k=3, levels=["sentence"], keyword_weight=0.4, rag_weight=0.6, include_expanded_context=True)
+        self.assertGreaterEqual(len(fake_chroma.indexed["LiteratureSentence"]), 1)
+
+        with patch.object(service, "_get_chroma", return_value=fake_chroma):
+            search_result = service.search(query="One", top_k=3, levels=["sentence"], library_id="lib_test", keyword_weight=0.4, rag_weight=0.6, include_expanded_context=True)
         self.assertIn("keyword_hits", search_result)
         self.assertIn("rag_hits", search_result)
         self.assertIn("merged_hits", search_result)
         self.assertGreaterEqual(len(search_result["merged_hits"]), 1)
-        answer_result = service.answer(query="What is this paper about?", top_k=2, levels=["sentence"], keyword_weight=0.4, rag_weight=0.6)
+
+        with patch.object(service, "_get_chroma", return_value=fake_chroma):
+            answer_result = service.answer(query="What is this paper about?", top_k=2, levels=["sentence"], library_id="lib_test", keyword_weight=0.4, rag_weight=0.6)
         self.assertEqual(answer_result["answer"], "answer-from-llm")
         self.assertGreaterEqual(len(answer_result["citations"]), 1)
 
     def test_import_materializes_workspace_assets(self) -> None:
-        fake_weaviate = _FakeWeaviateClient()
+        fake_chroma = _FakeChromaDBClient()
         service = LiteratureService(
-            weaviate_client=fake_weaviate,
+            settings=_FakeSettings(),
             embedding_client=_FakeEmbeddingClient(),
             generator_client=_FakeGenerator(),
         )
@@ -184,7 +194,8 @@ class LiteratureServiceTest(unittest.TestCase):
                     + "\n",
                     encoding="utf-8",
                 )
-                result = service.import_manifest(manifest_path, options={"library_id": "lib_demo"})
+                with patch.object(service, "_get_chroma", return_value=fake_chroma):
+                    result = service.import_manifest(manifest_path, options={"library_id": "lib_demo"})
                 self.assertEqual(result["library_id"], "lib_demo")
                 self.assertEqual(result["workspace_path"], str(workspace_root.resolve()))
                 self.assertEqual(len(result["materialized_papers"]), 1)
@@ -196,7 +207,7 @@ class LiteratureServiceTest(unittest.TestCase):
                 lines = [x for x in papers_index.read_text(encoding="utf-8").splitlines() if x.strip()]
                 self.assertEqual(len(lines), 1)
                 self.assertIn("doi_10.1002_smj.1", lines[0])
-                sentence_props = fake_weaviate.indexed["LiteratureSentence"][0]["properties"]
+                sentence_props = fake_chroma.indexed["LiteratureSentence"][0]["properties"]
                 self.assertIn("corpus", str(sentence_props.get("source_html", "")))
         finally:
             for key, value in old_env.items():
@@ -206,9 +217,9 @@ class LiteratureServiceTest(unittest.TestCase):
                     os.environ.pop(key, None)
 
     def test_import_pdf_uses_mineru_latest_folder(self) -> None:
-        fake_weaviate = _FakeWeaviateClient()
+        fake_chroma = _FakeChromaDBClient()
         service = LiteratureService(
-            weaviate_client=fake_weaviate,
+            settings=_FakeSettings(),
             embedding_client=_FakeEmbeddingClient(),
             generator_client=_FakeGenerator(),
         )
@@ -270,7 +281,8 @@ class LiteratureServiceTest(unittest.TestCase):
                     + "\n",
                     encoding="utf-8",
                 )
-                result = service.import_manifest(manifest_path, options={"library_id": "lib_pdf"})
+                with patch.object(service, "_get_chroma", return_value=fake_chroma):
+                    result = service.import_manifest(manifest_path, options={"library_id": "lib_pdf"})
                 self.assertEqual(len(result["materialized_papers"]), 1)
                 mat = result["materialized_papers"][0]
                 self.assertTrue(Path(str(mat["source_pdf_path"])).exists())
@@ -285,13 +297,16 @@ class LiteratureServiceTest(unittest.TestCase):
                     os.environ.pop(key, None)
 
     def test_mineru_result_named_by_first_h1(self) -> None:
+        fake_chroma = _FakeChromaDBClient()
         service = LiteratureService(
-            weaviate_client=_FakeWeaviateClient(),
+            settings=_FakeSettings(),
             embedding_client=_FakeEmbeddingClient(),
             generator_client=_FakeGenerator(),
         )
-        original_mod = _MOD._MINERU_SINGLE_MOD
+        # Patch the parse_single_pdf reference that literature_service holds.
         try:
+            from kn_graph.services import literature_service as svc_mod
+
             def _fake_parse_single_pdf(pdf_path, run_dir, options=None, progress_cb=None, cancel_cb=None):
                 parse_dir = run_dir / "parse"
                 parse_dir.mkdir(parents=True, exist_ok=True)
@@ -310,7 +325,9 @@ class LiteratureServiceTest(unittest.TestCase):
                     "batch_id": "fake",
                 }
 
-            _MOD._MINERU_SINGLE_MOD = types.SimpleNamespace(parse_single_pdf=_fake_parse_single_pdf)
+            original_parse_single_pdf = svc_mod.parse_single_pdf
+            svc_mod.parse_single_pdf = _fake_parse_single_pdf
+
             with tempfile.TemporaryDirectory() as tmp_dir:
                 src_pdf = Path(tmp_dir) / "a.pdf"
                 src_pdf.write_bytes(b"%PDF-1.4 test")
@@ -319,7 +336,42 @@ class LiteratureServiceTest(unittest.TestCase):
                 self.assertTrue(str(result["main_md_path"]).endswith("My Great Paper.md"))
                 self.assertTrue(Path(str(result["main_md_path"])).exists())
         finally:
-            _MOD._MINERU_SINGLE_MOD = original_mod
+            if original_parse_single_pdf is not None:
+                svc_mod.parse_single_pdf = original_parse_single_pdf
+
+    def test_chromadb_client_persist_and_search(self) -> None:
+        """Verify that ChromaDBClient persists data and supports keyword + vector search."""
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+            client = ChromaDBClient(str(Path(tmp_dir) / "chromadb"))
+            try:
+                client.ensure_literature_schema()
+
+                client.upsert(
+                    "LiteratureSentence",
+                    "sent-1",
+                    {
+                        "library_id": "lib_x",
+                        "paper_id": "paper-a",
+                        "title": "Test Paper",
+                        "paragraph_id": "para-1",
+                        "sentence_id": "sent-1",
+                        "text": "Supply chain resilience is critical for firm performance.",
+                        "position": 1,
+                        "source_html": "/path/to/source.html",
+                        "doi": "10.1000/test",
+                    },
+                    vector=[0.1, 0.2, 0.3],
+                )
+
+                kw_results = client.bm25_search("LiteratureSentence", query="supply chain", limit=5)
+                self.assertGreaterEqual(len(kw_results), 1)
+                self.assertEqual(kw_results[0]["properties"]["paper_id"], "paper-a")
+
+                vec_results = client.vector_search("LiteratureSentence", vector=[0.1, 0.2, 0.3], limit=5)
+                self.assertGreaterEqual(len(vec_results), 1)
+                self.assertEqual(vec_results[0]["id"], "sent-1")
+            finally:
+                client.close()
 
 
 if __name__ == "__main__":

@@ -142,7 +142,7 @@ uv run python -m kn_graph serve --port 8013
 ```json
 {"paper_id":"0ecc6383-...","doi":"md::0ecc6383-...","title":"...","source_path":"outputs/mineru_recovery_full_from_outputs_20260419_120258/downloads/final_named/0ecc6383-....md"}
 ```
-- 依赖环境变量：`WEAVIATE_URL`（默认 `http://127.0.0.1:8090`）、`ZHIPU_API_KEY`
+- 依赖环境变量：`ZHIPU_API_KEY`；ChromaDB 按文献库存储在 `{workspace}/chromadb/`
 - 可选：`LITERATURE_EMBEDDING_MODEL`（默认 `embedding-3`）
 
 ### 6.2 `GET /literature/search`
@@ -159,7 +159,7 @@ uv run python -m kn_graph serve --port 8013
   - `keyword_hits[]`、`rag_hits[]`、`merged_hits[]`
   - `search_meta`：
     - `library_filter_applied`
-    - `library_filter_mode`（`weaviate_where` / `paper_id_registry`）
+    - `library_filter_mode`（`per_library_chromadb`）
     - `library_registry_paper_count`
 
 ### 6.3 `POST /literature/answer`
@@ -453,5 +453,5 @@ Chat API 提供多 Agent 后端的对话能力，支持 SSE 流式返回。Agent
 
 ## 10. 环境变量参考（图谱/检索相关）
 - `GRAPH_EMBEDDING_MODEL` — 若设置则使用远程 embedding 做图搜索；当前实现以哈希回退为主
-- `WEAVIATE_URL` — 向量数据库地址（默认 `http://127.0.0.1:8090`）
+- `CHROMADB_PATH` — ChromaDB 持久化目录（默认按文献库存储在 workspace 内）
 - `LITERATURE_LIBRARY_INDEX_ROOT` — 文献库索引根目录（默认 `outputs/literature_libraries`）

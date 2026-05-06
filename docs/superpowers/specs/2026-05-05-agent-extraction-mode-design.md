@@ -48,7 +48,7 @@ Agent 自行读取给定路径的论文 markdown 文件（MinerU 解析产物）
 
 1. 遍历 Step 1 所有变量的 `definition`（概念描述，非变量名本身）
 2. 用每个变量的定义/概念描述调 `rag_search` 在文献库中检索可能相同的概念
-3. 自主判断是否需要 `weaviate_fetch_object` 查看源论文原文做对比
+3. 自主判断是否需要 `literature_fetch_object` 查看源论文原文做对比
 4. 确认同一概念后，填充变量的 `aliases` 字段（用于后续图合并）
 5. 写入 `extract/entities_v2.json`
 
@@ -71,7 +71,7 @@ Agent 自行读取给定路径的论文 markdown 文件（MinerU 解析产物）
 查找上下文的方法：
 1. 用变量定义/概念描述调 `rag_search` 找回相关段落
 2. 用 `graph_search` 找回图谱中相关变量和效应
-3. 用 `weaviate_fetch_object` 查询源文献原文做对比
+3. 用 `literature_fetch_object` 查询源文献原文做对比
 4. 用 grep 搜索 workspace 内已有笔记，避免重复
 
 笔记格式（写在源 markdown 文件末尾）：

@@ -5,7 +5,7 @@
 ## 1. 核心规约文档
 - **API 规约**：`docs/api.md` — 图谱、文献、Chat API、Settings 全部接口
 - **数据模型规约**：`docs/data_model.md` — 抽取→存储→产物→API 四层模型 + Chat 数据模型
-- **文件存储与端口规约**：`docs/storage_and_port_conventions.md` — 落盘规则、Weaviate 回退、Chat/Agent 存储
+- **文件存储与端口规约**：`docs/storage_and_port_conventions.md` — 落盘规则、ChromaDB 存储、Chat/Agent 存储
 - **Run 管理**：`docs/run_management.md`
 - **可复用抽取/评测流程**：`docs/reusable_extract_eval_workflow.md`
 - **异步管线 API**：`docs/async_pipeline_api.md`
@@ -46,7 +46,7 @@
 
 ### 2.5 文献检索
 - 文献服务：`scripts/smj_pipeline/literature/service.py`
-- Weaviate 客户端：`scripts/smj_pipeline/literature/weaviate_client.py`
+- ChromaDB 客户端：`src/kn_graph/services/literature_service.py`（`ChromaDBClient` 类）
 
 ### 2.6 管线 API
 - 异步管线 API：`scripts/smj_pipeline/serve_async_pipeline_api.py`

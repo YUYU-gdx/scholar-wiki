@@ -14,7 +14,6 @@ class LiteratureLibrary(BaseModel):
     paper_count: int = 0
     chunk_count: int = 0
     index_exists: bool = False
-    weaviate_collection: str = ""
     created_at: str = ""
     updated_at: str = ""
 

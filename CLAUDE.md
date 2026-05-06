@@ -88,7 +88,7 @@ API 消费的核心只读数据产物。包含节点（变量/概念）、边（
 
 ### 文献检索
 
-基于学术论文片段的混合关键词+向量检索。Weaviate（向量数据库，端口 8090）存储嵌入向量；本地哈希嵌入作为降级回退。通过 `WEAVIATE_URL` 配置。
+基于学术论文片段的混合关键词+向量检索。ChromaDB（嵌入式向量数据库）存储嵌入向量，SQLite FTS5 提供 BM25 关键词检索，RRF 融合排序。以文献库为单位隔离存储。
 
 ### 对话服务
 
@@ -111,7 +111,7 @@ API 消费的核心只读数据产物。包含节点（变量/概念）、边（
 | `ZHIPU_API_KEY` | 智谱 API 密钥 | — |
 | `NVIDIA_API_KEY` | NVIDIA API 密钥 | — |
 | `LLM_PROVIDER_CONFIG_PATH` | LLM 配置文件路径 | `config/llm_providers.json` |
-| `WEAVIATE_URL` | Weaviate 向量数据库地址 | `http://127.0.0.1:8090` |
+| `CHROMADB_PATH` | ChromaDB 持久化目录 | `{data_dir}/chromadb` |
 | `GRAPH_EMBEDDING_MODEL` | 图谱搜索可选嵌入模型 | （哈希回退） |
 | `LITERATURE_LIBRARY_INDEX_ROOT` | 文献库索引根目录 | `outputs/literature_libraries` |
 | `CHAT_CODEX_CONFIG_PATH` | Codex runner 配置 | `outputs/chat/codex_runner_config.json` |

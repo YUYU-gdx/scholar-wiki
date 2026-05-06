@@ -5,6 +5,7 @@ import html
 import hashlib
 import json
 import os
+import sqlite3
 from pathlib import Path
 import re
 import shutil
@@ -15,7 +16,6 @@ from typing import Any
 
 import requests
 
-from kn_graph.core.runtime import build_weaviate_base_url_candidates
 from kn_graph.providers.zhipu import ZhipuChatCompletionsClient
 from kn_graph.services.library_registry import (
     create_library as _libreg_create_library,
@@ -326,240 +326,191 @@ class _NoopGeneratorClient:
         return "当前未配置文本生成模型，仅返回检索结果。"
 
 
-class WeaviateRestClient:
-    def __init__(self, base_url: str, api_key: str = "", timeout_seconds: int = 30) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key.strip()
-        self.timeout_seconds = timeout_seconds
-        self._library_id_supported: bool | None = None
+def _scalar_meta(value: Any) -> str | int | float | bool | None:
+    """Convert a property value to a ChromaDB-metadata-compatible scalar."""
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
 
-    def _headers(self) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        return headers
 
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        resp = requests.request(
-            method=method,
-            url=f"{self.base_url}{path}",
-            headers=self._headers(),
-            json=payload,
-            timeout=self.timeout_seconds,
-        )
-        if resp.status_code >= 400:
-            detail = (resp.text or "")[:1200]
-            raise RuntimeError(f"weaviate_http_error:{resp.status_code}:{method}:{path}:{detail}")
-        if not resp.text.strip():
-            return {}
-        return resp.json()
+class ChromaDBClient:
+    """Per-library embedded vector + keyword search backed by ChromaDB and SQLite FTS5."""
+
+    _COLLECTION_NAMES = ("LiteratureSentence", "LiteratureParagraph", "LiteratureDocument")
+
+    def __init__(self, persist_dir: str) -> None:
+        import chromadb
+
+        self._persist_dir = Path(persist_dir)
+        self._persist_dir.mkdir(parents=True, exist_ok=True)
+
+        self._cdb = chromadb.PersistentClient(path=str(self._persist_dir))
+
+        fts_path = str(self._persist_dir / "fts_index.db")
+        self._fts = sqlite3.connect(fts_path)
+        self._fts.execute("PRAGMA journal_mode=WAL")
+        self._fts.row_factory = sqlite3.Row
+        self._fts_ready = False
+
+        self._cols: dict[str, Any] = {}
+
+    def close(self) -> None:
+        """Release ChromaDB resources (file handles, SQLite connection)."""
+        self._cols.clear()
+        if hasattr(self, "_fts"):
+            self._fts.close()
+        # ChromaDB PersistentClient doesn't have an explicit close,
+        # but clearing collections releases internal locks.
+
+    def _get_col(self, class_name: str) -> Any:
+        if class_name not in self._cols:
+            self._cols[class_name] = self._cdb.get_or_create_collection(
+                name=class_name,
+                metadata={"hnsw:space": "cosine"},
+            )
+        return self._cols[class_name]
 
     def ensure_literature_schema(self) -> None:
-        existing = self._request("GET", "/v1/schema")
-        classes = {
-            str(cls.get("class", "")): cls
-            for cls in (existing.get("classes", []) if isinstance(existing, dict) else [])
-            if isinstance(cls, dict)
-        }
-        for class_def in self._default_schema():
-            if class_def["class"] in classes:
-                try:
-                    self._ensure_class_properties(class_def)
-                except Exception:
-                    # Keep backward compatibility when schema is temporarily read-only.
-                    pass
-            else:
-                self._request("POST", "/v1/schema", class_def)
-        self._library_id_supported = self.supports_library_id(refresh=True)
+        self._ensure_fts()
+        for name in self._COLLECTION_NAMES:
+            self._get_col(name)
 
-    def supports_library_id(self, refresh: bool = False) -> bool:
-        if self._library_id_supported is not None and not refresh:
-            return self._library_id_supported
-        try:
-            schema = self._request("GET", "/v1/schema")
-        except Exception:
-            self._library_id_supported = False
-            return False
-        classes = {
-            str(cls.get("class", "")): cls
-            for cls in (schema.get("classes", []) if isinstance(schema, dict) else [])
-            if isinstance(cls, dict)
-        }
-        ok = True
-        for class_name in ("LiteratureSentence", "LiteratureParagraph", "LiteratureDocument"):
-            cls = classes.get(class_name, {})
-            props = {
-                str(p.get("name", "")).strip()
-                for p in (cls.get("properties", []) if isinstance(cls, dict) else [])
-                if isinstance(p, dict)
-            }
-            if "library_id" not in props:
-                ok = False
-                break
-        self._library_id_supported = ok
-        return ok
-
-    def _ensure_class_properties(self, class_def: dict[str, Any]) -> None:
-        class_name = str(class_def.get("class", "")).strip()
-        if not class_name:
+    def _ensure_fts(self) -> None:
+        if self._fts_ready:
             return
-        existing = self._request("GET", f"/v1/schema/{class_name}")
-        existing_props = {
-            str(p.get("name", "")).strip()
-            for p in (existing.get("properties", []) if isinstance(existing, dict) else [])
-            if isinstance(p, dict)
-        }
-        for prop in class_def.get("properties", []):
-            if not isinstance(prop, dict):
-                continue
-            name = str(prop.get("name", "")).strip()
-            if not name or name in existing_props:
-                continue
-            self._request("POST", f"/v1/schema/{class_name}/properties", prop)
+        for name in self._COLLECTION_NAMES:
+            self._fts.execute(
+                f"CREATE TABLE IF NOT EXISTS {name}_fts("
+                f"  object_id TEXT PRIMARY KEY,"
+                f"  paper_id TEXT,"
+                f"  title TEXT,"
+                f"  text TEXT"
+                f")"
+            )
+            self._fts.execute(
+                f"CREATE VIRTUAL TABLE IF NOT EXISTS {name}_fts_idx"
+                f" USING fts5(object_id, paper_id, title, text,"
+                f"  content={name}_fts, content_rowid='rowid',"
+                f"  tokenize='unicode61 remove_diacritics 2')"
+            )
+            # Triggers to keep FTS index in sync with content table
+            self._fts.execute(
+                f"CREATE TRIGGER IF NOT EXISTS {name}_fts_ai AFTER INSERT ON {name}_fts BEGIN\n"
+                f"  INSERT INTO {name}_fts_idx(rowid, object_id, paper_id, title, text)\n"
+                f"  VALUES (NEW.rowid, NEW.object_id, NEW.paper_id, NEW.title, NEW.text);\n"
+                f"END"
+            )
+            self._fts.execute(
+                f"CREATE TRIGGER IF NOT EXISTS {name}_fts_ad AFTER DELETE ON {name}_fts BEGIN\n"
+                f"  INSERT INTO {name}_fts_idx({name}_fts_idx, rowid, object_id, paper_id, title, text)\n"
+                f"  VALUES ('delete', OLD.rowid, OLD.object_id, OLD.paper_id, OLD.title, OLD.text);\n"
+                f"END"
+            )
+            self._fts.execute(
+                f"CREATE TRIGGER IF NOT EXISTS {name}_fts_au AFTER UPDATE ON {name}_fts BEGIN\n"
+                f"  INSERT INTO {name}_fts_idx({name}_fts_idx, rowid, object_id, paper_id, title, text)\n"
+                f"  VALUES ('delete', OLD.rowid, OLD.object_id, OLD.paper_id, OLD.title, OLD.text);\n"
+                f"  INSERT INTO {name}_fts_idx(rowid, object_id, paper_id, title, text)\n"
+                f"  VALUES (NEW.rowid, NEW.object_id, NEW.paper_id, NEW.title, NEW.text);\n"
+                f"END"
+            )
+        self._fts.commit()
+        self._fts_ready = True
 
     def upsert(self, class_name: str, object_id: str, properties: dict[str, Any], vector: list[float]) -> None:
-        payload_props = dict(properties)
-        if "library_id" in payload_props and not self.supports_library_id():
-            payload_props.pop("library_id", None)
-        body = {
-            "class": class_name,
-            "id": object_id,
-            "properties": payload_props,
-            "vector": vector,
-        }
-        try:
-            self._request("POST", "/v1/objects", body)
-            return
-        except Exception as exc:  # noqa: BLE001
-            text = str(exc)
-            if "weaviate_http_error:422" not in text and "already exists" not in text.lower():
-                raise
-        self._request("PUT", f"/v1/objects/{object_id}", body)
+        col = self._get_col(class_name)
+        meta = {k: _scalar_meta(v) for k, v in properties.items() if _scalar_meta(v) is not None}
+        doc_text = str(properties.get("text") or properties.get("full_text") or "")
+        col.upsert(
+            ids=[object_id],
+            embeddings=[vector],
+            metadatas=[meta],
+            documents=[doc_text],
+        )
+        self._ensure_fts()
+        self._fts.execute(
+            f"INSERT OR REPLACE INTO {class_name}_fts(object_id, paper_id, title, text) VALUES (?, ?, ?, ?)",
+            (
+                object_id,
+                str(properties.get("paper_id", "")),
+                str(properties.get("title", "")),
+                doc_text,
+            ),
+        )
+        self._fts.commit()
 
     def bm25_search(self, class_name: str, query: str, limit: int, library_id: str = "") -> list[dict[str, Any]]:
-        return self._graphql_search(class_name=class_name, query=query, limit=limit, use_vector=False, vector=None, library_id=library_id)
-
-    def vector_search(self, class_name: str, vector: list[float], limit: int, library_id: str = "") -> list[dict[str, Any]]:
-        return self._graphql_search(class_name=class_name, query="", limit=limit, use_vector=True, vector=vector, library_id=library_id)
-
-    def _graphql_search(
-        self,
-        class_name: str,
-        query: str,
-        limit: int,
-        use_vector: bool,
-        vector: list[float] | None,
-        library_id: str = "",
-    ) -> list[dict[str, Any]]:
-        include_library = self.supports_library_id()
-        props = self._class_props(class_name, include_library=include_library)
-        props_text = " ".join(props)
-        parts: list[str] = []
-        if use_vector:
-            vector_body = ", ".join(f"{float(v):.10f}" for v in (vector or []))
-            parts.append(f"nearVector:{{vector:[{vector_body}]}}")
-        else:
-            q = query.replace("\\", "\\\\").replace('"', '\\"')
-            parts.append(f'bm25:{{query:"{q}"}}')
-        lib = str(library_id or "").strip()
-        if lib and include_library:
-            lib_safe = lib.replace("\\", "\\\\").replace('"', '\\"')
-            parts.append(f'where:{{path:["library_id"],operator:Equal,valueText:"{lib_safe}"}}')
-        parts.append(f"limit:{int(limit)}")
-        clause = "(" + ", ".join(parts) + ")"
-        gql = f"{{Get{{{class_name}{clause}{{{props_text} _additional{{id score distance}}}}}}}}"
-        resp = self._request("POST", "/v1/graphql", {"query": gql})
-        rows = (((resp.get("data", {}) or {}).get("Get", {}) or {}).get(class_name, []) if isinstance(resp, dict) else [])
-        if not isinstance(rows, list):
-            rows = []
+        self._ensure_fts()
+        escaped = query.replace('"', '""')
+        try:
+            rows = self._fts.execute(
+                f"SELECT object_id, paper_id, title, text, rank"
+                f" FROM {class_name}_fts_idx"
+                f" WHERE {class_name}_fts_idx MATCH ?"
+                f" ORDER BY rank"
+                f" LIMIT ?",
+                (f'text:"{escaped}"', int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
         out: list[dict[str, Any]] = []
-        for item in rows:
-            if not isinstance(item, dict):
-                continue
-            additional = item.get("_additional", {}) if isinstance(item.get("_additional"), dict) else {}
-            item_id = str(additional.get("id", "") or item.get("sentence_id", "") or item.get("paragraph_id", "") or item.get("paper_id", ""))
-            distance = additional.get("distance")
-            score = additional.get("score")
-            if score is None and isinstance(distance, (int, float)):
-                score = 1.0 / (1.0 + float(distance))
+        for row in rows:
+            d = dict(row)
+            # Convert FTS5 rank to a 0-1 score (FTS5 rank is negative, higher is better)
+            rank = float(d.get("rank", 0.0) or 0.0)
+            score = 1.0 / (1.0 + abs(rank)) if rank < 0 else 1.0
             out.append(
                 {
-                    "id": item_id,
-                    "score": float(score or 0.0),
-                    "properties": {k: v for k, v in item.items() if k != "_additional"},
+                    "id": str(d.get("object_id", "")),
+                    "score": score,
+                    "properties": {
+                        "paper_id": str(d.get("paper_id", "")),
+                        "title": str(d.get("title", "")),
+                        "text": str(d.get("text", "")),
+                    },
                 }
             )
         return out
 
-    @staticmethod
-    def _class_props(class_name: str, include_library: bool = True) -> list[str]:
-        base = ["paper_id", "doi", "title"]
-        if include_library:
-            base = ["library_id", *base]
-        if class_name == "LiteratureDocument":
-            return [*base, "full_text", "source_html", "metadata_json"]
-        if class_name == "LiteratureParagraph":
-            return [*base, "paragraph_id", "text", "sentence_ids", "source_html"]
-        return [*base, "paragraph_id", "sentence_id", "text", "position", "source_html"]
-
-    @staticmethod
-    def _default_schema() -> list[dict[str, Any]]:
-        return [
-            {
-                "class": "LiteratureSentence",
-                "vectorizer": "none",
-                "properties": [
-                    {"name": "library_id", "dataType": ["text"]},
-                    {"name": "paper_id", "dataType": ["text"]},
-                    {"name": "doi", "dataType": ["text"]},
-                    {"name": "title", "dataType": ["text"]},
-                    {"name": "paragraph_id", "dataType": ["text"]},
-                    {"name": "sentence_id", "dataType": ["text"]},
-                    {"name": "text", "dataType": ["text"]},
-                    {"name": "position", "dataType": ["int"]},
-                    {"name": "source_html", "dataType": ["text"]},
-                ],
-            },
-            {
-                "class": "LiteratureParagraph",
-                "vectorizer": "none",
-                "properties": [
-                    {"name": "library_id", "dataType": ["text"]},
-                    {"name": "paper_id", "dataType": ["text"]},
-                    {"name": "doi", "dataType": ["text"]},
-                    {"name": "title", "dataType": ["text"]},
-                    {"name": "paragraph_id", "dataType": ["text"]},
-                    {"name": "text", "dataType": ["text"]},
-                    {"name": "sentence_ids", "dataType": ["text[]"]},
-                    {"name": "source_html", "dataType": ["text"]},
-                ],
-            },
-            {
-                "class": "LiteratureDocument",
-                "vectorizer": "none",
-                "properties": [
-                    {"name": "library_id", "dataType": ["text"]},
-                    {"name": "paper_id", "dataType": ["text"]},
-                    {"name": "doi", "dataType": ["text"]},
-                    {"name": "title", "dataType": ["text"]},
-                    {"name": "full_text", "dataType": ["text"]},
-                    {"name": "source_html", "dataType": ["text"]},
-                    {"name": "metadata_json", "dataType": ["text"]},
-                ],
-            },
-        ]
+    def vector_search(self, class_name: str, vector: list[float], limit: int, library_id: str = "") -> list[dict[str, Any]]:
+        col = self._get_col(class_name)
+        results = col.query(query_embeddings=[vector], n_results=int(limit), include=["metadatas", "distances"])
+        out: list[dict[str, Any]] = []
+        ids_list = results.get("ids", [[]])
+        distances_list = results.get("distances", [[]])
+        metadatas_list = results.get("metadatas", [[]])
+        ids = ids_list[0] if ids_list else []
+        distances = distances_list[0] if distances_list else []
+        metadatas = metadatas_list[0] if metadatas_list else []
+        for obj_id, dist, meta in zip(ids, distances, metadatas):
+            props = dict(meta or {})
+            if isinstance(dist, (int, float)):
+                score = 1.0 / (1.0 + float(dist))
+            else:
+                score = 0.0
+            out.append(
+                {
+                    "id": str(obj_id or ""),
+                    "score": score,
+                    "properties": props,
+                }
+            )
+        return out
 
 
 class LiteratureService:
     def __init__(
         self,
         settings: Any = None,
-        weaviate_client: Any | None = None,
         embedding_client: Any | None = None,
         generator_client: Any | None = None,
     ) -> None:
         self._settings = settings
-        self.weaviate = weaviate_client or self._build_default_weaviate()
+        self._chroma_clients: dict[str, ChromaDBClient] = {}
         if embedding_client is not None:
             self.embedding = embedding_client
         else:
@@ -590,9 +541,13 @@ class LiteratureService:
         return text.replace("\\", "/")
 
     def _default_library_id(self) -> str:
+        if self._settings is None:
+            return ""
         return (self._settings.literature_default_library_id or "").strip()
 
     def _library_index_root(self) -> Path:
+        if self._settings is None:
+            return Path("outputs/literature_libraries")
         root = self._settings.literature_library_index_root.strip() or "outputs/literature_libraries"
         return Path(root)
 
@@ -895,33 +850,17 @@ class LiteratureService:
             },
         }
 
-    @staticmethod
-    def _filter_rows_by_paper_ids(rows: list[dict[str, Any]], allowed_paper_ids: set[str]) -> list[dict[str, Any]]:
-        if not allowed_paper_ids:
-            return []
-        out: list[dict[str, Any]] = []
-        for row in rows:
-            props = row.get("properties", {}) if isinstance(row.get("properties"), dict) else {}
-            pid = str(props.get("paper_id", "") or "").strip()
-            if pid and pid in allowed_paper_ids:
-                out.append(row)
-        return out
-
-    def _build_default_weaviate(self) -> WeaviateRestClient:
-        base_url = ""
-        candidates = build_weaviate_base_url_candidates()
-        for candidate in candidates:
-            try:
-                resp = requests.get(candidate.rstrip("/") + "/v1/.well-known/ready", timeout=1.2)
-                if resp.status_code < 500:
-                    base_url = candidate
-                    break
-            except Exception:
-                continue
-        if not base_url:
-            base_url = candidates[0]
-        api_key = self._settings.weaviate_api_key
-        return WeaviateRestClient(base_url=base_url, api_key=api_key)
+    def _get_chroma(self, library_id: str) -> ChromaDBClient:
+        lib = str(library_id or "").strip()
+        if not lib:
+            raise RuntimeError("library_id_required")
+        if lib not in self._chroma_clients:
+            workspace = self._resolve_workspace_root(lib)
+            if workspace is None:
+                raise RuntimeError(f"workspace_not_found:{lib}")
+            chroma_dir = workspace / "chromadb"
+            self._chroma_clients[lib] = ChromaDBClient(str(chroma_dir))
+        return self._chroma_clients[lib]
 
     def _build_default_embedding(self) -> ZhipuEmbeddingClient:
         api_key = self._settings.zhipu_api_key.strip()
@@ -981,7 +920,7 @@ class LiteratureService:
         library_id = str(options.get("library_id", "") or self._default_library_id()).strip()
         path = Path(manifest_path)
         rows = _iter_jsonl(path)
-        self.weaviate.ensure_literature_schema()
+        self._get_chroma(library_id).ensure_literature_schema()
         imported = 0
         sent_count = 0
         para_count = 0
@@ -1073,7 +1012,7 @@ class LiteratureService:
             sentence["source_html"] = paper["source_html"]
             self._sentence_by_id[f"{library_id}::{sid}"] = dict(sentence)
             object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"LiteratureSentence:{library_id}:{paper_id}:{sid}"))
-            self.weaviate.upsert("LiteratureSentence", object_id, sentence, vector)
+            self._get_chroma(library_id).upsert("LiteratureSentence", object_id, sentence, vector)
 
         for paragraph, vector in zip(paragraphs, paragraph_vectors):
             pid = str(paragraph["paragraph_id"])
@@ -1081,11 +1020,11 @@ class LiteratureService:
             paragraph["source_html"] = paper["source_html"]
             self._paragraph_by_id[f"{library_id}::{pid}"] = dict(paragraph)
             object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"LiteratureParagraph:{library_id}:{paper_id}:{pid}"))
-            self.weaviate.upsert("LiteratureParagraph", object_id, paragraph, vector)
+            self._get_chroma(library_id).upsert("LiteratureParagraph", object_id, paragraph, vector)
 
         self._document_by_id[f"{library_id}::{paper_id}"] = dict(paper)
         object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"LiteratureDocument:{library_id}:{paper_id}"))
-        self.weaviate.upsert(
+        self._get_chroma(library_id).upsert(
             "LiteratureDocument",
             object_id,
             {
@@ -1154,40 +1093,22 @@ class LiteratureService:
         rag_hits: list[dict[str, Any]] = []
         degraded_routes: list[str] = []
         lib = str(library_id or "").strip()
-        supports_native_filter = self.weaviate.supports_library_id()
-        allowed_paper_ids = self._load_library_paper_ids(lib) if lib and not supports_native_filter else set()
-        filter_mode = "none"
-        if lib:
-            filter_mode = "weaviate_where" if supports_native_filter else "paper_id_registry"
-        filter_applied = bool(not lib or (supports_native_filter or bool(allowed_paper_ids)))
-        fetch_limit = top_k if (not lib or supports_native_filter) else min(max(top_k * 8, 50), 500)
+        chroma = self._get_chroma(lib)
+        fetch_limit = top_k
         for level in levels:
             class_name = _level_to_class(level)
             try:
-                kw_rows = self.weaviate.bm25_search(
-                    class_name,
-                    query=query,
-                    limit=fetch_limit,
-                    library_id=lib if supports_native_filter else "",
-                )
+                kw_rows = chroma.bm25_search(class_name, query=query, limit=fetch_limit)
             except Exception as exc:  # noqa: BLE001
                 kw_rows = []
                 degraded_routes.append(f"{level}:keyword:{exc}")
             vg_rows: list[dict[str, Any]] = []
             if isinstance(query_vec, list) and len(query_vec) > 0:
                 try:
-                    vg_rows = self.weaviate.vector_search(
-                        class_name,
-                        vector=query_vec,
-                        limit=fetch_limit,
-                        library_id=lib if supports_native_filter else "",
-                    )
+                    vg_rows = chroma.vector_search(class_name, vector=query_vec, limit=fetch_limit)
                 except Exception as exc:  # noqa: BLE001
                     vg_rows = []
                     degraded_routes.append(f"{level}:vector:{exc}")
-            if lib and not supports_native_filter:
-                kw_rows = self._filter_rows_by_paper_ids(kw_rows, allowed_paper_ids)
-                vg_rows = self._filter_rows_by_paper_ids(vg_rows, allowed_paper_ids)
             for row in kw_rows:
                 keyword_hits.append(self._format_hit(level, row, route="keyword", include_context=include_expanded_context, forced_library_id=lib))
             for row in vg_rows:
@@ -1204,9 +1125,9 @@ class LiteratureService:
                 "rag_weight": float(rag_weight),
                 "levels": levels,
                 "library_id": lib,
-                "library_filter_applied": filter_applied,
-                "library_filter_mode": filter_mode,
-                "library_registry_paper_count": len(allowed_paper_ids),
+                "library_filter_applied": True,
+                "library_filter_mode": "per_library_chromadb",
+                "library_registry_paper_count": 0,
                 "degraded": bool(degraded_routes),
                 "degraded_routes": degraded_routes,
             },

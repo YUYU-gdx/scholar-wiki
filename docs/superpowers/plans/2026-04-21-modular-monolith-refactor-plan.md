@@ -20,7 +20,7 @@
   - `note/vault/page/block/link/tag`
   - `reader_state`（阅读进度、高亮、批注、收藏）
   - `workspace/layout/pane/tab`
-- 向量检索改为旁路索引（Weaviate/pgvector 二选一实现层），不承载主业务字段，仅承载 embedding 与召回辅助键。
+- 向量检索改为旁路索引（ChromaDB 嵌入式实现），不承载主业务字段，仅承载 embedding 与召回辅助键。
 - 现有 JSON 产物（graph views、中间产物）保留为缓存/导出层，不再作为业务主存。
 
 3. 前端重构（单一 React Shell）

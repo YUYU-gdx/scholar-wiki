@@ -13,8 +13,6 @@ JOB_RESULT_FILENAME = "result.json"
 
 PIPELINE_SQLITE_DEFAULT_PATH = "outputs/workbench/pipeline_jobs.sqlite"
 
-# Weaviate default/fallback order when WEAVIATE_URL is not configured.
-WEAVIATE_DEFAULT_PORT_CANDIDATES: tuple[int, ...] = (8080, 8090)
 SUPPORTED_SOURCE_SUFFIXES: tuple[str, ...] = (".pdf", ".md", ".txt", ".html", ".htm")
 DIRECT_EXTRACT_SUFFIXES: tuple[str, ...] = (".md", ".txt", ".html", ".htm")
 
@@ -67,8 +65,3 @@ def build_source_archive_path(workspace_root: Path, filename: str) -> Path:
     return workspace_root / SOURCE_DIRNAME / source_type / filename
 
 
-def build_weaviate_base_url_candidates(weaviate_url: str = "") -> list[str]:
-    explicit = str(weaviate_url or "").strip()
-    if explicit:
-        return [explicit.rstrip("/")]
-    return [f"http://127.0.0.1:{port}" for port in WEAVIATE_DEFAULT_PORT_CANDIDATES]

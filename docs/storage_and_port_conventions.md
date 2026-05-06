@@ -68,14 +68,13 @@
 - 默认 SQLite 路径：`outputs/workbench/pipeline_jobs.sqlite`
 - 若设置 `PIPELINE_JOB_STORE_DSN`：改用 Postgres
 
-## 4. Weaviate 端口回退规约
+## 4. ChromaDB 向量存储规约
 
-用于文献检索/向量存储连接：
+文献检索使用嵌入式 ChromaDB，以文献库为单位隔离存储：
 
-1. 若设置 `WEAVIATE_URL`，只使用该地址。
-2. 否则依次探测：
-   - `http://127.0.0.1:8080`
-   - `http://127.0.0.1:8090`
+1. 每个文献库的 ChromaDB 数据存储在 `{workspace}/chromadb/` 目录下。
+2. SQLite FTS5 全文索引用作 BM25 关键词检索后端，与 ChromaDB 同目录存放。
+3. 不再依赖外部 Weaviate 服务或 Docker。
 3. 若都不可达，仍回退到第一个候选地址：`http://127.0.0.1:8080`。
 
 ## 6. Chat / Agent 存储规约
@@ -107,10 +106,10 @@
 - Codex 会话/线程状态存储在 `CODEX_HOME` 指向的目录
 - 库级隔离时通过 `CHAT_CODEX_HOME` 或 `CHAT_CODEX_FORCE_LIBRARY_HOME=1` 指定
 - MCP 配置由 Codex Runner 在运行时生成至 `{workspace}/.codex/mcp_servers.json`
-- kn_graph MCP 工具（`rag_search`、`graph_search`、`weaviate_query`、`weaviate_fetch_object`）通过 `scripts/smj_pipeline/kn_mcp_server.py` 提供
+- kn_graph MCP 工具（`rag_search`、`graph_search`、`literature_search`、`literature_fetch_object`）通过 `scripts/smj_pipeline/kn_mcp_server.py` 提供
 
 ## 7. 代码单一事实来源
 
 - 统一约定模块：`scripts/smj_pipeline/runtime_conventions.py`
 - Pipeline 落盘：`scripts/smj_pipeline/serve_async_pipeline_api.py`
-- 文献物化与 Weaviate 回退：`scripts/smj_pipeline/literature/service.py`
+- 文献物化与 ChromaDB 存储：`scripts/smj_pipeline/literature/service.py`

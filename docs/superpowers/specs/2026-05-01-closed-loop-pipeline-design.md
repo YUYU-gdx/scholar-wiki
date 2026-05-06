@@ -1,7 +1,7 @@
 # Closed-Loop Pipeline Design
 
 **Date**: 2026-05-01
-**Status**: Draft
+**Status**: Superseded (Weaviate replaced by embedded ChromaDB, 2026-05-06)
 
 ## Problem
 

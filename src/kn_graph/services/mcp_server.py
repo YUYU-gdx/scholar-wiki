@@ -65,8 +65,8 @@ def _build_tools() -> list[dict[str, Any]]:
             },
         },
         {
-            "name": "weaviate_query",
-            "description": "Query Weaviate-backed literature retrieval endpoint.",
+            "name": "literature_search",
+            "description": "Search literature via ChromaDB-backed retrieval.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -78,7 +78,7 @@ def _build_tools() -> list[dict[str, Any]]:
             },
         },
         {
-            "name": "weaviate_fetch_object",
+            "name": "literature_fetch_object",
             "description": "Fetch paper/object detail by paper_id or doi.",
             "inputSchema": {
                 "type": "object",
@@ -161,7 +161,7 @@ def _handle_graph_search(base_url: str, arguments: dict[str, Any]) -> dict[str, 
     }
 
 
-def _handle_weaviate_query(base_url: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def _handle_literature_search(base_url: str, arguments: dict[str, Any]) -> dict[str, Any]:
     query = str(arguments.get("query", "") or "").strip()
     library_id = str(arguments.get("library_id", "") or os.getenv("KN_DEFAULT_LIBRARY_ID", "") or "").strip()
     top_k = max(1, min(50, int(arguments.get("top_k", 10) or 10)))
@@ -182,7 +182,7 @@ def _handle_weaviate_query(base_url: str, arguments: dict[str, Any]) -> dict[str
     }
 
 
-def _handle_weaviate_fetch_object(base_url: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def _handle_literature_fetch_object(base_url: str, arguments: dict[str, Any]) -> dict[str, Any]:
     key = str(arguments.get("paper_id_or_doi", "") or "").strip()
     if not key:
         raise RuntimeError("paper_id_or_doi_required")
@@ -195,10 +195,10 @@ def _call_tool(base_url: str, name: str, arguments: dict[str, Any]) -> dict[str,
         return _handle_rag_search(base_url, arguments)
     if name == "graph_search":
         return _handle_graph_search(base_url, arguments)
-    if name == "weaviate_query":
-        return _handle_weaviate_query(base_url, arguments)
-    if name == "weaviate_fetch_object":
-        return _handle_weaviate_fetch_object(base_url, arguments)
+    if name == "literature_search":
+        return _handle_literature_search(base_url, arguments)
+    if name == "literature_fetch_object":
+        return _handle_literature_fetch_object(base_url, arguments)
     raise RuntimeError(f"tool_not_found:{name}")
 
 

@@ -55,10 +55,7 @@ class Settings(BaseModel):
     zhipu_api_key: str = ""
     nvidia_api_key: str = ""
     deepseek_api_key: str = ""
-    weaviate_api_key: str = ""
-
-    # Service URLs
-    weaviate_url: str = "http://127.0.0.1:8090"
+    chromadb_path: str = ""
     mineru_api_base_url: str = "https://mineru.net/api/v4"
 
     # LLM Provider config
