@@ -279,7 +279,36 @@ class ChatService:
             if not str(updates.get("endpoint_url", "") or "").strip():
                 updates["endpoint_url"] = default_endpoint_url(base)
             self._write_agent_config(current_agent, updates)
+
+        # Mirror agent settings to the root workspace so that running
+        # `claude` or `codex` directly there picks up the same provider.
+        self._deploy_agent_settings_to_root_workspace(current_agent, updates)
+
         return self.get_agent_settings()
+
+    def _deploy_agent_settings_to_root_workspace(self, backend: str, updates: dict[str, Any]) -> None:
+        provider = str(updates.get("provider", "") or "").strip()
+        model = str(updates.get("model", "") or "").strip()
+        api_key = str(updates.get("api_key", "") or "").strip()
+        base_url = str(updates.get("base_url", "") or "").strip()
+        if not any((provider, model, api_key, base_url)):
+            return
+        try:
+            from kn_graph.services.workspace_agent_config import deploy_to_root_workspace
+            deploy_to_root_workspace(
+                workspaces_dir=str(self._settings.workspaces_dir.resolve()),
+                backend=backend,
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+            )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to deploy agent_settings to root workspace",
+                exc_info=True,
+            )
 
     def save_codex_config(self, body: dict[str, Any]) -> dict[str, Any]:
         config_path = self._settings.codex_config_path

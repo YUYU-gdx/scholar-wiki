@@ -160,7 +160,38 @@ class SettingsService:
         categories["pipeline_agent"] = saved
         store["categories"] = categories
         self._write_store(store)
+
+        # Mirror pipeline agent settings to every library workspace so that
+        # running `claude` or `codex` directly in a library workspace picks
+        # up the same provider / model / api_key / base_url.
+        self._deploy_pipeline_agent_to_library_workspaces(saved)
+
         return self._get_pipeline_agent_category()
+
+    def _deploy_pipeline_agent_to_library_workspaces(self, saved: dict[str, Any]) -> None:
+        backend = str(saved.get("backend", "") or "").strip()
+        provider = str(saved.get("provider", "") or "").strip()
+        model = str(saved.get("model", "") or "").strip()
+        api_key = str(saved.get("api_key", "") or "").strip()
+        base_url = str(saved.get("base_url", "") or "").strip()
+        if not any((provider, model, api_key, base_url)):
+            return
+        try:
+            from kn_graph.services.workspace_agent_config import deploy_to_all_library_workspaces
+            deploy_to_all_library_workspaces(
+                registry_path=str(self._settings.registry_path),
+                backend=backend,
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+            )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to deploy pipeline_agent config to library workspaces",
+                exc_info=True,
+            )
 
     def _get_embedding_category(self) -> dict[str, Any]:
         from kn_graph.services.cherry_provider_catalog import default_embedding_endpoint_url, provider_presets  # noqa: F811

@@ -261,6 +261,22 @@ def resolve_workspace_root(registry: dict[str, Any], library_id: str) -> str:
     return ""
 
 
+def list_all_workspace_paths(registry: dict[str, Any]) -> list[str]:
+    """Return resolved workspace paths for every library in the registry."""
+    paths: list[str] = []
+    for item in registry.get("libraries", []) if isinstance(registry, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        root = str(item.get("workspace_root", "") or "").strip()
+        if not root:
+            continue
+        try:
+            paths.append(str(Path(root).resolve()))
+        except Exception:
+            paths.append(root)
+    return paths
+
+
 def create_library(
     *,
     library_id: str,
