@@ -77,8 +77,7 @@ function buildPythonEnv(repoRoot) {
   const sep = process.platform === "win32" ? ";" : ":";
   const pythonPath = prev ? `${repoRoot}${sep}${prev}` : repoRoot;
   const dataDir = process.env.KN_GRAPH_DATA_DIR || (process.platform === "win32" ? "D:\\KNGraphApp" : path.join(process.env.HOME || process.env.USERPROFILE || ".", ".kn_graph"));
-  const weaviateUrl = process.env.WEAVIATE_URL || "http://127.0.0.1:8090";
-  return { ...process.env, PYTHONPATH: pythonPath, KN_GRAPH_DATA_DIR: dataDir, WEAVIATE_URL: weaviateUrl };
+  return { ...process.env, PYTHONPATH: pythonPath, KN_GRAPH_DATA_DIR: dataDir };
 }
 
 function safeReadJson(filePath) {
@@ -450,72 +449,10 @@ app.on("before-quit", () => {
   stopBackendServer().catch(() => {});
 });
 
-async function startWeaviate() {
-  const weaviateUrl = process.env.WEAVIATE_URL || "http://127.0.0.1:8090";
-
-  try {
-    const resp = await fetch(`${weaviateUrl}/v1/.well-known/ready`, { signal: AbortSignal.timeout(3000) });
-    if (resp.ok) {
-      console.log(`[desktop] Weaviate already running at ${weaviateUrl}`);
-      return true;
-    }
-  } catch (_) { /* not running, try to start */ }
-
-  try {
-    const dockerCheck = await execFileAsync("docker", ["--version"], { timeout: 5000, windowsHide: true });
-    console.log(`[desktop] Docker available: ${dockerCheck.stdout.trim()}`);
-  } catch (_) {
-    console.log("[desktop] Docker not available, skipping Weaviate startup");
-    return false;
-  }
-
-  try {
-    const ps = await execFileAsync("docker", ["ps", "-q", "-f", "name=kn-graph-weaviate"], { timeout: 5000, windowsHide: true });
-    if (ps.stdout.trim()) {
-      console.log("[desktop] Weaviate container already running");
-    } else {
-      const composeFile = path.resolve(getRepoRoot(), "docker-compose.weaviate.yml");
-      if (fs.existsSync(composeFile)) {
-        console.log(`[desktop] Starting Weaviate via docker compose...`);
-        await execFileAsync("docker", ["compose", "-f", composeFile, "up", "-d"], { timeout: 30000, windowsHide: true });
-      } else {
-        console.log(`[desktop] docker-compose.weaviate.yml not found at ${composeFile}, using docker run`);
-        await execFileAsync("docker", [
-          "run", "-d", "--name", "kn-graph-weaviate",
-          "-p", "8090:8080",
-          "-e", "QUERY_DEFAULTS_LIMIT=100",
-          "-e", "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true",
-          "-v", "kn-graph-weaviate-data:/var/lib/weaviate",
-          "--restart", "unless-stopped",
-          "cr.weaviate.io/semitechnologies/weaviate:1.28.4"
-        ], { timeout: 60000, windowsHide: true });
-      }
-    }
-  } catch (err) {
-    console.log(`[desktop] Docker Weaviate start failed: ${err.message}`);
-    return false;
-  }
-
-  const startTime = Date.now();
-  while (Date.now() - startTime < 30000) {
-    try {
-      const resp = await fetch(`${weaviateUrl}/v1/.well-known/ready`, { signal: AbortSignal.timeout(3000) });
-      if (resp.ok) {
-        console.log(`[desktop] Weaviate ready at ${weaviateUrl}`);
-        return true;
-      }
-    } catch (_) { /* not ready yet */ }
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  console.log("[desktop] Weaviate health check timed out, continuing without vector search");
-  return false;
-}
-
 app.whenReady().then(async () => {
   try {
     await startBackendServer();
     await waitForBackendReady();
-    await startWeaviate();
     createMainWindow();
   } catch (err) {
     dialog.showErrorBox(
