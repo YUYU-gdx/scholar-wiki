@@ -1,5 +1,5 @@
 ﻿import { FileText, ExternalLink, Library, Layers, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useApp } from '../App';
 import { api } from '../api';
 
@@ -14,6 +14,16 @@ type PaperFileAvailability = {
 type PaperFileStatus = PaperFileAvailability & {
   loading: boolean;
 };
+
+type SelectionState = {
+  pivot: number;
+  focused: number;
+  selected: Set<number>;
+};
+
+function createSelection(): SelectionState {
+  return { pivot: 0, focused: 0, selected: new Set() };
+}
 
 function firstTitle(v: Record<string, unknown>, paperId: string): string {
   const pretty = (s: string): string => String(s || '').replace(/\.pdf$/i, '').replace(/__/g, ' ').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
@@ -42,6 +52,10 @@ export default function LibraryView() {
   const [expandedPapers, setExpandedPapers] = useState<Record<string, boolean>>({});
   const [mode, setMode] = useState<Mode>(() => (localStorage.getItem(MODE_KEY) as Mode) || 'papers');
   const [paperFilesByScopedKey, setPaperFilesByScopedKey] = useState<Record<string, PaperFileStatus>>({});
+
+  const selRef = useRef<SelectionState>(createSelection());
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; visible: boolean } | null>(null);
+  const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
 
   const deletePaper = async (p: { paperId: string; libraryId: string; scopedKey: string }) => {
     if (!confirm(`确定删除「${p.paperId}」吗？\n将同时删除数据库记录和磁盘文件。`)) return;
@@ -147,6 +161,66 @@ export default function LibraryView() {
     return () => { cancelled = true; };
   }, [paperList, paperFileCache, setPaperFileCache]);
 
+  // ── Selection logic ──
+
+  const isSelected = useCallback((index: number) => {
+    return selRef.current.selected.has(index);
+  }, []);
+
+  const select = useCallback((index: number) => {
+    const s = selRef.current;
+    s.selected.clear();
+    s.selected.add(index);
+    s.pivot = index;
+    s.focused = index;
+    forceUpdate();
+  }, []);
+
+  const toggleSelect = useCallback((index: number) => {
+    const s = selRef.current;
+    if (s.selected.has(index)) {
+      s.selected.delete(index);
+    } else {
+      s.selected.add(index);
+    }
+    s.pivot = index;
+    s.focused = index;
+    forceUpdate();
+  }, []);
+
+  const shiftSelect = useCallback((index: number) => {
+    const s = selRef.current;
+    s.selected.clear();
+    const from = Math.min(index, s.pivot);
+    const to = Math.max(index, s.pivot);
+    for (let i = from; i <= to; i++) {
+      s.selected.add(i);
+    }
+    s.focused = index;
+    forceUpdate();
+  }, []);
+
+  const selectAll = useCallback(() => {
+    const s = selRef.current;
+    s.selected.clear();
+    for (let i = 0; i < paperList.length; i++) {
+      s.selected.add(i);
+    }
+    forceUpdate();
+  }, [paperList]);
+
+  const clearSelection = useCallback(() => {
+    const s = selRef.current;
+    s.selected.clear();
+    forceUpdate();
+  }, []);
+
+  const getSelectedPapers = useCallback(() => {
+    return Array.from(selRef.current.selected).map((i) => paperList[i]).filter(Boolean);
+  }, [paperList]);
+
+  // ── Existing helpers ──
+
   const setSelectedPaper = (paperId: string, libraryId: string) => {
     setSelectedPaperId(paperId);
     setSelectedPaperLibraryId(libraryId);
@@ -214,8 +288,21 @@ export default function LibraryView() {
       </div>
 
       {mode === 'papers' && (
-        <section className="space-y-3">
-          {paperList.map((p) => {
+        <section
+          className="space-y-3"
+          onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+              e.preventDefault();
+              selectAll();
+            }
+            if (e.key === 'Escape') {
+              clearSelection();
+              setCtxMenu(null);
+            }
+          }}
+          tabIndex={-1}
+        >
+          {paperList.map((p, idx) => {
             const expanded = !!expandedPapers[p.scopedKey];
             const previewVars = p.variables.slice(0, 5);
             const remain = Math.max(0, p.variables.length - 5);
@@ -224,9 +311,22 @@ export default function LibraryView() {
             const hasMd = !!detected?.markdown;
             const loadingFiles = !detected || !!detected.loading;
             return (
-              <div key={p.scopedKey} className="p-4 bg-surface-container-lowest border border-outline-variant rounded-xl">
+              <div
+                key={p.scopedKey}
+                className={`p-4 bg-surface-container-lowest border border-outline-variant rounded-xl ${isSelected(idx) ? 'ring-2 ring-secondary' : ''}`}
+                onClick={(e) => {
+                  if (e.shiftKey) shiftSelect(idx);
+                  else if (e.ctrlKey || e.metaKey) toggleSelect(idx);
+                  else select(idx);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  if (!isSelected(idx)) select(idx);
+                  setCtxMenu({ x: e.clientX, y: e.clientY, visible: true });
+                }}
+              >
                 <div className="flex items-center justify-between gap-3">
-                  <button onClick={() => setExpandedPapers((prev) => ({ ...prev, [p.scopedKey]: !prev[p.scopedKey] }))} className="flex items-center gap-2 text-left">
+                  <button onClick={(e) => (e.stopPropagation(), setExpandedPapers((prev) => ({ ...prev, [p.scopedKey]: !prev[p.scopedKey] })))} className="flex items-center gap-2 text-left">
                     {expanded ? <ChevronDown className="w-4 h-4 text-outline" /> : <ChevronRight className="w-4 h-4 text-outline" />}
                     <div>
                       <div className="text-sm font-semibold text-on-surface">{p.title}</div>
@@ -239,9 +339,9 @@ export default function LibraryView() {
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      {hasPdf && <button onClick={() => openInReader(p.paperId, p.libraryId, p.rawPaperId, 'pdf')} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />PDF</button>}
-                      {hasMd && <button onClick={() => openInReader(p.paperId, p.libraryId, p.rawPaperId, 'markdown')} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />MD</button>}
-                      <button onClick={() => deletePaper(p)} className="text-xs px-2 py-1 rounded border border-red-200 hover:border-red-400 hover:bg-red-50 text-red-600 flex items-center gap-1">删除</button>
+                      {hasPdf && <button onClick={(e) => (e.stopPropagation(), openInReader(p.paperId, p.libraryId, p.rawPaperId, 'pdf'))} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />PDF</button>}
+                      {hasMd && <button onClick={(e) => (e.stopPropagation(), openInReader(p.paperId, p.libraryId, p.rawPaperId, 'markdown'))} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />MD</button>}
+                      <button onClick={(e) => (e.stopPropagation(), deletePaper(p))} className="text-xs px-2 py-1 rounded border border-red-200 hover:border-red-400 hover:bg-red-50 text-red-600 flex items-center gap-1">删除</button>
                     </div>
                   )}
                 </div>
@@ -249,7 +349,7 @@ export default function LibraryView() {
                 {expanded && (
                   <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
                     {p.variables.map((v) => (
-                      <button key={`${p.scopedKey}-${v.id}`} onClick={() => { setSelectedNodeId(v.id); setSelectedNodeLibraryId(String(v.library_id || p.libraryId)); setCurrentView('graph'); }} className="text-left p-2 bg-surface-container border border-outline-variant rounded-lg hover:border-secondary">
+                      <button key={`${p.scopedKey}-${v.id}`} onClick={(e) => (e.stopPropagation(), setSelectedNodeId(v.id), setSelectedNodeLibraryId(String(v.library_id || p.libraryId)), setCurrentView('graph'))} className="text-left p-2 bg-surface-container border border-outline-variant rounded-lg hover:border-secondary">
                         <div className="text-xs font-semibold text-on-surface truncate">{v.label || v.name || v.id}</div>
                         <div className="text-[11px] text-on-surface-variant truncate">{String(v.latest_concept || '').slice(0, 60) || '暂无概念'}</div>
                       </button>
@@ -261,6 +361,91 @@ export default function LibraryView() {
           })}
         </section>
       )}
+
+      {mode === 'papers' && ctxMenu?.visible && (() => {
+        const papers = Array.from(selRef.current.selected).map((i) => paperList[i]).filter(Boolean);
+        const hasPdf = papers.some((p) => paperFilesByScopedKey[p.scopedKey]?.pdf);
+        const hasMd = papers.some((p) => paperFilesByScopedKey[p.scopedKey]?.markdown);
+        const allExpanded = papers.every((p) => expandedPapers[p.scopedKey]);
+        return (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setCtxMenu(null)} />
+            <div
+              className="fixed z-50 bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg py-1 min-w-[180px]"
+              style={{ left: ctxMenu.x, top: ctxMenu.y }}
+            >
+              {hasPdf && (
+                <button
+                  className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-container"
+                  onClick={() => {
+                    const first = papers.find((p) => paperFilesByScopedKey[p.scopedKey]?.pdf);
+                    if (first) openInReader(first.paperId, first.libraryId, first.rawPaperId, 'pdf');
+                    setCtxMenu(null);
+                  }}
+                >
+                  在阅读器中打开 (PDF)
+                </button>
+              )}
+              {hasMd && (
+                <button
+                  className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-container"
+                  onClick={() => {
+                    const first = papers.find((p) => paperFilesByScopedKey[p.scopedKey]?.markdown);
+                    if (first) openInReader(first.paperId, first.libraryId, first.rawPaperId, 'markdown');
+                    setCtxMenu(null);
+                  }}
+                >
+                  在阅读器中打开 (MD)
+                </button>
+              )}
+              <button
+                className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-container"
+                onClick={() => {
+                  const toExpand = !allExpanded;
+                  setExpandedPapers((prev) => {
+                    const next = { ...prev };
+                    for (const p of papers) {
+                      next[p.scopedKey] = toExpand;
+                    }
+                    return next;
+                  });
+                  setCtxMenu(null);
+                }}
+              >
+                {allExpanded ? '折叠' : '展开'} ({papers.length} 篇)
+              </button>
+              <div className="border-t border-outline-variant my-1" />
+              <button
+                className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                onClick={async () => {
+                  const n = papers.length;
+                  const names = papers.map((p) => p.paperId).join(', ');
+                  if (!confirm(`确定删除 ${n} 篇论文吗？\n${names}\n将同时删除数据库记录和磁盘文件。`)) return;
+                  let ok = 0;
+                  let fail = 0;
+                  await Promise.allSettled(papers.map((p) =>
+                    api.graph.deletePaper(p.paperId, p.libraryId).then(() => { ok++; })
+                  ));
+                  fail = n - ok;
+                  setPaperFilesByScopedKey((prev) => {
+                    const next2 = { ...prev };
+                    for (const p of papers) delete next2[p.scopedKey];
+                    return next2;
+                  });
+                  for (const p of papers) {
+                    window.dispatchEvent(new CustomEvent('paper-deleted', { detail: { libraryId: p.libraryId } }));
+                  }
+                  clearSelection();
+                  setCtxMenu(null);
+                  if (fail > 0) alert(`已删除 ${ok} 篇${fail > 0 ? `，${fail} 篇失败` : ''}`);
+                }}
+              >
+                删除 ({papers.length} 篇)
+              </button>
+            </div>
+          </>
+        );
+      })()}
 
       {mode === 'variables' && (
         <section>
