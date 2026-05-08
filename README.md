@@ -76,6 +76,13 @@ uv run python -m unittest discover -s tests -p "test_*.py" -v
 - **进行中**：后端合并为单 FastAPI 应用，详见设计文档
 - **禁止**：不要创建或修改 `frontend/` 目录
 
+## 前端维护策略（已收敛）
+
+- 唯一前端源码目录：`scholarai-workbench/src`
+- `frontend/` 视为历史目录（冻结，禁止改动）
+- `scholarai-workbench/dist` 为构建产物，不作为开发源码维护
+- 日常开发请只在 `scholarai-workbench/src` 修改，并通过 `npm run build` 验证
+
 ## 供应链数据源（当前默认）
 
 - 当前默认运行指针：`outputs/runs/active.json`

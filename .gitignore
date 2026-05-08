@@ -36,6 +36,8 @@ docs/mineru_api_docs/
 skills/
 
 # Frontend
+scholarai-workbench/node_modules/
+scholarai-workbench/dist/
 frontend_legacy/**/node_modules/
 frontend_legacy/**/dist/
 .tmp/
