@@ -234,10 +234,15 @@
 }
 
 /* ── KaTeX overrides ──
-   Prevent Tailwind CSS resets from disrupting KaTeX's internal layout.
-   KaTeX uses display:inline-table/table-row/table-cell for vertical lists
-   (subscripts, superscripts, fractions) and depends on specific font metrics.
-   These rules mirror VS Code's built-in markdown preview behavior. */
+   Tailwind's global *,::before,::after { box-sizing: border-box } breaks
+   KaTeX's internal layout. KaTeX was designed for content-box and all its
+   precise em-based positioning (subscripts, superscripts, fractions)
+   depends on it. Also normalize font-size to match VS Code convention. */
+.reader-markdown .katex,
+.reader-markdown .katex * {
+  box-sizing: content-box;
+}
+
 .reader-markdown .katex {
   font-size: 1.1em;
   line-height: 1.2;
@@ -247,10 +252,4 @@
   margin: 1em 0;
   overflow-x: auto;
   overflow-y: hidden;
-}
-
-/* Protect KaTeX's table-model layout from Tailwind's border/spacing resets */
-.reader-markdown .katex .vlist-t {
-  border-collapse: separate;
-  border-spacing: 0;
 }
