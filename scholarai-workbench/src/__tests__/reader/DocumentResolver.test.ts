@@ -1,84 +1,93 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-const mockFetch = vi.fn();
-global.fetch = mockFetch as unknown as typeof fetch;
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 describe('DocumentResolver', () => {
+  const mockShell = {
+    platform: 'win32',
+    runtime: 'electron',
+    resolvePaperPaths: vi.fn(),
+    readLocalText: vi.fn(),
+    readLocalFile: vi.fn(),
+  };
+
   beforeEach(() => {
     vi.resetAllMocks();
+    // @ts-expect-error -- mock shell is incomplete by design
+    window.desktopShell = mockShell;
   });
 
-  it('resolves paper_id to file list via API', async () => {
-    mockFetch.mockResolvedValueOnce({
+  afterEach(() => {
+    delete window.desktopShell;
+  });
+
+  it('fetches file paths and reads a markdown file', async () => {
+    mockShell.resolvePaperPaths.mockResolvedValueOnce({
       ok: true,
-      json: () => Promise.resolve({
-        paper_id: 'doi_test',
-        library_id: 'supply_chain',
-        files: {
-          pdf: { path: '/data/test.pdf', name: 'test.pdf', size_bytes: 1000 },
-        },
-        default_view: 'pdf',
-      }),
+      files: {
+        markdown: { path: '/data/test.md', name: 'test.md', size_bytes: 64 },
+      },
+    });
+    mockShell.readLocalText.mockResolvedValueOnce({
+      ok: true,
+      data: '# Hello',
     });
 
-    const { resolvePaperFiles } = await import('../../components/reader/DocumentResolver');
-    const result = await resolvePaperFiles('doi_test', 'supply_chain');
-    expect(result.default_view).toBe('pdf');
-    expect(result.files.pdf).toBeDefined();
-    expect(result.files.pdf!.name).toBe('test.pdf');
+    const { resolveAndLoadDocument } = await import('../../components/reader/DocumentResolver');
+    const result = await resolveAndLoadDocument('doi_test', 'supply_chain');
+    expect(result.type).toBe('markdown');
+    expect(result.data).toBe('# Hello');
+    expect(result.file_name).toBe('test.md');
+    expect(mockShell.resolvePaperPaths).toHaveBeenCalledWith('doi_test', 'supply_chain');
   });
 
   it('returns none when no files available', async () => {
-    mockFetch.mockResolvedValueOnce({
+    mockShell.resolvePaperPaths.mockResolvedValueOnce({
       ok: true,
-      json: () => Promise.resolve({
-        paper_id: 'doi_test',
-        library_id: 'supply_chain',
-        files: {},
-        default_view: 'none',
-      }),
+      files: {},
     });
 
-    const { resolvePaperFiles } = await import('../../components/reader/DocumentResolver');
-    const result = await resolvePaperFiles('doi_test', 'supply_chain');
-    expect(result.default_view).toBe('none');
-    expect(Object.keys(result.files)).toHaveLength(0);
+    const { resolveAndLoadDocument } = await import('../../components/reader/DocumentResolver');
+    const result = await resolveAndLoadDocument('doi_test', 'supply_chain');
+    expect(result.type).toBe('none');
+    expect(result.data).toBeNull();
   });
 
-  it('falls back to rawPaperId when primary paper id returns 404', async () => {
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-      })
+  it('falls back to rawPaperId when primary id returns not ok', async () => {
+    mockShell.resolvePaperPaths
+      .mockResolvedValueOnce({ ok: false, status: 404 })
       .mockResolvedValueOnce({
         ok: true,
-        status: 200,
-        json: () => Promise.resolve({
-          paper_id: 'raw_ok',
-          library_id: 'supply_chain',
-          files: {
-            markdown: { path: '/data/raw.md', name: 'raw.md', size_bytes: 64 },
-          },
-          default_view: 'markdown',
-        }),
+        files: {
+          markdown: { path: '/data/raw.md', name: 'raw.md', size_bytes: 64 },
+        },
       });
-
-    const { resolvePaperFiles } = await import('../../components/reader/DocumentResolver');
-    const result = await resolvePaperFiles('paper_404', 'supply_chain', 'raw_ok');
-    expect(result.default_view).toBe('markdown');
-    expect(result.paper_id).toBe('raw_ok');
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-  });
-
-  it('does not fall back to rawPaperId when primary paper id returns 500', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 500,
+    mockShell.readLocalText.mockResolvedValueOnce({
+      ok: true,
+      data: '# Fallback',
     });
 
-    const { resolvePaperFiles } = await import('../../components/reader/DocumentResolver');
-    await expect(resolvePaperFiles('paper_500', 'supply_chain', 'raw_ok')).rejects.toThrow('failed to resolve paper files: 500');
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const { resolveAndLoadDocument } = await import('../../components/reader/DocumentResolver');
+    const result = await resolveAndLoadDocument('paper_404', 'supply_chain', 'raw_ok');
+    expect(result.type).toBe('markdown');
+    expect(result.data).toBe('# Fallback');
+    expect(mockShell.resolvePaperPaths).toHaveBeenCalledTimes(2);
+    expect(mockShell.resolvePaperPaths).toHaveBeenLastCalledWith('raw_ok', 'supply_chain');
+  });
+
+  it('returns none when all resolve attempts fail', async () => {
+    mockShell.resolvePaperPaths
+      .mockResolvedValueOnce({ ok: false, status: 500 })
+      .mockResolvedValueOnce({ ok: false, status: 404 });
+
+    const { resolveAndLoadDocument } = await import('../../components/reader/DocumentResolver');
+    const result = await resolveAndLoadDocument('paper_500', 'supply_chain', 'raw_ok');
+    expect(result.type).toBe('none');
+    expect(mockShell.resolvePaperPaths).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws when not in electron runtime', async () => {
+    delete window.desktopShell;
+
+    const { resolveAndLoadDocument } = await import('../../components/reader/DocumentResolver');
+    await expect(resolveAndLoadDocument('doi_test', 'supply_chain')).rejects.toThrow('reader_requires_electron_runtime');
   });
 });

@@ -364,6 +364,46 @@ ipcMain.handle("write-local-text", async (_evt, filePath, text) => {
   }
 });
 
+// Resolve paper file paths via backend API (called from main process)
+ipcMain.handle("resolve-paper-paths", async (_evt, paperId, libraryId) => {
+  const pid = encodeURIComponent(String(paperId || "").trim());
+  const lib = encodeURIComponent(String(libraryId || "").trim());
+  const params = lib ? `?library_id=${lib}` : "";
+  const url = `http://${HOST}:${runtimePort}/paper/${pid}/files${params}`;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!resp.ok) return { ok: false, status: resp.status };
+    const payload = await resp.json();
+    return { ok: true, ...payload };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
+// Read paper file content given file paths payload
+ipcMain.handle("resolve-paper-file", async (_evt, filesPayload) => {
+  const files = filesPayload?.files || {};
+  const order = ["markdown", "pdf", "html"];
+  for (const key of order) {
+    const f = files[key];
+    if (!f?.path) continue;
+    const p = String(f.path).trim();
+    if (!p || !fs.existsSync(p) || !fs.statSync(p).isFile()) continue;
+    const name = path.basename(p);
+    if (key === "pdf") {
+      const buf = fs.readFileSync(p);
+      return { ok: true, type: "pdf", path: p, name, data: buf.toString("base64"), size: buf.length };
+    }
+    const text = fs.readFileSync(p, "utf8");
+    return { ok: true, type: key, path: p, name, data: text, size: Buffer.byteLength(text, "utf8") };
+  }
+  return { ok: false, error: "no_readable_file" };
+});
+
 function normalizeAssetRel(raw) {
   const s = String(raw || "").trim();
   if (!s) return "";

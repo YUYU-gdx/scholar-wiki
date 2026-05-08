@@ -4,8 +4,7 @@ import PdfViewer from './PdfViewer';
 import MarkdownEditor from './MarkdownEditor';
 import AnnotationSidebar from './AnnotationSidebar';
 import ReaderChatSidebar from './ReaderChatSidebar';
-import { resolvePaperFiles, loadDocument } from './DocumentResolver';
-import type { PaperFiles, DocumentLoadResult } from './types';
+import { resolveAndLoadDocument, type ResolvedDocument } from './DocumentResolver';
 
 interface ViewerHostProps {
   paperId: string;
@@ -16,8 +15,7 @@ interface ViewerHostProps {
 }
 
 export default function ViewerHost({ paperId, libraryId, preferredType, rawPaperId, onDocumentMeta }: ViewerHostProps) {
-  const [paperFiles, setPaperFiles] = useState<PaperFiles | null>(null);
-  const [document, setDocument] = useState<DocumentLoadResult | null>(null);
+  const [document, setDocument] = useState<ResolvedDocument | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -29,19 +27,14 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
     setLoading(true);
     setError(null);
 
-    resolvePaperFiles(paperId, libraryId, rawPaperId)
-      .then((files) => {
-        if (cancelled) return;
-        setPaperFiles(files);
-        return loadDocument(paperId, libraryId, files, rawPaperId, preferredType);
-      })
+    resolveAndLoadDocument(paperId, libraryId, rawPaperId, preferredType)
       .then((doc) => {
         if (cancelled) return;
         setDocument(doc);
         onDocumentMeta?.({
-          absolutePath: String(doc?.absolute_path || ''),
-          fileName: String(doc?.file_name || ''),
-          type: doc?.type || 'none',
+          absolutePath: doc.absolute_path || '',
+          fileName: doc.file_name || '',
+          type: doc.type,
         });
         setLoading(false);
       })
@@ -97,7 +90,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
             fileName={document.file_name}
             paperId={paperId}
             libraryId={libraryId}
-            markdownPath={String(paperFiles?.files?.markdown?.path || '')}
+            markdownPath=""
             sourcePath={String(document.absolute_path || '')}
           />
         )}
@@ -123,7 +116,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
         <AnnotationSidebar
           paperId={paperId}
           libraryId={libraryId}
-          markdownPath={String(paperFiles?.files?.markdown?.path || '')}
+          markdownPath={String(document.type === 'markdown' ? document.absolute_path : '')}
           isOpen={sidebarOpen}
           onToggle={() => setSidebarOpen(!sidebarOpen)}
         />

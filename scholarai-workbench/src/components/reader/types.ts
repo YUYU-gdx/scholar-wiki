@@ -47,9 +47,26 @@ export type ViewerMode = 'edit' | 'live-preview' | 'read';
 
 export { type PaperFilesFileInfo, type PaperFiles } from '../../types';
 
-export interface DocumentLoadResult {
-  type: 'pdf' | 'markdown' | 'html' | 'none';
-  data: Uint8Array | string | null;
-  file_name: string;
-  absolute_path?: string;
+export interface TabDescriptor {
+  id: string;
+  paperId: string;
+  libraryId: string;
+  type: 'pdf' | 'markdown' | 'html';
+  path: string;
+  title: string;
+}
+
+export interface BacklinkEntry {
+  filePath: string;
+  fileName: string;
+  lineNumber: number;
+  snippet: string;
+  paperId?: string;
+}
+
+export interface OutlineItem {
+  level: number;
+  text: string;
+  line: number;
+  id: string;
 }
