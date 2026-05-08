@@ -241,7 +241,6 @@
 .reader-markdown .katex {
   font-size: 1.1em;
   line-height: 1.2;
-  font-family: KaTeX_Main, "Times New Roman", serif;
 }
 
 .reader-markdown .katex-display {
@@ -250,42 +249,8 @@
   overflow-y: hidden;
 }
 
-/* Protect KaTeX's internal table-model layout from Tailwind interference */
+/* Protect KaTeX's table-model layout from Tailwind's border/spacing resets */
 .reader-markdown .katex .vlist-t {
-  display: inline-table;
-  table-layout: fixed;
   border-collapse: separate;
-}
-.reader-markdown .katex .vlist-r {
-  display: table-row;
-}
-.reader-markdown .katex .vlist {
-  display: table-cell;
-  vertical-align: bottom;
-  position: relative;
-}
-
-/* Remove any border/spacing Tailwind might inject into KaTeX spans */
-.reader-markdown .katex .katex-html > .newline {
-  display: block;
-}
-.reader-markdown .katex .base {
-  display: inline-block;
-  white-space: nowrap;
-  width: min-content;
-}
-.reader-markdown .katex .mord,
-.reader-markdown .katex .mbin,
-.reader-markdown .katex .mrel,
-.reader-markdown .katex .mopen,
-.reader-markdown .katex .mclose,
-.reader-markdown .katex .mpunct,
-.reader-markdown .katex .minner {
-  font-family: KaTeX_Main;
-}
-
-.reader-markdown .katex .msupsub {
-  text-align: left;
-  font-size: 1em;
-  display: inline-block;
+  border-spacing: 0;
 }
