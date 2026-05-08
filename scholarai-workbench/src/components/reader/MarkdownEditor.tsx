@@ -1,4 +1,4 @@
-﻿import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import MarkdownIt from 'markdown-it';
 import markdownItFootnote from 'markdown-it-footnote';
 import markdownItTaskLists from 'markdown-it-task-lists';
@@ -13,6 +13,16 @@ import TranslationModal from './TranslationModal';
 import { api } from '../../api';
 import { readerNotesManager } from './ReaderNotesManager';
 import { addNoteToMarkdownAtomic, addNoteToMarkdownAtomicByLine, deleteNoteFromMarkdownAny, extractNoteBlocks, listRecordedNotesMarkdownPaths, readMarkdownText, setRecordedNotesMarkdownPath } from './NoteMarkdownSync';
+
+// CodeMirror 6 imports
+import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, rectangularSelection, crosshairCursor, highlightActiveLine } from '@codemirror/view';
+import { EditorState } from '@codemirror/state';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { languages } from '@codemirror/language-data';
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, indentOnInput } from '@codemirror/language';
+import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -105,18 +115,30 @@ export default function MarkdownEditor({
   const [translationOpen, setTranslationOpen] = useState(false);
   const [translationText, setTranslationText] = useState('');
   const [noteRanges, setNoteRanges] = useState<Array<{ start: number; end: number; id: string; quote: string; note: string }>>([]);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // CM6 refs
+  const editorContainerRef = useRef<HTMLDivElement>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
+  const currentContentRef = useRef(content);
+
+  // Ref for onContentChange to avoid stale closures in CM6 updateListener
+  const onContentChangeRef = useRef(onContentChange);
+  useEffect(() => {
+    onContentChangeRef.current = onContentChange;
+  }, [onContentChange]);
 
   useEffect(() => {
     setText(content);
+    currentContentRef.current = content;
   }, [content]);
 
+  // Auto-save: 150ms debounced write to disk
   useEffect(() => {
     if (!absolutePath || window.desktopShell?.runtime !== 'electron') return;
     if (mode === 'read') return;
     const timer = window.setTimeout(async () => {
       await window.desktopShell?.writeLocalText(absolutePath, text);
-    }, 350);
+    }, 150);
     return () => window.clearTimeout(timer);
   }, [text, absolutePath, mode]);
 
@@ -443,6 +465,118 @@ export default function MarkdownEditor({
     </div>
   ), [renderedHtml]);
 
+  // ---- CM6 setup ----
+
+  // CM6 theme matching existing surface-container-lowest styling
+  const cm6Theme = useMemo(() => EditorView.theme({
+    '&': {
+      backgroundColor: 'transparent',
+      height: '100%',
+    },
+    '.cm-scroller': {
+      overflow: 'auto',
+    },
+    '.cm-content': {
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+      fontSize: '13px',
+      padding: '24px',
+      caretColor: 'var(--on-surface)',
+    },
+    '.cm-gutters': {
+      backgroundColor: 'transparent',
+      borderRight: '1px solid var(--outline-variant)',
+    },
+    '.cm-activeLineGutter': {
+      backgroundColor: 'rgba(0,0,0,0.05)',
+    },
+    '&.cm-focused': {
+      outline: 'none',
+    },
+  }), []);
+
+  // Memoized CodeMirror extensions
+  const cmExtensions = useMemo(() => [
+    lineNumbers(),
+    highlightActiveLineGutter(),
+    highlightSpecialChars(),
+    history(),
+    foldGutter(),
+    drawSelection(),
+    highlightActiveLine(),
+    rectangularSelection(),
+    crosshairCursor(),
+    bracketMatching(),
+    closeBrackets(),
+    autocompletion(),
+    indentOnInput(),
+    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    markdown({ base: markdownLanguage, codeLanguages: languages }),
+    keymap.of([
+      ...defaultKeymap,
+      ...historyKeymap,
+      ...completionKeymap,
+      ...closeBracketsKeymap,
+      ...searchKeymap,
+    ]),
+    highlightSelectionMatches(),
+    cm6Theme,
+    EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        const newText = update.state.doc.toString();
+        currentContentRef.current = newText;
+        setText(newText);
+        onContentChangeRef.current?.(newText);
+      }
+    }),
+  ], [cm6Theme]);
+
+  // Create/destroy CM6 editor based on mode
+  useEffect(() => {
+    // If not in an editing mode, destroy any existing CM6 instance
+    if (mode !== 'edit' && mode !== 'live-preview') {
+      if (editorViewRef.current) {
+        editorViewRef.current.destroy();
+        editorViewRef.current = null;
+      }
+      return;
+    }
+
+    // Container must be in the DOM
+    if (!editorContainerRef.current) return;
+
+    // Clean up any previous editor before creating a new one
+    if (editorViewRef.current) {
+      editorViewRef.current.destroy();
+      editorViewRef.current = null;
+    }
+
+    // Create CM6 EditorView mounted on the container div
+    const state = EditorState.create({
+      doc: currentContentRef.current,
+      extensions: cmExtensions,
+    });
+    const view = new EditorView({ state, parent: editorContainerRef.current });
+    editorViewRef.current = view;
+
+    return () => {
+      view.destroy();
+      editorViewRef.current = null;
+    };
+  }, [mode, cmExtensions]);
+
+  // Sync external text changes into the active CM6 editor (e.g. after note save/delete,
+  // or when content prop changes propagate through setText)
+  useEffect(() => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    const currentDoc = view.state.doc.toString();
+    if (text !== currentDoc) {
+      view.dispatch({
+        changes: { from: 0, to: currentDoc.length, insert: text },
+      });
+    }
+  }, [text]);
+
   return (
     <div className="flex flex-col h-full bg-surface-container-low">
       <div className="flex items-center justify-between px-4 py-2 border-b border-outline-variant bg-surface-container-lowest">
@@ -466,14 +600,9 @@ export default function MarkdownEditor({
 
       <div className="flex-1 overflow-hidden">
         {mode === 'edit' && (
-          <textarea
-            ref={textareaRef}
-            className="w-full h-full resize-none p-6 font-mono text-sm bg-surface-container-lowest text-on-surface outline-none border-0"
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              onContentChange?.(e.target.value);
-            }}
+          <div
+            ref={editorContainerRef}
+            className="w-full h-full bg-surface-container-lowest"
           />
         )}
 
@@ -496,13 +625,9 @@ export default function MarkdownEditor({
 
         {mode === 'live-preview' && (
           <div className="flex h-full">
-            <textarea
-              className="flex-1 resize-none p-4 font-mono text-sm bg-surface-container-lowest text-on-surface outline-none border-r border-outline-variant"
-              value={text}
-              onChange={(e) => {
-                setText(e.target.value);
-                onContentChange?.(e.target.value);
-              }}
+            <div
+              ref={editorContainerRef}
+              className="flex-1 bg-surface-container-lowest border-r border-outline-variant"
             />
             <div className="flex-1 overflow-y-auto p-4">
               <div
@@ -534,6 +659,3 @@ export default function MarkdownEditor({
     </div>
   );
 }
-
-
-
