@@ -384,6 +384,63 @@ ipcMain.handle("resolve-paper-paths", async (_evt, paperId, libraryId) => {
   }
 });
 
+ipcMain.handle("grep-workspace", async (_evt, pattern, libraryId) => {
+  const pat = String(pattern || "").trim();
+  if (!pat) return { ok: false, error: "empty_pattern" };
+  const libId = String(libraryId || "").trim();
+  const dataDir = process.env.KN_GRAPH_DATA_DIR || (process.platform === "win32" ? "D:\\KNGraphApp" : path.join(process.env.HOME || process.env.USERPROFILE || ".", ".kn_graph"));
+  const wsDir = path.join(dataDir, "libraries", "workspaces");
+
+  let searchDirs = [];
+  if (libId) {
+    const d = path.join(wsDir, libId);
+    if (fs.existsSync(d)) searchDirs = [d];
+  } else {
+    try {
+      searchDirs = fs.readdirSync(wsDir, { withFileTypes: true })
+        .filter(e => e.isDirectory())
+        .map(e => path.join(wsDir, e.name));
+    } catch (_e) { searchDirs = []; }
+  }
+
+  const results = [];
+  const escaped = pat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(escaped, 'gi');
+
+  for (const dir of searchDirs) {
+    const stack = [dir];
+    while (stack.length > 0) {
+      const cur = stack.pop();
+      let entries = [];
+      try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch (_e) { continue; }
+      for (const entry of entries) {
+        const full = path.join(cur, entry.name);
+        if (entry.isDirectory()) { stack.push(full); continue; }
+        if (entry.isFile() && entry.name.endsWith('.md')) {
+          const text = fs.readFileSync(full, 'utf8');
+          const lines = text.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            regex.lastIndex = 0;
+            if (regex.test(lines[i])) {
+              const start = Math.max(0, i - 1);
+              const end = Math.min(lines.length, i + 2);
+              results.push({
+                filePath: full,
+                fileName: entry.name,
+                lineNumber: i + 1,
+                snippet: lines.slice(start, end).join('\n').substring(0, 200),
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { ok: true, results };
+});
+
 // --- File watchers for live external-change detection ---
 const fileWatchers = new Map();
 

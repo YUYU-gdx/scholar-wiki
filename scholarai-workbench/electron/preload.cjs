@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("desktopShell", {
   readLocalText: (filePath) => ipcRenderer.invoke("read-local-text", filePath),
   writeLocalText: (filePath, text) => ipcRenderer.invoke("write-local-text", filePath, text),
   resolveLocalAsset: (markdownPath, relPath) => ipcRenderer.invoke("resolve-local-asset", markdownPath, relPath),
+  grepWorkspace: (pattern, libraryId) => ipcRenderer.invoke("grep-workspace", pattern, libraryId),
   resolvePaperPaths: (paperId, libraryId) => ipcRenderer.invoke("resolve-paper-paths", paperId, libraryId),
   watchFile: (filePath) => ipcRenderer.invoke("watch-file", filePath),
   unwatchFile: (filePath) => ipcRenderer.invoke("unwatch-file", filePath),

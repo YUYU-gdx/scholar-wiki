@@ -4,6 +4,9 @@ import PdfViewer from './PdfViewer';
 import MarkdownEditor from './MarkdownEditor';
 import AnnotationSidebar from './AnnotationSidebar';
 import ReaderChatSidebar from './ReaderChatSidebar';
+import BacklinksPanel from './BacklinksPanel';
+import RelatedEntities from './RelatedEntities';
+import { useApp } from '../../App';
 import { resolveAndLoadDocument, type ResolvedDocument } from './DocumentResolver';
 
 interface ViewerHostProps {
@@ -20,6 +23,9 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [backlinksOpen, setBacklinksOpen] = useState(false);
+  const [entitiesOpen, setEntitiesOpen] = useState(false);
+  const { graphData } = useApp();
 
   useEffect(() => {
     if (!paperId) return;
@@ -122,12 +128,49 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
         />
       )}
 
-      {!sidebarOpen && (document.type === 'pdf' || document.type === 'markdown') && (
+      {(document.type === 'pdf' || document.type === 'markdown') && (
+        <BacklinksPanel
+          paperId={paperId}
+          libraryId={libraryId}
+          isOpen={backlinksOpen}
+          onToggle={() => setBacklinksOpen(!backlinksOpen)}
+        />
+      )}
+
+      {(document.type === 'pdf' || document.type === 'markdown') && (
+        <RelatedEntities
+          paperId={paperId}
+          libraryId={libraryId}
+          graphData={graphData}
+          isOpen={entitiesOpen}
+          onToggle={() => setEntitiesOpen(!entitiesOpen)}
+        />
+      )}
+
+      {!sidebarOpen && !backlinksOpen && !entitiesOpen && (document.type === 'pdf' || document.type === 'markdown') && (
         <button
           className="absolute right-4 top-16 px-2 py-1 text-[10px] font-mono bg-surface-container border border-outline-variant rounded hover:bg-surface-container-low z-10 shadow-sm"
           onClick={() => setSidebarOpen(true)}
         >
           Notes
+        </button>
+      )}
+
+      {!sidebarOpen && !backlinksOpen && !entitiesOpen && (document.type === 'pdf' || document.type === 'markdown') && (
+        <button
+          className="absolute right-4 top-32 px-2 py-1 text-[10px] font-mono bg-surface-container border border-outline-variant rounded hover:bg-surface-container-low z-10 shadow-sm"
+          onClick={() => setBacklinksOpen(true)}
+        >
+          Links
+        </button>
+      )}
+
+      {!sidebarOpen && !backlinksOpen && !entitiesOpen && (document.type === 'pdf' || document.type === 'markdown') && (
+        <button
+          className="absolute right-4 top-48 px-2 py-1 text-[10px] font-mono bg-surface-container border border-outline-variant rounded hover:bg-surface-container-low z-10 shadow-sm"
+          onClick={() => setEntitiesOpen(true)}
+        >
+          Entities
         </button>
       )}
 
