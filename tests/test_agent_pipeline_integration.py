@@ -20,18 +20,21 @@ class TestAgentPipelineIntegration:
         from kn_graph.services.pipeline_runtime import _inject_pipeline_settings, init_pipeline_settings
 
         settings = Settings()
-        settings.pipeline_extraction_mode = "agent"
-        settings.pipeline_agent_backend = "codex"
-        settings.pipeline_agent_provider = "deepseek"
-        init_pipeline_settings(settings)
-
-        options = _inject_pipeline_settings({})
+        mock_store = {
+            "categories": {
+                "pipeline": {"extraction_mode": "agent"},
+                "pipeline_agent": {"backend": "codex", "provider": "deepseek"},
+            }
+        }
+        with patch.object(Settings, "_store", mock_store):
+            init_pipeline_settings(settings)
+            options = _inject_pipeline_settings({})
         assert options.get("extraction_mode") == "agent"
         assert options.get("pipeline_agent_backend") == "codex"
         assert options.get("pipeline_agent_provider") == "deepseek"
 
-    def test_settings_flow_defaults_to_fast(self):
-        """Verify default extraction_mode is fast when not configured."""
+    def test_settings_flow_defaults_to_agent(self):
+        """Verify default extraction_mode is agent when not overridden."""
         from kn_graph.config import Settings
         from kn_graph.services.pipeline_runtime import _inject_pipeline_settings, init_pipeline_settings
 
@@ -39,7 +42,7 @@ class TestAgentPipelineIntegration:
         init_pipeline_settings(settings)
 
         options = _inject_pipeline_settings({})
-        assert options.get("extraction_mode") == "fast"
+        assert options.get("extraction_mode") == "agent"
 
     def test_settings_flow_agent_options_not_overwrite_explicit(self):
         """Verify explicit options are not overwritten by settings defaults."""
@@ -94,8 +97,8 @@ class TestAgentPipelineIntegration:
                 {"variable_id": "v1", "variable_name": "SCI", "definition": "supply chain integration"}
             ],
             "direct_effects": [
-                {"effect_id": "e1", "independent": "v1", "dependent": "v2",
-                 "direction": "+", "significance": "significant", "evidence": "test"}
+                {"source": "v1", "target": "v2",
+                 "effect_form": "positive", "verification": "supported", "evidence_text": "test"}
             ],
             "moderations": [],
             "interactions": [],
