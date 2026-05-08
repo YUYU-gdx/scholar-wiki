@@ -442,6 +442,43 @@ class ChromaDBClient:
         )
         self._fts.commit()
 
+    def upsert_many(self, class_name: str, rows: list[tuple[str, dict[str, Any], list[float]]]) -> None:
+        if not rows:
+            return
+        col = self._get_col(class_name)
+        ids: list[str] = []
+        embeddings: list[list[float]] = []
+        metadatas: list[dict[str, Any]] = []
+        documents: list[str] = []
+        fts_rows: list[tuple[str, str, str, str]] = []
+        for object_id, properties, vector in rows:
+            meta = {k: _scalar_meta(v) for k, v in properties.items() if _scalar_meta(v) is not None}
+            doc_text = str(properties.get("text") or properties.get("full_text") or "")
+            ids.append(object_id)
+            embeddings.append(vector)
+            metadatas.append(meta)
+            documents.append(doc_text)
+            fts_rows.append(
+                (
+                    str(object_id),
+                    str(properties.get("paper_id", "")),
+                    str(properties.get("title", "")),
+                    doc_text,
+                )
+            )
+        col.upsert(
+            ids=ids,
+            embeddings=embeddings,
+            metadatas=metadatas,
+            documents=documents,
+        )
+        self._ensure_fts()
+        self._fts.executemany(
+            f"INSERT OR REPLACE INTO {class_name}_fts(object_id, paper_id, title, text) VALUES (?, ?, ?, ?)",
+            fts_rows,
+        )
+        self._fts.commit()
+
     def bm25_search(self, class_name: str, query: str, limit: int, library_id: str = "") -> list[dict[str, Any]]:
         self._ensure_fts()
         escaped = query.replace('"', '""')
@@ -926,6 +963,10 @@ class LiteratureService:
     def import_manifest(self, manifest_path: Path | str, options: dict[str, Any] | None = None) -> dict[str, Any]:
         options = options if isinstance(options, dict) else {}
         library_id = str(options.get("library_id", "") or self._default_library_id()).strip()
+        index_mode = str(options.get("index_mode", "parent_child") or "parent_child").strip().lower()
+        if index_mode not in {"parent_child", "legacy"}:
+            index_mode = "parent_child"
+        upsert_batch_size = max(1, int(options.get("upsert_batch_size", 200) or 200))
         path = Path(manifest_path)
         rows = _iter_jsonl(path)
         self._get_chroma(library_id).ensure_literature_schema()
@@ -937,7 +978,12 @@ class LiteratureService:
         materialized_rows: list[dict[str, Any]] = []
         workspace_path = ""
         for row in rows:
-            result = self._import_row(row, library_id=library_id)
+            result = self._import_row(
+                row,
+                library_id=library_id,
+                index_mode=index_mode,
+                upsert_batch_size=upsert_batch_size,
+            )
             imported += 1
             imported_paper_ids.append(str(result.get("paper_id", "") or row.get("paper_id") or row.get("doi") or "").strip())
             sent_count += int(result["sentence_count"])
@@ -959,9 +1005,17 @@ class LiteratureService:
             "document_count": doc_count,
             "workspace_path": workspace_path,
             "materialized_papers": materialized_rows,
+            "index_mode": index_mode,
+            "upsert_batch_size": upsert_batch_size,
         }
 
-    def _import_row(self, row: dict[str, Any], library_id: str = "") -> dict[str, Any]:
+    def _import_row(
+        self,
+        row: dict[str, Any],
+        library_id: str = "",
+        index_mode: str = "parent_child",
+        upsert_batch_size: int = 200,
+    ) -> dict[str, Any]:
         library_id = str(library_id or row.get("library_id", "") or self._default_library_id()).strip()
         doi = str(row.get("doi", "") or "").strip()
         title = str(row.get("title", "") or "").strip()
@@ -1011,46 +1065,60 @@ class LiteratureService:
             paper["metadata"]["paper_key"] = str(mat_payload.get("paper_key", "") or "")
 
         sentence_vectors = self.embedding.embed_texts([str(s.get("text", "")) for s in sentences])
-        paragraph_vectors = self.embedding.embed_texts([str(p.get("text", "")) for p in paragraphs])
-        document_vectors = self.embedding.embed_texts([str(paper.get("full_text", ""))])
+        paragraph_vectors: list[list[float]] = []
+        document_vectors: list[list[float]] = []
+        if index_mode == "legacy":
+            paragraph_vectors = self.embedding.embed_texts([str(p.get("text", "")) for p in paragraphs])
+            document_vectors = self.embedding.embed_texts([str(paper.get("full_text", ""))])
 
+        chroma = self._get_chroma(library_id)
+        sentence_rows: list[tuple[str, dict[str, Any], list[float]]] = []
         for sentence, vector in zip(sentences, sentence_vectors):
             sid = str(sentence["sentence_id"])
             sentence["library_id"] = library_id
             sentence["source_html"] = paper["source_html"]
+            sentence["parent_id"] = str(sentence.get("paragraph_id", ""))
             self._sentence_by_id[f"{library_id}::{sid}"] = dict(sentence)
             object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"LiteratureSentence:{library_id}:{paper_id}:{sid}"))
-            self._get_chroma(library_id).upsert("LiteratureSentence", object_id, sentence, vector)
+            sentence_rows.append((object_id, sentence, vector))
+        for i in range(0, len(sentence_rows), upsert_batch_size):
+            chroma.upsert_many("LiteratureSentence", sentence_rows[i : i + upsert_batch_size])
 
-        for paragraph, vector in zip(paragraphs, paragraph_vectors):
+        paragraph_rows: list[tuple[str, dict[str, Any], list[float]]] = []
+        for idx, paragraph in enumerate(paragraphs):
             pid = str(paragraph["paragraph_id"])
             paragraph["library_id"] = library_id
             paragraph["source_html"] = paper["source_html"]
+            paragraph["parent_id"] = paper_id
             self._paragraph_by_id[f"{library_id}::{pid}"] = dict(paragraph)
-            object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"LiteratureParagraph:{library_id}:{paper_id}:{pid}"))
-            self._get_chroma(library_id).upsert("LiteratureParagraph", object_id, paragraph, vector)
+            if index_mode == "legacy":
+                object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"LiteratureParagraph:{library_id}:{paper_id}:{pid}"))
+                paragraph_rows.append((object_id, paragraph, paragraph_vectors[idx]))
+        for i in range(0, len(paragraph_rows), upsert_batch_size):
+            chroma.upsert_many("LiteratureParagraph", paragraph_rows[i : i + upsert_batch_size])
 
         self._document_by_id[f"{library_id}::{paper_id}"] = dict(paper)
-        object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"LiteratureDocument:{library_id}:{paper_id}"))
-        self._get_chroma(library_id).upsert(
-            "LiteratureDocument",
-            object_id,
-            {
-                "library_id": library_id,
-                "paper_id": paper_id,
-                "doi": paper.get("doi", ""),
-                "title": paper.get("title", ""),
-                "full_text": paper.get("full_text", ""),
-                "source_html": paper.get("source_html", ""),
-                "metadata_json": json.dumps(paper.get("metadata", {}), ensure_ascii=False),
-            },
-            document_vectors[0],
-        )
+        if index_mode == "legacy" and document_vectors:
+            object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"LiteratureDocument:{library_id}:{paper_id}"))
+            chroma.upsert(
+                "LiteratureDocument",
+                object_id,
+                {
+                    "library_id": library_id,
+                    "paper_id": paper_id,
+                    "doi": paper.get("doi", ""),
+                    "title": paper.get("title", ""),
+                    "full_text": paper.get("full_text", ""),
+                    "source_html": paper.get("source_html", ""),
+                    "metadata_json": json.dumps(paper.get("metadata", {}), ensure_ascii=False),
+                },
+                document_vectors[0],
+            )
         return {
             "paper_id": paper_id,
             "sentence_count": len(sentences),
             "paragraph_count": len(paragraphs),
-            "document_count": 1,
+            "document_count": 1 if index_mode == "legacy" else 0,
             "workspace_path": str(materialized.get("workspace_path", "") or ""),
             "materialized": mat_payload if isinstance(mat_payload, dict) else {},
         }
