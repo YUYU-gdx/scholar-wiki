@@ -384,26 +384,6 @@ ipcMain.handle("resolve-paper-paths", async (_evt, paperId, libraryId) => {
   }
 });
 
-// Read paper file content given file paths payload
-ipcMain.handle("resolve-paper-file", async (_evt, filesPayload) => {
-  const files = filesPayload?.files || {};
-  const order = ["markdown", "pdf", "html"];
-  for (const key of order) {
-    const f = files[key];
-    if (!f?.path) continue;
-    const p = String(f.path).trim();
-    if (!p || !fs.existsSync(p) || !fs.statSync(p).isFile()) continue;
-    const name = path.basename(p);
-    if (key === "pdf") {
-      const buf = fs.readFileSync(p);
-      return { ok: true, type: "pdf", path: p, name, data: buf.toString("base64"), size: buf.length };
-    }
-    const text = fs.readFileSync(p, "utf8");
-    return { ok: true, type: key, path: p, name, data: text, size: Buffer.byteLength(text, "utf8") };
-  }
-  return { ok: false, error: "no_readable_file" };
-});
-
 function normalizeAssetRel(raw) {
   const s = String(raw || "").trim();
   if (!s) return "";

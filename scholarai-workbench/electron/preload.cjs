@@ -17,5 +17,4 @@ contextBridge.exposeInMainWorld("desktopShell", {
   writeLocalText: (filePath, text) => ipcRenderer.invoke("write-local-text", filePath, text),
   resolveLocalAsset: (markdownPath, relPath) => ipcRenderer.invoke("resolve-local-asset", markdownPath, relPath),
   resolvePaperPaths: (paperId, libraryId) => ipcRenderer.invoke("resolve-paper-paths", paperId, libraryId),
-  resolvePaper: (filesPayload) => ipcRenderer.invoke("resolve-paper-file", filesPayload),
 });

@@ -6,6 +6,8 @@ export interface ResolvedDocument {
   data: Uint8Array | string | null;
   file_name: string;
   absolute_path: string;
+  /** Path to the markdown file when a PDF is the primary loaded type (for note-taking). */
+  markdown_path: string;
 }
 
 async function electronReadBinary(path: string): Promise<Uint8Array | null> {
@@ -38,10 +40,11 @@ export async function resolveAndLoadDocument(
     pathsResult = await shell.resolvePaperPaths(rawPaperId, libraryId);
   }
   if (!pathsResult.ok) {
-    return { type: 'none', data: null, file_name: '', absolute_path: '' };
+    return { type: 'none', data: null, file_name: '', absolute_path: '', markdown_path: '' };
   }
 
   const files = (pathsResult.files || {}) as Record<string, { path: string; name: string; size_bytes: number }>;
+  const mdPath = String(files.markdown?.path || '').trim();
 
   // Step 2: read file content, respecting preferredType
   const order = preferredType
@@ -53,14 +56,14 @@ export async function resolveAndLoadDocument(
     if (!f?.path) continue;
     if (t === 'pdf') {
       const data = await electronReadBinary(f.path);
-      if (data) return { type: 'pdf', data, file_name: f.name, absolute_path: f.path };
+      if (data) return { type: 'pdf', data, file_name: f.name, absolute_path: f.path, markdown_path: mdPath };
     } else {
       const result = await shell.readLocalText(f.path);
       if (result.ok && result.data != null) {
-        return { type: t as 'markdown' | 'html', data: result.data, file_name: f.name, absolute_path: f.path };
+        return { type: t as 'markdown' | 'html', data: result.data, file_name: f.name, absolute_path: f.path, markdown_path: mdPath };
       }
     }
   }
 
-  return { type: 'none', data: null, file_name: '', absolute_path: '' };
+  return { type: 'none', data: null, file_name: '', absolute_path: '', markdown_path: '' };
 }

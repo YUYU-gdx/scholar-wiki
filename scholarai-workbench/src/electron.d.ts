@@ -10,7 +10,6 @@ interface DesktopShell {
   writeLocalText(filePath: string, text: string): Promise<{ ok: boolean; size?: number; error?: string }>;
   resolveLocalAsset(markdownPath: string, relPath: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   resolvePaperPaths(paperId: string, libraryId: string): Promise<{ ok: boolean; files?: Record<string, { path: string; name: string; size_bytes: number }>; status?: number; error?: string }>;
-  resolvePaper(filesPayload: any): Promise<{ ok: boolean; type?: string; path?: string; name?: string; data?: string; size?: number; error?: string }>;
 }
 
 declare global {
