@@ -235,7 +235,7 @@ export default function MarkdownEditor({
         ALLOWED_ATTR: [
           'href', 'src', 'alt', 'title', 'target', 'rel',
           'class', 'id', 'type', 'checked', 'disabled',
-          'colspan', 'rowspan', 'align',
+          'colspan', 'rowspan', 'align', 'style',
           'data-src-line-start', 'data-src-line-end',
         ],
         ALLOWED_URI_REGEXP: /^(?:(?:https?|file|data|blob):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
