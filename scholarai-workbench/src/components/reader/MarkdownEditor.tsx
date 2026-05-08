@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import MarkdownIt from 'markdown-it';
 import markdownItFootnote from 'markdown-it-footnote';
 import markdownItTaskLists from 'markdown-it-task-lists';
@@ -24,6 +24,8 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, indentOnInput } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
+import { wikiLinkCompletionSource, wikiLinkPlugin, setWikiLinkNodeCache } from './WikiLink';
+import { useApp } from '../../App';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -471,6 +473,23 @@ export default function MarkdownEditor({
     </div>
   ), [renderedHtml]);
 
+  const handleWikiLinkNavigate = useCallback((target: string) => {
+    if (target.startsWith('@')) {
+      window.dispatchEvent(new CustomEvent('open-reader-tab', { detail: { paperId: target.slice(1) } }));
+    } else if (target.includes('/') || target.includes('\\') || target.includes('.')) {
+      window.dispatchEvent(new CustomEvent('open-reader-file', { detail: { path: target } }));
+    } else {
+      window.dispatchEvent(new CustomEvent('navigate-to-node', { detail: { nodeId: target } }));
+    }
+  }, []);
+
+  const { graphData } = useApp();
+  useEffect(() => {
+    if (graphData?.nodes) {
+      setWikiLinkNodeCache(graphData.nodes.map((n) => ({ id: n.id, label: n.label || n.name || n.id })));
+    }
+  }, [graphData]);
+
   // ---- CM6 setup ----
 
   // CM6 theme matching existing surface-container-lowest styling
@@ -513,7 +532,8 @@ export default function MarkdownEditor({
     crosshairCursor(),
     bracketMatching(),
     closeBrackets(),
-    autocompletion(),
+    autocompletion({ override: [wikiLinkCompletionSource] }),
+    wikiLinkPlugin(handleWikiLinkNavigate),
     indentOnInput(),
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     markdown({ base: markdownLanguage, codeLanguages: languages }),
