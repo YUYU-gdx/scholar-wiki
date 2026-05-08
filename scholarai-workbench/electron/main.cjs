@@ -384,6 +384,40 @@ ipcMain.handle("resolve-paper-paths", async (_evt, paperId, libraryId) => {
   }
 });
 
+// --- File watchers for live external-change detection ---
+const fileWatchers = new Map();
+
+ipcMain.handle("watch-file", (_evt, filePath) => {
+  const p = String(filePath || "").trim();
+  if (!p || !fs.existsSync(p)) return { ok: false, error: "invalid_path" };
+  if (fileWatchers.has(p)) return { ok: true };
+
+  try {
+    const watcher = fs.watch(p, (eventType) => {
+      if (eventType === "change") {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("file-changed", { path: p, event: "change" });
+        }
+      }
+    });
+    watcher.on("error", () => { fileWatchers.delete(p); });
+    fileWatchers.set(p, watcher);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
+ipcMain.handle("unwatch-file", (_evt, filePath) => {
+  const p = String(filePath || "").trim();
+  const watcher = fileWatchers.get(p);
+  if (watcher) {
+    try { watcher.close(); } catch (_e) {}
+    fileWatchers.delete(p);
+  }
+  return { ok: true };
+});
+
 function normalizeAssetRel(raw) {
   const s = String(raw || "").trim();
   if (!s) return "";

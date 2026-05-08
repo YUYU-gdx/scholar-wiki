@@ -17,4 +17,11 @@ contextBridge.exposeInMainWorld("desktopShell", {
   writeLocalText: (filePath, text) => ipcRenderer.invoke("write-local-text", filePath, text),
   resolveLocalAsset: (markdownPath, relPath) => ipcRenderer.invoke("resolve-local-asset", markdownPath, relPath),
   resolvePaperPaths: (paperId, libraryId) => ipcRenderer.invoke("resolve-paper-paths", paperId, libraryId),
+  watchFile: (filePath) => ipcRenderer.invoke("watch-file", filePath),
+  unwatchFile: (filePath) => ipcRenderer.invoke("unwatch-file", filePath),
+  onFileChanged: (callback) => {
+    const handler = (_evt, payload) => callback(payload);
+    ipcRenderer.on("file-changed", handler);
+    return () => ipcRenderer.removeListener("file-changed", handler);
+  },
 });

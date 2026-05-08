@@ -10,6 +10,9 @@ interface DesktopShell {
   writeLocalText(filePath: string, text: string): Promise<{ ok: boolean; size?: number; error?: string }>;
   resolveLocalAsset(markdownPath: string, relPath: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   resolvePaperPaths(paperId: string, libraryId: string): Promise<{ ok: boolean; files?: Record<string, { path: string; name: string; size_bytes: number }>; status?: number; error?: string }>;
+  watchFile(filePath: string): Promise<{ ok: boolean; error?: string }>;
+  unwatchFile(filePath: string): Promise<{ ok: boolean }>;
+  onFileChanged(callback: (payload: { path: string; event: string }) => void): () => void;
 }
 
 declare global {

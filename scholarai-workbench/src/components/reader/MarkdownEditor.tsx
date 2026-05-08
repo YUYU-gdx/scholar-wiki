@@ -142,27 +142,32 @@ export default function MarkdownEditor({
     return () => window.clearTimeout(timer);
   }, [text, absolutePath, mode]);
 
-  // In read mode, treat markdown file content as source of truth (Obsidian/VS Code-like behavior).
+  // Read mode: use fs.watch for instant external change detection (like VS Code/Obsidian).
   useEffect(() => {
     if (!absolutePath || window.desktopShell?.runtime !== 'electron') return;
     if (mode !== 'read') return;
-    let cancelled = false;
-    const tick = async () => {
-      const r = await window.desktopShell?.readLocalText(absolutePath);
-      if (cancelled || !r?.ok) return;
-      const disk = String(r.data || '');
-      if (disk !== text) {
-        setText(disk);
-        onContentChange?.(disk);
-      }
-    };
-    tick();
-    const timer = window.setInterval(tick, 800);
+
+    window.desktopShell.watchFile(absolutePath);
+
+    const unsubscribe = window.desktopShell.onFileChanged((payload: { path: string; event: string }) => {
+      if (payload.path !== absolutePath) return;
+      window.desktopShell?.readLocalText(absolutePath).then((r) => {
+        if (!r?.ok) return;
+        const disk = String(r.data || '');
+        const current = currentContentRef.current;
+        if (disk !== current) {
+          currentContentRef.current = disk;
+          setText(disk);
+          onContentChange?.(disk);
+        }
+      });
+    });
+
     return () => {
-      cancelled = true;
-      window.clearInterval(timer);
+      unsubscribe();
+      window.desktopShell?.unwatchFile(absolutePath);
     };
-  }, [absolutePath, mode, text, onContentChange]);
+  }, [absolutePath, mode, onContentChange]);
 
   const handleModeChange = (newMode: ViewerMode) => {
     setMode(newMode);
