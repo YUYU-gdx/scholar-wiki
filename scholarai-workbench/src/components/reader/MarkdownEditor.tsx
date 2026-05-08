@@ -11,6 +11,7 @@ import type { ViewerMode } from './types';
 import SelectionActionPopover from './SelectionActionPopover';
 import TranslationModal from './TranslationModal';
 import { api } from '../../api';
+import Outline from './Outline';
 import { readerNotesManager } from './ReaderNotesManager';
 import { addNoteToMarkdownAtomic, addNoteToMarkdownAtomicByLine, deleteNoteFromMarkdownAny, extractNoteBlocks, listRecordedNotesMarkdownPaths, readMarkdownText, setRecordedNotesMarkdownPath } from './NoteMarkdownSync';
 
@@ -612,7 +613,16 @@ export default function MarkdownEditor({
         )}
 
         {mode === 'read' && (
-          <div className="h-full overflow-y-auto p-6 max-w-[800px] mx-auto">
+          <div className="flex h-full">
+            <Outline
+              content={currentContentRef.current}
+              onGoToLine={(line) => {
+                // Scroll to heading: find the rendered element by data-src-line-start
+                const el = document.querySelector(`[data-src-line-start="${line}"]`);
+                el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            />
+            <div className="flex-1 overflow-y-auto p-6 max-w-[800px] mx-auto">
             <div
               onClick={(evt) => {
                 const rawTarget = evt.target;
@@ -625,6 +635,7 @@ export default function MarkdownEditor({
             >
               {renderedMarkdownNode}
             </div>
+          </div>
           </div>
         )}
 
