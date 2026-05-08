@@ -1,10 +1,16 @@
 import { BookOpen, FileText, ArrowLeft } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useApp } from '../App';
 import ViewerHost from './reader/ViewerHost';
+import TabBar from './reader/TabBar';
+import type { TabDescriptor } from './reader/types';
+
+const MAX_TABS = 8;
 
 export default function ReaderView() {
   const [docPath, setDocPath] = useState('');
+  const [tabs, setTabs] = useState<TabDescriptor[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const {
     selectedPaperId,
     selectedPaperLibraryId,
@@ -19,7 +25,64 @@ export default function ReaderView() {
     setCurrentView,
   } = useApp();
 
-  if (!selectedPaperId && !selectedNodeId) {
+  useEffect(() => {
+    if (!selectedPaperId) return;
+    const existing = tabs.find(t => t.paperId === selectedPaperId);
+    if (existing) {
+      setActiveTabId(existing.id);
+      setSelectedPaperId(null);
+      return;
+    }
+    const newTab: TabDescriptor = {
+      id: crypto.randomUUID(),
+      paperId: selectedPaperId,
+      libraryId: selectedPaperLibraryId,
+      type: (selectedPaperPreferredType as TabDescriptor['type']) || 'markdown',
+      path: '',
+      title: selectedPaperId,
+    };
+    setTabs(prev => {
+      const next = [...prev, newTab];
+      if (next.length > MAX_TABS) return next.slice(next.length - MAX_TABS);
+      return next;
+    });
+    setActiveTabId(newTab.id);
+    setSelectedPaperId(null);
+  }, [selectedPaperId]);
+
+  const closeTab = useCallback((tabId: string) => {
+    setTabs(prev => {
+      const idx = prev.findIndex(t => t.id === tabId);
+      const next = prev.filter(t => t.id !== tabId);
+      if (activeTabId === tabId && next.length > 0) {
+        const newIdx = Math.min(idx, next.length - 1);
+        setActiveTabId(next[newIdx].id);
+      } else if (next.length === 0) {
+        setActiveTabId(null);
+      }
+      return next;
+    });
+  }, [activeTabId]);
+
+  const activeTab = tabs.find(t => t.id === activeTabId) || null;
+
+  const handleDocumentMeta = useCallback((meta: { absolutePath: string; fileName: string; type: 'pdf' | 'markdown' | 'html' | 'none' }) => {
+    setDocPath(meta.absolutePath || '');
+    if (activeTabId) {
+      setTabs(prev => prev.map(t =>
+        t.id === activeTabId
+          ? {
+              ...t,
+              path: meta.absolutePath || t.path,
+              title: meta.fileName || t.title,
+              type: meta.type === 'none' ? t.type : meta.type,
+            }
+          : t
+      ));
+    }
+  }, [activeTabId]);
+
+  if (!activeTab && !selectedPaperId && !selectedNodeId) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center space-y-4">
@@ -34,12 +97,23 @@ export default function ReaderView() {
     );
   }
 
+  const displayPath = activeTab?.path || docPath;
+  const displayTitle = activeTab?.title || selectedPaperId || selectedNodeId || 'Document';
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
+      <TabBar
+        tabs={tabs}
+        activeTabId={activeTabId}
+        onSelectTab={(tabId) => setActiveTabId(tabId)}
+        onCloseTab={closeTab}
+      />
       <div className="flex items-center gap-3 px-4 py-2 border-b border-outline-variant bg-surface-container-lowest">
         <button
           className="flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface transition-colors"
           onClick={() => {
+            setTabs([]);
+            setActiveTabId(null);
             setSelectedPaperId(null);
             setSelectedPaperRawId(null);
             setSelectedPaperPreferredType(null);
@@ -53,23 +127,33 @@ export default function ReaderView() {
         <div className="flex items-center gap-2 ml-2">
           <FileText className="w-4 h-4 text-secondary" />
           <span className="text-xs font-mono text-on-surface truncate max-w-[400px]">
-            {selectedPaperId || selectedNodeId || 'Document'}
+            {displayTitle}
           </span>
         </div>
-        {docPath && (
-          <span className="text-[10px] text-outline truncate ml-auto max-w-[48%]" title={docPath}>
-            {docPath}
+        {displayPath && (
+          <span className="text-[10px] text-outline truncate ml-auto max-w-[48%]" title={displayPath}>
+            {displayPath}
           </span>
         )}
       </div>
 
-      {selectedPaperId ? (
+      {activeTab ? (
         <ViewerHost
+          key={activeTab.id}
+          paperId={activeTab.paperId}
+          libraryId={activeTab.libraryId}
+          preferredType={activeTab.type}
+          rawPaperId={selectedPaperRawId || undefined}
+          onDocumentMeta={handleDocumentMeta}
+        />
+      ) : selectedPaperId ? (
+        <ViewerHost
+          key="direct"
           paperId={selectedPaperId}
           libraryId={selectedPaperLibraryId}
           preferredType={selectedPaperPreferredType}
           rawPaperId={selectedPaperRawId || undefined}
-          onDocumentMeta={(meta) => setDocPath(meta.absolutePath || '')}
+          onDocumentMeta={handleDocumentMeta}
         />
       ) : selectedNodeId ? (
         <div className="flex-1 flex items-center justify-center bg-surface-container-low">
