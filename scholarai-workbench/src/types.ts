@@ -266,6 +266,7 @@ export interface SSEEvent {
 export interface PipelineJob {
   job_id: string;
   display_name?: string;
+  file_name?: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   status_code?: string;
   stage?: string;
@@ -289,6 +290,14 @@ export interface PipelineJobList {
   total: number;
   page: number;
   page_size: number;
+}
+
+export interface PipelineBatchSubmitResponse {
+  library_id: string;
+  accepted_count: number;
+  rejected_count: number;
+  accepted: PipelineJob[];
+  rejected: Array<{ file_name?: string; error?: string }>;
 }
 
 export interface LiteratureLibrary {

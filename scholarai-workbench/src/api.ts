@@ -10,6 +10,7 @@ import type {
   SendMessageResponse,
   PipelineJob,
   PipelineJobList,
+  PipelineBatchSubmitResponse,
   LibrariesResponse,
   LiteratureSearchResponse,
   LiteratureAnswerResponse,
@@ -236,6 +237,16 @@ export const api = {
         const payload = await resp.json();
         if (!resp.ok) throw new Error(payload.error || `http_${resp.status}`);
         return payload as PipelineJob;
+      });
+    },
+    submitJobsBatch(files: File[], libraryId: string): Promise<PipelineBatchSubmitResponse> {
+      const formData = new FormData();
+      files.forEach((file) => formData.append('files', file));
+      formData.append('library_id', libraryId);
+      return fetch(`${API_BASE}/v1/pipeline/parse-extract/batch`, { method: 'POST', body: formData }).then(async (resp) => {
+        const payload = await resp.json();
+        if (!resp.ok) throw new Error(payload.error || `http_${resp.status}`);
+        return payload as PipelineBatchSubmitResponse;
       });
     },
     cancelJob(jobId: string): Promise<Record<string, unknown>> {

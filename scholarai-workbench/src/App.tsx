@@ -196,6 +196,72 @@ export default function App() {
     return () => window.removeEventListener('pipeline-completed', handler as EventListener);
   }, [selectedKey, activeLibraryId]);
 
+  useEffect(() => {
+    const onDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer) return;
+      if (Array.from(e.dataTransfer.types || []).includes('Files')) {
+        e.preventDefault();
+      }
+    };
+    const onDrop = async (e: DragEvent) => {
+      if (!e.dataTransfer) return;
+      const files = Array.from(e.dataTransfer.files || []);
+      if (!files.length) return;
+      e.preventDefault();
+
+      const libraryId = String(activeLibraryId || '').trim();
+      if (!libraryId) {
+        window.alert('请先选择文献库后再拖拽导入。');
+        return;
+      }
+
+      const pdfFiles = files.filter((f) => String(f.name || '').toLowerCase().endsWith('.pdf'));
+      if (!pdfFiles.length) {
+        window.alert('仅支持拖拽 PDF 文件。');
+        return;
+      }
+
+      try {
+        const result = await api.pipeline.submitJobsBatch(pdfFiles, libraryId);
+        if (result.accepted_count > 0) {
+          setPipelineJobs((prev) => {
+            const accepted = (result.accepted || []).map((job) => {
+              const fileName = String(job.file_name || job.display_name || '').trim();
+              return {
+                ...job,
+                display_name: String(job.display_name || fileName || job.job_id || ''),
+                progress: typeof job.progress === 'number' ? job.progress : 0,
+                stage: String(job.stage || 'accepted'),
+                status: (job.status || 'queued') as PipelineJob['status'],
+              };
+            });
+            const merged = [...accepted, ...prev];
+            const seen = new Set<string>();
+            return merged.filter((job) => {
+              const id = String(job.job_id || '');
+              if (!id || seen.has(id)) return false;
+              seen.add(id);
+              return true;
+            });
+          });
+          setCurrentView('pipeline');
+        }
+        if (result.rejected_count > 0) {
+          window.alert(`已创建 ${result.accepted_count} 个导入任务，${result.rejected_count} 个文件导入失败。`);
+        }
+      } catch (err) {
+        window.alert(`批量导入失败: ${String((err as Error)?.message || err)}`);
+      }
+    };
+
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [activeLibraryId, setPipelineJobs]);
+
   const navItems = [
     { id: 'library' as View, icon: Library, label: 'Library' },
     { id: 'graph' as View, icon: Share2, label: 'Graph' },
