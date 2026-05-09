@@ -15,6 +15,7 @@ from kn_graph.services.mineru_runner import parse_single_pdf
 from kn_graph.services.sqlite_repo import SqliteRepo
 
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
+AGENT_EVENT_LOG_FILENAME = "agent_events.jsonl"
 
 
 class JobStore(Protocol):
@@ -32,6 +33,45 @@ def _norm_status(raw: Any) -> str:
 
 def _safe_json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _agent_event_log_path(run_dir: Path) -> Path:
+    path = run_dir / "events" / AGENT_EVENT_LOG_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _truncate_event_value(value: Any, max_len: int = 4000) -> Any:
+    if isinstance(value, str):
+        if len(value) <= max_len:
+            return value
+        return value[:max_len] + "...(truncated)"
+    if isinstance(value, dict):
+        return {str(k): _truncate_event_value(v, max_len=max_len) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_truncate_event_value(v, max_len=max_len) for v in value]
+    return value
+
+
+def _append_agent_event(
+    *,
+    log_path: Path,
+    seq: int,
+    job_id: str,
+    backend: str,
+    event: dict[str, Any],
+) -> None:
+    payload = {
+        "seq": int(seq),
+        "ts": _now_iso(),
+        "job_id": str(job_id or ""),
+        "backend": str(backend or ""),
+        "method": str(event.get("method", "") or ""),
+        "params": _truncate_event_value(event.get("params", {})),
+    }
+    with log_path.open("a", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(payload, ensure_ascii=False))
+        f.write("\n")
 
 
 
@@ -123,12 +163,18 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
         store.update_job(job_id, {"status": "cancelled", "last_event": "cancelled", "stage": "extract_entities"})
         raise RuntimeError("job_cancelled")
 
-    html_path = Path(str(parse_meta.get("html_path", "")))
-    if not html_path.exists():
-        raise RuntimeError(f"missing_html_for_extraction:{html_path}")
+    agent_md_path_raw = str(options.get("_materialized_md_path", "") or "").strip()
+    if agent_md_path_raw:
+        agent_md_path = Path(agent_md_path_raw).resolve()
+    else:
+        agent_md_path = Path(str(parse_meta.get("markdown_path", ""))).resolve()
+    if not agent_md_path.exists():
+        raise RuntimeError(f"missing_markdown_for_extraction:{agent_md_path}")
+    html_path = Path(str(parse_meta.get("html_path", ""))).resolve()
 
     extract_dir = run_dir / "extract"
     extract_dir.mkdir(parents=True, exist_ok=True)
+    event_log_path = _agent_event_log_path(run_dir)
     raw_output_path = extract_dir / "raw_llm_outputs.jsonl"
     review_queue_path = extract_dir / "review_queue.jsonl"
     report_path = extract_dir / "acceptance_report.md"
@@ -141,7 +187,7 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     # Find the library workspace path (parent of corpus/papers/).
     # Fall back to _workspace_path from options for new libraries that have
     # no papers imported yet (corpus/papers/ doesn't exist).
-    html_resolved = html_path.resolve()
+    html_resolved = html_path
     workspace_path = ""
     for ancestor in html_resolved.parents:
         if (ancestor / "corpus" / "papers").is_dir():
@@ -151,6 +197,15 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
         workspace_path = str(options.get("_workspace_path", "") or "").strip()
     if not workspace_path:
         raise RuntimeError(f"agent_extraction_failed:cannot_resolve_workspace_from:{html_path}")
+    try:
+        from kn_graph.services.agent_workspace_guard import ensure_agent_workspace_minimal_config
+        ensure_agent_workspace_minimal_config(
+            workspace_path,
+            "pipeline_library",
+            library_id=library_id,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"agent_workspace_config_invalid:{exc}") from exc
 
     # Build agent config from options
     backend = str(options.get("pipeline_agent_backend", "codex") or "codex").strip().lower()
@@ -163,6 +218,7 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
         "api_key": str(options.get("pipeline_agent_api_key", "") or "").strip(),
         "base_url": str(options.get("pipeline_agent_base_url", "") or "").strip(),
         "endpoint_url": str(options.get("pipeline_agent_endpoint_url", "") or "").strip(),
+        "reasoning_effort": str(options.get("pipeline_agent_reasoning_effort", "") or "").strip().lower(),
     }
     agent_config = {k: v for k, v in agent_config.items() if v}
 
@@ -213,7 +269,7 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     # Build extraction prompt
     extraction_prompt = (
         f"请按照 scholarly-paper-extraction skill 处理以下论文。\n\n"
-        f"论文 markdown 路径: {html_path}\n"
+        f"论文 markdown 路径: {agent_md_path}\n"
         f"library_id: {library_id}\n"
         f"输出目录: {extract_dir}\n"
         f"工作区路径: {workspace_path}\n\n"
@@ -227,6 +283,22 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     if agent_timeout_seconds < 60:
         agent_timeout_seconds = 60
     try:
+        event_seq = 0
+
+        def _on_agent_event(evt: dict[str, Any]) -> None:
+            nonlocal event_seq
+            event_seq += 1
+            try:
+                _append_agent_event(
+                    log_path=event_log_path,
+                    seq=event_seq,
+                    job_id=job_id,
+                    backend=backend,
+                    event=evt if isinstance(evt, dict) else {"method": "unknown", "params": {"raw": str(evt)}},
+                )
+            except Exception:
+                pass
+
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=1) as pool:
             fut = pool.submit(
@@ -236,7 +308,7 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
                 library_id=library_id,
                 thread_id="",
                 runtime_overrides=runtime_overrides,
-                on_event=None,
+                on_event=_on_agent_event,
             )
             result = fut.result(timeout=agent_timeout_seconds)
     except Exception as exc:
@@ -340,6 +412,194 @@ def _run_extract_entities_fast(job_id: str, parse_meta: dict[str, Any], run_dir:
     (extract_dir / "extract_result.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     _stage_update(store, job_id, "extract_entities", 90, "stage_done", status="running")
     return payload
+
+
+def _run_materialize_import(
+    job_id: str,
+    input_pdf: Path,
+    parse_meta: dict[str, Any],
+    run_dir: Path,
+    store: JobStore,
+    options: dict[str, Any],
+) -> tuple[dict[str, Any], str, str]:
+    _stage_update(store, job_id, "materialize_paper", 50, "stage_started", status="running")
+    if _is_cancel_requested(store, job_id):
+        store.update_job(job_id, {"status": "cancelled", "last_event": "cancelled", "stage": "materialize_paper"})
+        raise RuntimeError("job_cancelled")
+
+    library_id = str(options.get("library_id", "") or "").strip()
+    workspace_path = str(options.get("_workspace_path", "") or "").strip()
+    import_result: dict[str, Any] = {}
+
+    if library_id:
+        try:
+            _stage_update(store, job_id, "materialize_paper", 53, "stage_progress", status="running")
+            from kn_graph.services.literature_service import LiteratureService
+            literature = LiteratureService(settings=_pipeline_settings)
+            manifest_path = run_dir / "import_manifest.jsonl"
+            paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
+            doi = str(options.get("doi", "") or f"job::{job_id}").strip()
+            title = str(options.get("title", "") or input_pdf.stem or job_id).strip()
+            parsed_html = parse_meta.get("html_path", "") or ""
+            row = {
+                "paper_id": paper_id,
+                "doi": doi,
+                "title": title,
+                "offline_html_path": str(parsed_html),
+                "source_path": str(input_pdf.resolve()),
+            }
+            manifest_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+            import_result = literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id})
+            workspace_path = str(import_result.get("workspace_path", "") or workspace_path)
+        except Exception as exc:
+            raise RuntimeError(f"import_failed:{exc}") from exc
+    else:
+        raise RuntimeError("import_failed:library_id_missing")
+
+    _stage_update(store, job_id, "materialize_paper", 54, "stage_done", status="running")
+    return import_result, workspace_path, library_id
+
+
+def _run_finalize_after_import(
+    job_id: str,
+    input_pdf: Path,
+    parse_meta: dict[str, Any],
+    extract_result: dict[str, Any],
+    run_dir: Path,
+    store: JobStore,
+    options: dict[str, Any],
+    import_result: dict[str, Any],
+    workspace_path: str,
+    library_id: str,
+    imported_count: int,
+) -> dict[str, Any]:
+    _stage_update(store, job_id, "finalize", 95, "stage_started", status="running")
+    if _is_cancel_requested(store, job_id):
+        store.update_job(job_id, {"status": "cancelled", "last_event": "cancelled", "stage": "finalize"})
+        raise RuntimeError("job_cancelled")
+
+    import_warning = ""
+    graph_warning = ""
+    graph_output_path = ""
+    graph_updated = False
+    graph_output_size = 0
+    if workspace_path:
+        try:
+            import sqlite3 as _sqlite3
+            import json as _json
+            db_path = Path(workspace_path) / "kn_gragh.db"
+            conn = _sqlite3.connect(str(db_path))
+            repo = SqliteRepo(conn)
+            repo.apply_schema()
+
+            mats = import_result.get("materialized_papers", []) or []
+            mat0 = mats[0] or {} if mats else {}
+            mat_paper_key = str(mat0.get("paper_key", "")).strip()
+            mat_pdf_path = str(mat0.get("source_pdf_path", "") or "")
+            mat_md_path = str(mat0.get("md_library_path", "") or "")
+            mat_html_path = str(mat0.get("html_path", "") or "")
+
+            raw_jsonl = run_dir / "extract" / "raw_llm_outputs.jsonl"
+            if raw_jsonl.exists():
+                mats_list = import_result.get("materialized_papers", []) or []
+                mat_paper_key = str((mats_list[0] or {}).get("paper_key", "") if mats_list else "").strip()
+                if mat_paper_key:
+                    fixed_path = run_dir / "extract" / "raw_llm_outputs_fixed.jsonl"
+                    with open(raw_jsonl, "r", encoding="utf-8") as fin, open(str(fixed_path), "w", encoding="utf-8") as fout:
+                        for line in fin:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            obj = json.loads(line)
+                            obj["paper_id"] = mat_paper_key
+                            fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+                    raw_jsonl = fixed_path
+                _stage_update(store, job_id, "finalize", 98, "importing_to_sqlite", status="running")
+                _import_sqlite_main_inline(
+                    db_path=str(db_path),
+                    raw_output_jsonl=raw_jsonl,
+                    apply_schema=False,
+                    source_pdf_path=mat_pdf_path,
+                    source_md_path=mat_md_path,
+                    source_html_path=mat_html_path,
+                )
+            cur = conn.cursor()
+            for m in mats:
+                if not isinstance(m, dict):
+                    continue
+                pid = str(m.get("paper_id", "") or m.get("paper_key", "") or "").strip()
+                if not pid:
+                    continue
+                meta_path = Path(str(m.get("meta_path", "") or ""))
+                meta = {}
+                if meta_path.exists():
+                    try:
+                        meta = _json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+                    except Exception:
+                        meta = {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                title = str(meta.get("title", "") or "").strip() or str(m.get("title", "") or str(m.get("paper_key", "")) or "").strip()
+                cur.execute(
+                    """UPDATE papers SET doi = ?, title = ?,
+                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
+                       source_html_path = ?, metadata_source = ?
+                       WHERE paper_id = ?""",
+                    (
+                        str(m.get("doi", "") or ""),
+                        title,
+                        str(m.get("html_path", "") or ""),
+                        str(m.get("source_pdf_path", "") or ""),
+                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""),
+                        str(m.get("html_path", "") or ""),
+                        "literature_import",
+                        pid,
+                    ),
+                )
+            conn.commit()
+            conn.close()
+            _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
+            artifact = _build_artifact_from_sqlite(db_path)
+            views_out = Path(workspace_path) / "graph_views.json"
+            run_build_from_artifact(artifact, views_out)
+            graph_output_path = str(views_out.resolve())
+            graph_updated = views_out.exists()
+            if graph_updated:
+                graph_output_size = views_out.stat().st_size
+        except Exception as exc:
+            graph_warning = str(exc)
+
+    result = {
+        "job_id": job_id,
+        "run_dir": str(run_dir),
+        "library_id": library_id,
+        "workspace_path": workspace_path,
+        "parse": parse_meta,
+        "extract": extract_result,
+        "import_result": import_result,
+        "import_warning": import_warning,
+        "graph_warning": graph_warning,
+        "imported_paper_count": imported_count,
+        "graph_updated": bool(graph_updated),
+        "graph_output_path": graph_output_path,
+        "graph_output_size": int(graph_output_size),
+        "final_verdict": "success",
+        "finished_at": _now_iso(),
+    }
+    out_path = run_dir / "result.json"
+    out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    store.update_job(
+        job_id,
+        {
+            "status": "completed",
+            "stage": "finalize",
+            "progress": 100,
+            "output_path": str(out_path),
+            "result_json": _safe_json_dumps(result),
+            "last_event": "completed",
+        },
+    )
+    return result
 
 
 def _run_finalize(
@@ -601,6 +861,12 @@ def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
         if val:
             out["pipeline_agent_endpoint_url"] = val
 
+    # pipeline_agent_reasoning_effort
+    if not str(out.get("pipeline_agent_reasoning_effort", "") or "").strip():
+        val = str(getattr(settings, "pipeline_agent_reasoning_effort", "") or "").strip().lower()
+        if val:
+            out["pipeline_agent_reasoning_effort"] = val
+
     return out
 
 
@@ -612,8 +878,42 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
     input_pdf = Path(input_path).resolve()
     try:
         parse_meta = _run_parse_pdf(job_id, input_pdf, run_dir, job_store, options)
-        extract_result = _run_extract_entities(job_id, parse_meta, run_dir, job_store, options)
-        _run_finalize(job_id, input_pdf, parse_meta, extract_result, run_dir, job_store, options)
+        mode = str(options.get("extraction_mode", "fast") or "fast").strip().lower()
+        if mode == "agent":
+            import_result, workspace_path, library_id = _run_materialize_import(
+                job_id=job_id,
+                input_pdf=input_pdf,
+                parse_meta=parse_meta,
+                run_dir=run_dir,
+                store=job_store,
+                options=options,
+            )
+            imported_count = int(import_result.get("imported_count", 0) or 0)
+            if imported_count <= 0:
+                raise RuntimeError("import_noop:imported_count_is_zero")
+            mats = import_result.get("materialized_papers", []) or []
+            mat0 = mats[0] if isinstance(mats, list) and mats else {}
+            materialized_md_path = str((mat0 or {}).get("md_library_path", "") or "").strip()
+            options = dict(options)
+            options["_workspace_path"] = workspace_path
+            options["_materialized_md_path"] = materialized_md_path
+            extract_result = _run_agent_extraction(job_id, parse_meta, run_dir, job_store, options)
+            _run_finalize_after_import(
+                job_id=job_id,
+                input_pdf=input_pdf,
+                parse_meta=parse_meta,
+                extract_result=extract_result,
+                run_dir=run_dir,
+                store=job_store,
+                options=options,
+                import_result=import_result,
+                workspace_path=workspace_path,
+                library_id=library_id,
+                imported_count=imported_count,
+            )
+        else:
+            extract_result = _run_extract_entities(job_id, parse_meta, run_dir, job_store, options)
+            _run_finalize(job_id, input_pdf, parse_meta, extract_result, run_dir, job_store, options)
     except Exception as exc:
         if "job_cancelled" in str(exc):
             job_store.update_job(
@@ -654,3 +954,4 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
 def dispatch_inline(job_store: JobStore, job_id: str, input_path: str, options: dict[str, Any], runs_root: Path) -> None:
     t = threading.Thread(target=execute_pipeline, args=(job_store, job_id, input_path, options, runs_root), daemon=True)
     t.start()
+

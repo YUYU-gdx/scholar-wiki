@@ -23,7 +23,11 @@ class TestAgentPipelineIntegration:
         mock_store = {
             "categories": {
                 "pipeline": {"extraction_mode": "agent"},
-                "pipeline_agent": {"backend": "codex", "provider": "deepseek"},
+                "pipeline_agent": {
+                    "backend": "codex",
+                    "provider": "deepseek",
+                    "reasoning_effort": "high",
+                },
             }
         }
         with patch.object(Settings, "_store", mock_store):
@@ -32,6 +36,7 @@ class TestAgentPipelineIntegration:
         assert options.get("extraction_mode") == "agent"
         assert options.get("pipeline_agent_backend") == "codex"
         assert options.get("pipeline_agent_provider") == "deepseek"
+        assert options.get("pipeline_agent_reasoning_effort") == "high"
 
     def test_settings_flow_defaults_to_agent(self):
         """Verify default extraction_mode is agent when not overridden."""

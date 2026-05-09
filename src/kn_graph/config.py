@@ -183,6 +183,11 @@ class Settings(BaseModel):
     def pipeline_agent_endpoint_url(self) -> str:
         return str(self._cat("pipeline_agent").get("endpoint_url", "") or "").strip()
 
+    @property
+    def pipeline_agent_reasoning_effort(self) -> str:
+        raw = str(self._cat("pipeline_agent").get("reasoning_effort", "") or "").strip().lower()
+        return raw
+
     # ------------------------------------------------------------------
     # load_global_settings — kept as no-op for backward compatibility
     # ------------------------------------------------------------------

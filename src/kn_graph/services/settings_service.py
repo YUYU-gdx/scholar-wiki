@@ -131,7 +131,13 @@ class SettingsService:
             "api_key": str(saved.get("api_key", "") or ""),
             "base_url": base_url,
             "endpoint_url": str(saved.get("endpoint_url", "") or default_endpoint_url(base_url)),
+            "reasoning_effort": str(saved.get("reasoning_effort", "") or ""),
             "provider_presets": provider_presets(),
+            "reasoning_effort_options": {
+                "codex": ["none", "minimal", "low", "medium", "high", "xhigh"],
+                "claude_code": ["low", "medium", "high", "max"],
+                "gemini_cli": [],
+            },
         }
 
     def _save_pipeline_agent_category(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -146,9 +152,21 @@ class SettingsService:
             if backend not in ("codex", "claude_code", "gemini_cli"):
                 raise ValueError("settings_validation_failed: pipeline_agent.backend")
             saved["backend"] = backend
+        backend = str(saved.get("backend", "") or "codex").strip().lower()
         for key in ("provider", "model", "api_key", "base_url", "endpoint_url"):
             if key in body:
                 saved[key] = str(body.get(key, "") or "").strip()
+        if "reasoning_effort" in body:
+            effort = str(body.get("reasoning_effort", "") or "").strip().lower()
+            allowed_by_backend = {
+                "codex": {"", "none", "minimal", "low", "medium", "high", "xhigh"},
+                "claude_code": {"", "low", "medium", "high", "max"},
+                "gemini_cli": {""},
+            }
+            allowed = allowed_by_backend.get(backend, {""})
+            if effort not in allowed:
+                raise ValueError("settings_validation_failed: pipeline_agent.reasoning_effort")
+            saved["reasoning_effort"] = effort
         provider = str(saved.get("provider", "") or "deepseek").strip()
         base_url = str(saved.get("base_url", "") or "").strip()
         if not base_url:
@@ -165,6 +183,15 @@ class SettingsService:
         # running `claude` or `codex` directly in a library workspace picks
         # up the same provider / model / api_key / base_url.
         self._deploy_pipeline_agent_to_library_workspaces(saved)
+        try:
+            from kn_graph.services.agent_workspace_guard import ensure_all_agent_workspaces_minimal_config
+            ensure_all_agent_workspaces_minimal_config(self._settings)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "pipeline_agent_settings: failed to sync minimal agent workspace configs",
+                exc_info=True,
+            )
 
         return self._get_pipeline_agent_category()
 

@@ -12,6 +12,16 @@ from typing import Any, Callable
 _CODEX_APP_SERVER_DIR = str(Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline")
 
 
+def _normalize_codex_effort(raw: Any) -> str:
+    val = str(raw or "").strip().lower()
+    return val if val in {"none", "minimal", "low", "medium", "high", "xhigh"} else ""
+
+
+def _normalize_claude_effort(raw: Any) -> str:
+    val = str(raw or "").strip().lower()
+    return val if val in {"low", "medium", "high", "max"} else ""
+
+
 class AgentRunner:
     backend = "unknown"
 
@@ -147,7 +157,7 @@ class CodexRunner(AgentRunner):
         import sys as _sys
 
         _sys.path.insert(0, _CODEX_APP_SERVER_DIR)
-        from codex_app_server.generated.v2_all import AgentMessageDeltaNotification
+        from codex_app_server.generated.v2_all import AgentMessageDeltaNotification, ReasoningEffort
 
         answer_chunks: list[str] = []
         final_answer = ""
@@ -183,6 +193,9 @@ class CodexRunner(AgentRunner):
             turn = thread.turn(
                 input=TextInput(query),
                 cwd=workdir,
+                effort=ReasoningEffort(_normalize_codex_effort(self._agent_config.get("reasoning_effort", "")))
+                if _normalize_codex_effort(self._agent_config.get("reasoning_effort", ""))
+                else None,
             )
 
             for event in turn.stream():
@@ -543,6 +556,7 @@ class ClaudeCodeRunner(AgentRunner):
             claude_model = str(cfg.get("model", "") or "").strip()
             claude_api_key = str(cfg.get("api_key", "") or "").strip()
             claude_base_url = str(cfg.get("base_url", "") or "").strip()
+            claude_effort = _normalize_claude_effort(cfg.get("reasoning_effort", ""))
 
             sdk_env: dict[str, str] = {}
             if claude_api_key:
@@ -562,6 +576,7 @@ class ClaudeCodeRunner(AgentRunner):
                     ],
                 },
                 model=claude_model or None,
+                effort=claude_effort or None,
                 env=sdk_env,
                 stderr=_on_stderr,
             )

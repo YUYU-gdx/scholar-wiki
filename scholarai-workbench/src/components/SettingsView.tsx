@@ -30,6 +30,14 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function str(v: unknown): string { return String(v ?? ''); }
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => String(v ?? '')).filter((v) => v.length > 0);
+}
+function getEffortOptions(values: Record<string, unknown>, backend: string): string[] {
+  const effortOptionsMap = asRecord(values.reasoning_effort_options);
+  return asStringArray(effortOptionsMap[backend]);
+}
 function asPresets(value: unknown): ProviderPreset[] {
   if (!Array.isArray(value)) return DEFAULT_PROVIDER_PRESETS;
   const rows = value.filter((x) => x && typeof x === 'object') as ProviderPreset[];
@@ -110,7 +118,12 @@ export default function SettingsView() {
 
   const saveCategory = async (category: string) => {
     const current = asRecord(drafts[category]);
-    const { provider_presets: _drop1, recommendation: _drop2, ...body } = current;
+    const {
+      provider_presets: _drop1,
+      recommendation: _drop2,
+      reasoning_effort_options: _drop3,
+      ...body
+    } = current;
     setSectionState((prev) => ({ ...prev, [category]: { saving: true, message: '' } }));
     try {
       const res = await api.settings.updateCategory(category, body);
@@ -192,9 +205,27 @@ export default function SettingsView() {
 
               {id === 'pipeline_agent' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                  {(() => {
+                    const backend = str(values.backend) || 'codex';
+                    const effortOptions = getEffortOptions(values, backend);
+                    const currentEffort = str(values.reasoning_effort).toLowerCase();
+                    const effectiveEffort = effortOptions.includes(currentEffort) ? currentEffort : (effortOptions[0] ?? '');
+                    return (
+                      <>
                   <label>
                     <div className="mb-1">Agent 后端</div>
-                    <select className="w-full px-3 py-2 rounded border" value={str(values.backend)} onChange={(e) => updateField(id, 'backend', e.target.value)}>
+                    <select
+                      className="w-full px-3 py-2 rounded border"
+                      value={str(values.backend)}
+                      onChange={(e) => {
+                        const nextBackend = e.target.value;
+                        updateField(id, 'backend', nextBackend);
+                        const nextOptions = getEffortOptions(values, nextBackend);
+                        if (nextOptions.length > 0) {
+                          updateField(id, 'reasoning_effort', nextOptions[0]);
+                        }
+                      }}
+                    >
                       <option value="codex">Codex</option>
                       <option value="claude_code">Claude Code</option>
                       <option value="gemini_cli">Gemini CLI</option>
@@ -202,10 +233,27 @@ export default function SettingsView() {
                   </label>
                   <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('pipeline_agent', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
                   <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
+                  <label>
+                    <div className="mb-1">思考深度</div>
+                    <select
+                      className="w-full px-3 py-2 rounded border"
+                      value={effectiveEffort}
+                      onChange={(e) => updateField(id, 'reasoning_effort', e.target.value)}
+                      disabled={effortOptions.length === 0}
+                    >
+                      {effortOptions.length === 0 ? <option value="">不支持</option> : null}
+                      {effortOptions.map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </label>
                   <label><div className="mb-1">API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} /></label>
                   <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField(id, 'base_url', e.target.value)} /></label>
                   <label className="md:col-span-2"><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField(id, 'endpoint_url', e.target.value)} /></label>
                   <div className="md:col-span-2 text-on-surface-variant">Pipeline Agent 配置独立于 Chat Agent，用于论文提取任务。仅当提取模式选择「agent」时生效。</div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
 
