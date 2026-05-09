@@ -4,7 +4,7 @@ import markdownItFootnote from 'markdown-it-footnote';
 import markdownItTaskLists from 'markdown-it-task-lists';
 import markdownItMark from 'markdown-it-mark';
 import markdownItDeflist from 'markdown-it-deflist';
-import markdownItKatex from 'markdown-it-katex';
+import markdownItKatex from '@vscode/markdown-it-katex';
 import DOMPurify from 'dompurify';
 import 'katex/dist/katex.min.css';
 import type { ViewerMode } from './types';
@@ -25,6 +25,7 @@ import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter,
 import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { wikiLinkCompletionSource, wikiLinkPlugin, setWikiLinkNodeCache } from './WikiLink';
+import { convertScriptOnlyKatexToHtml } from './katexScriptAlignment';
 import { useApp } from '../../App';
 
 interface MarkdownEditorProps {
@@ -242,6 +243,7 @@ export default function MarkdownEditor({
       });
       const parser = new DOMParser();
       const doc = parser.parseFromString(clean, 'text/html');
+      convertScriptOnlyKatexToHtml(doc);
       const rewriteAttr = async (el: Element, key: 'src' | 'href') => {
         const raw = el.getAttribute(key);
         if (!raw) return;

@@ -283,6 +283,15 @@ class ChatService:
         # Mirror agent settings to the root workspace so that running
         # `claude` or `codex` directly there picks up the same provider.
         self._deploy_agent_settings_to_root_workspace(current_agent, updates)
+        try:
+            from kn_graph.services.agent_workspace_guard import ensure_all_agent_workspaces_minimal_config
+            ensure_all_agent_workspaces_minimal_config(self._settings)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "save_agent_settings: failed to sync minimal agent workspace configs",
+                exc_info=True,
+            )
 
         return self.get_agent_settings()
 

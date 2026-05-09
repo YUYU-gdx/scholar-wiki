@@ -261,6 +261,9 @@ export const api = {
     streamJobEvents(jobId: string): EventSource {
       return new EventSource(`${API_BASE}/v1/jobs/${encodeURIComponent(jobId)}/events`);
     },
+    streamJobAgentEvents(jobId: string, cursor: number = 0): EventSource {
+      return new EventSource(`${API_BASE}/v1/jobs/${encodeURIComponent(jobId)}/agent-events?cursor=${Math.max(0, cursor)}`);
+    },
   },
 
   workspace: {

@@ -941,11 +941,27 @@ class LiteratureService:
         lib = str(library_id or "").strip()
         if not lib:
             raise ValueError("library_id_required")
-        return _libreg_create_library(
+        result = _libreg_create_library(
             library_id=lib,
             workspace_root=str(workspace_root or "").strip(),
             set_default=bool(set_default),
         )
+        ws_path = str(result.get("workspace_path", "") or "").strip()
+        if ws_path:
+            try:
+                from kn_graph.services.agent_workspace_guard import ensure_agent_workspace_minimal_config
+                ensure_agent_workspace_minimal_config(
+                    ws_path,
+                    "pipeline_library",
+                    library_id=lib,
+                )
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "create_library: failed to sync workspace minimal agent config",
+                    exc_info=True,
+                )
+        return result
 
     def delete_library(self, library_id: str, delete_workspace_data: bool = True) -> dict[str, Any]:
         lib = str(library_id or "").strip()
@@ -996,7 +1012,7 @@ class LiteratureService:
             if isinstance(mat, dict) and mat:
                 materialized_rows.append(mat)
         self._update_library_index(library_id, imported_paper_ids)
-        return {
+        result = {
             "manifest_path": str(path),
             "library_id": library_id,
             "imported_count": imported,
@@ -1008,6 +1024,22 @@ class LiteratureService:
             "index_mode": index_mode,
             "upsert_batch_size": upsert_batch_size,
         }
+        ws_path = str(result.get("workspace_path", "") or "").strip()
+        if ws_path:
+            try:
+                from kn_graph.services.agent_workspace_guard import ensure_agent_workspace_minimal_config
+                ensure_agent_workspace_minimal_config(
+                    ws_path,
+                    "pipeline_library",
+                    library_id=library_id,
+                )
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "import_manifest: failed to sync workspace minimal agent config",
+                    exc_info=True,
+                )
+        return result
 
     def _import_row(
         self,

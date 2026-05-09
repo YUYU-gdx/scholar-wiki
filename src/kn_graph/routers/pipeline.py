@@ -306,4 +306,27 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
 
         return EventSourceResponse(event_generator())
 
+    @router.get("/jobs/{job_id}/agent-events")
+    async def stream_job_agent_events(job_id: str, cursor: int = Query(default=0)):
+        async def event_generator():
+            next_cursor = max(0, int(cursor))
+            while True:
+                payload = pipeline_service.get_agent_events(job_id=job_id, cursor=next_cursor, limit=200)
+                if "error" in payload:
+                    yield {"event": "failed", "data": json.dumps(payload, ensure_ascii=False)}
+                    break
+                events = payload.get("events", [])
+                if isinstance(events, list):
+                    for item in events:
+                        yield {"event": "agent_event", "data": json.dumps(item, ensure_ascii=False)}
+                next_cursor = int(payload.get("cursor", next_cursor) or next_cursor)
+                if bool(payload.get("done", False)):
+                    yield {"event": "agent_done", "data": json.dumps({"job_id": job_id, "cursor": next_cursor}, ensure_ascii=False)}
+                    break
+                import asyncio
+
+                await asyncio.sleep(0.8)
+
+        return EventSourceResponse(event_generator())
+
     return router

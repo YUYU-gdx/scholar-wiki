@@ -130,7 +130,15 @@ def main() -> None:
     )
 
 
-def main_inline(*, db_path: str, raw_output_jsonl: Path, apply_schema: bool = False) -> dict[str, Any]:
+def main_inline(
+    *,
+    db_path: str,
+    raw_output_jsonl: Path,
+    apply_schema: bool = False,
+    source_pdf_path: str = "",
+    source_md_path: str = "",
+    source_html_path: str = "",
+) -> dict[str, Any]:
     """Programmatic entry point used by pipeline_runtime."""
     _repo_root = Path(__file__).resolve().parents[3]
     extractor = _load_module(
@@ -170,6 +178,9 @@ def main_inline(*, db_path: str, raw_output_jsonl: Path, apply_schema: bool = Fa
             "doi": str(row.get("doi", "") or paper_id),
             "offline_html_path": str(row.get("offline_html_path", "") or row.get("full_html_path", "") or ""),
             "article_url": str(row.get("article_url", "") or ""),
+            "source_pdf_path": source_pdf_path,
+            "source_md_path": source_md_path,
+            "source_html_path": source_html_path,
             "publication_date": str(row.get("publication_date", "") or row.get("pub_date", "") or ""),
             "online_date": str(row.get("online_date", "") or ""),
             "publication_year": _coerce_optional_int(row.get("publication_year") or row.get("pub_year") or row.get("year")),

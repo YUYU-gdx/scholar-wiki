@@ -2,7 +2,7 @@
 import { CloudUpload, FileText, RefreshCw, XCircle, Info, Terminal, Trash2 } from 'lucide-react';
 import { useApp } from '../App';
 import { api } from '../api';
-import type { PipelineJob } from '../types';
+import type { PipelineAgentEvent, PipelineJob } from '../types';
 
 const STAGE_OPTIONS = [
   { value: '', label: 'All Stages' },
@@ -81,6 +81,54 @@ function buildJobLogs(job: PipelineJob): JobLogRow[] {
   return rows;
 }
 
+function flattenText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(flattenText).filter(Boolean).join(' ');
+  if (value && typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '';
+    }
+  }
+  return String(value ?? '');
+}
+
+function agentEventToLogRow(e: PipelineAgentEvent): JobLogRow {
+  const t = formatTs(e.ts);
+  const method = String(e.method || '');
+  const params = e.params || {};
+  if (method === 'item/agentMessage/delta') {
+    const delta = flattenText((params as Record<string, unknown>).delta);
+    return { time: t, level: 'info', text: `[模型输出] ${delta || '(empty delta)'}` };
+  }
+  if (method === 'item/started') {
+    const item = ((params as Record<string, unknown>).item || {}) as Record<string, unknown>;
+    return {
+      time: t,
+      level: 'info',
+      text: `[工具开始] ${String(item.tool || item.type || 'unknown')} args=${flattenText(item.arguments || {})}`,
+    };
+  }
+  if (method === 'item/completed') {
+    const item = ((params as Record<string, unknown>).item || {}) as Record<string, unknown>;
+    const status = String(item.status || 'completed');
+    const lvl: JobLogRow['level'] = status === 'failed' ? 'error' : 'info';
+    return {
+      time: t,
+      level: lvl,
+      text: `[工具完成] ${String(item.tool || item.type || 'unknown')} status=${status} result=${flattenText(item.result || {})}`,
+    };
+  }
+  if (method === 'turn/completed') {
+    return { time: t, level: 'info', text: '[回合完成] agent turn completed' };
+  }
+  if (method === 'item/thinking/delta') {
+    return { time: t, level: 'info', text: `[思考] ${flattenText((params as Record<string, unknown>).thinking)}` };
+  }
+  return { time: t, level: 'info', text: `[${method || 'event'}] ${flattenText(params)}` };
+}
+
 export default function PipelineView() {
   const { activeLibraryId, pipelineJobs, setPipelineJobs } = useApp();
   const [page, setPage] = useState(1);
@@ -95,6 +143,9 @@ export default function PipelineView() {
   const logRef = useRef<HTMLDivElement>(null);
   const [selectedJob, setSelectedJob] = useState<PipelineJob | null>(null);
   const [logJob, setLogJob] = useState<PipelineJob | null>(null);
+  const [liveJobLogs, setLiveJobLogs] = useState<JobLogRow[]>([]);
+  const [liveLogConnected, setLiveLogConnected] = useState(false);
+  const agentLogSseRef = useRef<EventSource | null>(null);
   const autoReconnectedRef = useRef(false);
 
   const fetchJobs = useCallback(async () => {
@@ -130,8 +181,51 @@ export default function PipelineView() {
         sseRef.current = null;
         setSseConnected(false);
       }
+      if (agentLogSseRef.current) {
+        agentLogSseRef.current.close();
+        agentLogSseRef.current = null;
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (!logJob?.job_id) {
+      if (agentLogSseRef.current) {
+        agentLogSseRef.current.close();
+        agentLogSseRef.current = null;
+      }
+      setLiveLogConnected(false);
+      setLiveJobLogs([]);
+      return;
+    }
+    setLiveJobLogs(buildJobLogs(logJob));
+    const es = api.pipeline.streamJobAgentEvents(logJob.job_id, 0);
+    agentLogSseRef.current = es;
+    setLiveLogConnected(true);
+
+    es.addEventListener('agent_event', (evt) => {
+      try {
+        const parsed = JSON.parse((evt as MessageEvent).data || '{}') as PipelineAgentEvent;
+        setLiveJobLogs((prev) => [...prev, agentEventToLogRow(parsed)].slice(-800));
+      } catch {
+        /* ignore */
+      }
+    });
+    es.addEventListener('agent_done', () => {
+      setLiveLogConnected(false);
+    });
+    es.onerror = () => {
+      setLiveLogConnected(false);
+      es.close();
+      if (agentLogSseRef.current === es) agentLogSseRef.current = null;
+    };
+
+    return () => {
+      es.close();
+      if (agentLogSseRef.current === es) agentLogSseRef.current = null;
+      setLiveLogConnected(false);
+    };
+  }, [logJob?.job_id]);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -447,9 +541,10 @@ export default function PipelineView() {
               <div>Job: {logJob.job_id}</div>
               <div>File: {logJob.display_name || logJob.file_name || '-'}</div>
               <div>Status: {logJob.status} / Stage: {logJob.stage_code || logJob.stage || '-'}</div>
+              <div>Agent Event Stream: {liveLogConnected ? 'connected' : 'disconnected'}</div>
             </div>
             <div className="space-y-2">
-              {buildJobLogs(logJob).map((r, idx) => (
+              {liveJobLogs.map((r, idx) => (
                 <div key={`${r.time}-${idx}`} className="flex items-start gap-3 p-2 rounded border border-outline-variant bg-surface-container-low/30">
                   <span className="text-[10px] font-mono text-outline w-44 shrink-0">{r.time}</span>
                   <span className={`text-[11px] font-mono shrink-0 ${r.level === 'error' ? 'text-error' : r.level === 'warn' ? 'text-amber-600' : 'text-secondary'}`}>
@@ -458,9 +553,6 @@ export default function PipelineView() {
                   <span className="text-sm text-on-surface break-all">{r.text}</span>
                 </div>
               ))}
-            </div>
-            <div className="mt-4 text-[11px] text-on-surface-variant">
-              注: 当前日志来自任务状态与结果聚合；如需“工具调用级”明细，需要后端将 agent/tool trace 持久化并开放查询接口。
             </div>
           </div>
         </div>

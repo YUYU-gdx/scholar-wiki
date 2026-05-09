@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Work+Sans:wght@600&display=swap');
+﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Work+Sans:wght@600&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -233,19 +233,26 @@
   margin: 1.2em 0;
 }
 
-/* ── KaTeX overrides ──
-   Tailwind's global *,::before,::after { box-sizing: border-box } breaks
-   KaTeX's internal layout. KaTeX was designed for content-box and all its
-   precise em-based positioning (subscripts, superscripts, fractions)
-   depends on it. Also normalize font-size to match VS Code convention. */
-.reader-markdown .katex,
-.reader-markdown .katex * {
-  box-sizing: content-box;
+/* Keep markdown sub/sup typography stable inside reader content. */
+.reader-markdown sub,
+.reader-markdown sup {
+  font-size: 0.75em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
 }
 
+.reader-markdown sup {
+  top: -0.5em;
+}
+
+.reader-markdown sub {
+  bottom: -0.25em;
+}
+
+/* KaTeX container normalization for reader mode. */
 .reader-markdown .katex {
-  font-size: 1.1em;
-  line-height: 1.2;
+  font-size: 1em;
 }
 
 .reader-markdown .katex-display {

@@ -461,3 +461,59 @@ class PipelineService:
         if status not in {"failed", "cancelled"}:
             return {"error": "job_not_retryable", "job_id": job_id, "status": str(row.get("status", "") or "")}
         return None
+
+    @staticmethod
+    def _resolve_run_dir_from_row(row: dict[str, Any]) -> Path | None:
+        options_raw = str(row.get("options_json", "") or "").strip()
+        if options_raw:
+            try:
+                options_obj = json.loads(options_raw)
+                if isinstance(options_obj, dict):
+                    root_raw = str(options_obj.get("_job_root", "") or "").strip()
+                    if root_raw:
+                        return (Path(root_raw).resolve() / "run")
+            except Exception:
+                pass
+        input_path = str(row.get("input_path", "") or "").strip()
+        if input_path:
+            p = Path(input_path).resolve()
+            return p.parent.parent / "run"
+        return None
+
+    def get_agent_events(self, job_id: str, cursor: int = 0, limit: int = 200) -> dict[str, Any]:
+        store = self._ensure_store()
+        row = store.get_job(job_id)
+        if row is None:
+            return {"error": "job_not_found", "job_id": job_id}
+        run_dir = self._resolve_run_dir_from_row(row)
+        if run_dir is None:
+            return {"events": [], "cursor": max(0, int(cursor)), "done": True}
+        log_path = run_dir / "events" / "agent_events.jsonl"
+        rows: list[dict[str, Any]] = []
+        if log_path.exists():
+            try:
+                with log_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        text = line.strip()
+                        if not text:
+                            continue
+                        try:
+                            obj = json.loads(text)
+                        except Exception:
+                            continue
+                        if isinstance(obj, dict):
+                            rows.append(obj)
+            except Exception:
+                rows = []
+        cur = max(0, int(cursor))
+        lim = max(1, min(1000, int(limit)))
+        sliced = rows[cur:cur + lim]
+        next_cursor = cur + len(sliced)
+        status = _norm_status(row.get("status"))
+        done = status in TERMINAL_JOB_STATUSES and next_cursor >= len(rows)
+        return {
+            "events": sliced,
+            "cursor": next_cursor,
+            "done": done,
+            "total": len(rows),
+        }

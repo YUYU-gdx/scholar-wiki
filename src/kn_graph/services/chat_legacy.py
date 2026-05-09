@@ -801,6 +801,17 @@ class ChatService:
             lib_workspace,
             str(library_id or "").strip(),
         )
+        try:
+            from kn_graph.services.agent_workspace_guard import ensure_agent_workspace_minimal_config
+            ensure_agent_workspace_minimal_config(workspace, "chat_root")
+            if lib_workspace:
+                ensure_agent_workspace_minimal_config(
+                    lib_workspace,
+                    "pipeline_library",
+                    library_id=str(library_id or "").strip(),
+                )
+        except Exception as exc:
+            raise RuntimeError(f"agent_workspace_config_invalid:{exc}") from exc
 
         def _item_id(item: dict[str, Any], fallback_prefix: str = "item") -> str:
             raw = str(item.get("id", "") or "").strip()

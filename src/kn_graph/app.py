@@ -53,13 +53,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     workspace_service = WorkspaceService(settings)
     settings_service = SettingsService(settings, chat_service)
 
-    # Ensure the chat Q&A skill is deployed to the root workspace at startup.
-    # (Library workspaces get the extraction skill on first access.)
-    from kn_graph.services.codex_library_config import bootstrap_workspace_project_skills
-    bootstrap_workspace_project_skills(
-        str(settings.workspaces_dir.resolve()),
-        skill_names=["answer_library_question"],
-    )
+    # Startup-time minimal config sync for agent instances.
+    # Hard fail on chat root, soft fail on per-library workspaces.
+    from kn_graph.services.agent_workspace_guard import ensure_all_agent_workspaces_minimal_config
+    guard_report = ensure_all_agent_workspaces_minimal_config(settings)
+    for err in guard_report.get("errors", []) if isinstance(guard_report, dict) else []:
+        text = str(err or "")
+        if text.startswith("chat_root:"):
+            raise RuntimeError(f"agent_workspace_guard_startup_failed:{text}")
+        logger.warning("agent_workspace_guard_startup_warn:%s", text)
 
     app.include_router(graph.create_router(graph_service))
     app.include_router(graph.create_paper_router(graph_service))

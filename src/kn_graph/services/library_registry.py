@@ -309,6 +309,15 @@ def create_library(
         bootstrap_workspace_project_skills(str(ws_path), skill_names=["scholarly-paper-extraction"])
     except Exception:
         pass
+    try:
+        from kn_graph.services.agent_workspace_guard import ensure_agent_workspace_minimal_config
+        ensure_agent_workspace_minimal_config(
+            str(ws_path),
+            "pipeline_library",
+            library_id=target,
+        )
+    except Exception:
+        pass
 
     index_path = (idx_root / f"{target}.json").resolve()
 

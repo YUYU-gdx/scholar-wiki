@@ -300,6 +300,15 @@ export interface PipelineBatchSubmitResponse {
   rejected: Array<{ file_name?: string; error?: string }>;
 }
 
+export interface PipelineAgentEvent {
+  seq: number;
+  ts: string;
+  job_id: string;
+  backend: string;
+  method: string;
+  params: Record<string, unknown>;
+}
+
 export interface LiteratureLibrary {
   library_id: string;
   paper_count: number;
