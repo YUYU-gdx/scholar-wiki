@@ -38,6 +38,61 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _claude_md_template(instance_type: str) -> str:
+    if instance_type == "chat_root":
+        return (
+            "# CLAUDE.md\n\n"
+            "## Tool Boundaries And Priority\n"
+            "- Allowed MCP tools: `rag_search`, `graph_variable_neighbors`.\n"
+            "- Use `rag_search` as primary evidence retrieval.\n"
+            "- Use `graph_variable_neighbors` for variable-level alignment/neighbor checks only.\n"
+            "- For mechanism/context/conflict judgments, verify with paragraph evidence from `rag_search`.\n"
+            "- If results are truncated or empty, rewrite query and retry before concluding.\n\n"
+            "## Evidence And Quality Bar\n"
+            "- Every key conclusion must map to paragraph-level evidence.\n"
+            "- If evidence conflicts, state conflict source explicitly instead of forcing a single claim.\n"
+            "- If confidence is limited, state uncertainty reason (insufficient evidence / unstable retrieval / definition mismatch).\n"
+            "- Do not replace evidence with graph-only intuition.\n\n"
+            "## Incremental Note Maintenance\n"
+            "- Record only knowledge increment, not abstract restatement.\n"
+            "- If linking to prior literature, include absolute-path markdown links and relation type.\n"
+            "- Relation type examples: same variable, same relation, same mechanism, same context, extension, challenge, conflict, boundary condition.\n"
+            "- Keep note text concise and evidence-grounded.\n"
+        )
+    if instance_type == "pipeline_library":
+        return (
+            "# CLAUDE.md\n\n"
+            "## Tool Boundaries And Priority\n"
+            "- Allowed MCP tools: `rag_search`, `graph_variable_neighbors`.\n"
+            "- For extraction/disambiguation, run variable alignment as: `exact` first, then `semantic` when needed.\n"
+            "- `graph_variable_neighbors` is for variable mapping/neighbor reference, not standalone proof.\n"
+            "- For relation/mechanism/context/conflict decisions, validate with `rag_search` paragraph evidence.\n"
+            "- If tool returns truncated/empty/error, adjust query or weights and retry.\n\n"
+            "## Evidence And Quality Bar\n"
+            "- Structured extraction claims must be evidence-backed.\n"
+            "- Keep uncertainty explicit when evidence is weak or contradictory.\n"
+            "- Do not infer causal or relational direction without textual support.\n"
+            "- Prefer conservative extraction over speculative merging.\n\n"
+            "## Incremental Note Maintenance\n"
+            "- Notes should capture incremental insight only.\n"
+            "- When new paper links to prior papers, include absolute-path markdown links and relation type.\n"
+            "- Relation type examples: same variable, same relation, same mechanism, same context, extension, challenge, conflict, boundary condition.\n"
+            "- Use Reader-compatible note blocks when writing markdown notes.\n"
+        )
+    raise ValueError(f"instance_type_invalid:{instance_type}")
+
+
+def _ensure_claude_md(workspace: Path, instance_type: str) -> bool:
+    path = workspace / "CLAUDE.md"
+    expected = _claude_md_template(instance_type)
+    current = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    if current == expected:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(expected, encoding="utf-8")
+    return True
+
+
 def _ensure_mcp_json(workspace: Path, *, library_id: str = "") -> bool:
     path = workspace / ".mcp.json"
     server = _default_mcp_server(str(workspace), library_id=library_id)
@@ -163,6 +218,7 @@ def ensure_agent_workspace_minimal_config(
         "mcp": False,
         "plugins_codex": False,
         "plugins_claude": False,
+        "claude_md": False,
         "library_codex_config": False,
     }
 
@@ -178,6 +234,7 @@ def ensure_agent_workspace_minimal_config(
     changed["mcp"] = _ensure_mcp_json(ws, library_id=library_id)
     changed["plugins_codex"] = _ensure_codex_plugins_disabled(ws)
     changed["plugins_claude"] = _ensure_claude_plugins_disabled(ws)
+    changed["claude_md"] = _ensure_claude_md(ws, instance_type)
 
     if instance_type == "pipeline_library":
         cfg = load_or_init_library_codex_config(workspace_path=str(ws), library_id=library_id)
