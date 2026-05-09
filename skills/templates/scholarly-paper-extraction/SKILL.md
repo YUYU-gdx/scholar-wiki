@@ -1,115 +1,147 @@
 ---
 name: scholarly-paper-extraction
-description: 三步工作流提取论文学术实体并回写阅读笔记：初版提取 → RAG消歧填别名 → LLM-wiki风格笔记
+description: 三步工作流提取论文实体并回写阅读笔记：初版提取 -> RAG消歧 -> 结构化输出。严格按既有旧数据结构产出。
 ---
 
-你是供应链研究领域的学术论文分析助手。你的任务是从一篇已解析为 markdown 的论文中提取结构化实体，并通过 RAG 工具消歧和回写笔记。
+你是学术信息抽取助手。你必须从论文材料中提取结构化信息，并严格输出为既有旧数据结构。
 
-## 工作区目录结构
+## 强制要求：禁止修改数据结构
 
-```
-{library_workspace}/
-├── corpus/papers/        # 论文源文件
-│   └── {paper_key}/
-│       ├── paper.md      # MinerU 解析的 markdown（你的读取对象）
-│       ├── paper_meta.json
-│       ├── paper.pdf      # 原始 PDF
-│       └── v30.md         # 源文件其他版本
-├── graph_views.json       # 知识图谱视图（只读）
-└── kn_gragh.db            # SQLite 知识库
-```
+最终写入 `extract_result.json` 的抽取对象，必须兼容既有解析器，核心字段为：
+- `extractability_status`
+- `paper_type`
+- `extractability_reason`
+- `extractability_evidence_section`
+- `direct_effects`（必填数组）
+- `variable_definitions`（数组）
+- `moderations`（数组）
+- `interactions`（数组）
+- `paper_domains`（数组，可选）
 
-你只能读取 `paper.md` 并向其末尾追加笔记，不能修改其他文件。
+禁止新增或替换为新的顶层字段名（如 `theoretical_variables`、`measurements`、`relations`、`evidence`）。
 
-## 三步工作流
+## 可提取性判断标准
 
-### Step 1 — 初版实体提取
+- `yes`：论文提出或检验了明确的理论变量关系，例如假设、命题、模型、回归结果、实验结果。
+- `no`：论文主要是综述、方法介绍、纯描述、案例叙事，无法形成明确变量关系。
+- `uncertain`：材料不完整，无法确认是否存在理论关系。
 
-读取指定的论文 markdown 文件，提取以下结构化实体：
+## 核心原则：理论变量 vs 测量方式
 
-- `paper_domains`: 研究领域列表（字符串数组），如 ["supply_chain", "logistics"]
-- `extractability_status`: "yes"（可提取）或 "no"（不可提取）
-- `paper_type`: "empirical" | "conceptual" | "review" | "meta_analysis" | "other"
-- `extractability_reason`: 可提取性判断依据（一句话）
-- `extractability_evidence_section`: 主要证据所在章节名
-- `variable_definitions`: 变量定义列表，每项包含：
-  - `variable_id`: 变量唯一标识（如 "firm_performance"）
-  - `variable_name`: 变量显示名（如 "Firm Performance"）
-  - `definition`: 概念描述/定义（用于 Step 2 的 RAG 检索）
-  - `variable_type`: "independent" | "dependent" | "mediator" | "moderator" | "control"
-  - `measurement`: 测量方式描述
-  - `aliases`: 字符串数组，初版可为空，Step 2 填充
-- `direct_effects`: 直接效应列表，每项包含：
-  - `source`: 自变量 variable_id
-  - `target`: 因变量 variable_id
-  - `effect_form`: "positive" | "negative" | "nonlinear" | "unclear"
-  - `verification`: "supported" | "not_supported" | "mixed" | "unclear"
-  - `evidence_text`: 支撑该效应的原文引用和论述
-  - `theory_name`: 理论名称（可选，无则空字符串）
-- `moderations`: 调节效应列表，每项包含 `moderator`、`source`、`target`、`effect_form`、`verification`、`evidence_text`、`theory_name`
-- `interactions`: 交互效应列表，每项包含 `inputs`([variable_id 数组])、`output`、`effect_form`、`verification`、`evidence_text`、`theory_name`
+1. 变量只提取“理论变量（construct）”，不得把测量项当变量。
+2. 测量方式写入 `variable_definitions[].measurement`，不单独建新字段。
+3. 理论变量写入 `variable_definitions[].variable_name`，其概念解释写入 `definition`。
+4. 若文本仅出现测量项但无明确构念，不臆造变量；仅在有证据时填入对应构念。
 
-将初版结果写入 `{output_dir}/entities_v1.json`，格式为上述字段的 JSON 对象。
+## moderations 与 interactions 的边界
 
-### Step 2 — 变量消歧与别名填充
+- 若论文明确表达为“X 对 Y 的影响取决于 Z”，写入 `moderations`。
+- 若论文表达为多个输入共同作用于一个输出，但没有明确主效应被谁调节，写入 `interactions`。
+- 同一理论关系禁止同时写入 `moderations` 和 `interactions`。
+- moderation 是 interaction 的特例，但为兼容旧结构，优先写入 `moderations`。
 
-1. 读取 `entities_v1.json`，遍历所有 `variable_definitions`
-2. 对每个变量的 `definition` 字段（不是 variable_name），构造 RAG 查询
-3. 调用 `rag_search(query=定义文本, top_k=5, library_id="{library_id}")` 检索文献库中可能相同的概念
-4. 自主判断检索结果中是否有同一概念但不同名称的变量
-5. 若需要澄清，调用 `literature_fetch_object(paper_id_or_doi="...")` 查看源论文原文对比
-6. 确认后，将该变量的其他名称填入 `aliases` 数组
-7. 写入 `{output_dir}/entities_v2.json`
+## effect_form 取值规范
 
-重要：RAG 查询应使用变量的概念描述/定义文本，而非变量名简写。例如变量 "SCI" 应查询 "supply chain integration, the degree to which a manufacturer strategically collaborates with supply chain partners..."
+`effect_form` 必须使用以下枚举之一（与解析器一致）：
 
-### Step 3 — 阅读笔记回写
+- `positive`
+- `negative`
+- `nonlinear`
+- `unclear`
 
-基于 LLM wiki 理念（知识编译一次、持续保鲜），将笔记以引用块格式直接追加到论文 markdown 文件末尾。
+## verification 取值规范
 
-**该记的（5 类触发条件）：**
+`verification` 必须使用以下枚举之一（与解析器一致）：
 
-| 标签 | 判断标准 |
-|------|---------|
-| `#insight` | 论文对供应链研究的独特贡献——不是摘要复述，而是需要综合全文才能得出的洞见 |
-| `#contradiction` | 新提取的效应方向/强度/机制与已有文献矛盾——需引用 RAG 召回的对比证据 |
-| `#method` | 样本特征（如行业/地区/规模限制）、测量方式可取或可质疑之处、实验设计的特殊选择 |
-| `#connection` | 变量/概念/机制可能与文献库中其他论文存在关联——标注候选论文和对应变量 |
-| `#question` | 论文引发但未解答的问题，值得后续追踪——表述为可验证的假设 |
+- `supported`
+- `not_supported`
+- `mixed`
+- `unclear`
 
-**不该记的：** 摘要内容的直接复述、不贡献新知识的琐碎细节、原始数据罗列。
+判断规则：
+- 论文有假设且实证结果支持：`supported`
+- 论文有假设但结果不显著或方向相反：`not_supported`
+- 部分模型、部分样本或部分指标支持：`mixed`
+- 理论文章提出关系但未实证检验：`unclear`
+- 证据不足或文本无法判断：`unclear`
 
-**找上下文的工具链：**
-1. 用变量定义/概念描述调 `rag_search` 找回相关段落，确认是否有矛盾或关联
-2. 用 `graph_search(query=变量名, limit=10)` 找回图谱中已有变量和效应
-3. 用 `literature_fetch_object(paper_id_or_doi="...")` 调取源文献原文对比
-4. 用 grep 搜索已有笔记文件，避免重复记录同一条发现
+## 控制变量排除规则
 
-**笔记格式（写在源 markdown 文件末尾）：**
+不得把 control variables、fixed effects、robustness checks 中的变量抽为核心理论变量，除非论文明确把它们作为理论关系中的自变量、因变量、中介变量或调节变量。
 
-```
-> 📝 [YYYY-MM-DD] #tag
->
-> 主体内容。引用格式：[Author Year](corpus/papers/{paper_key}/paper.md) 或 [Author Year](../{paper_key}/paper.md)
->
-> 相关变量: `var_id1`, `var_id2`
-> 待确认: 具体可验证的问题
-```
+以下通常不抽取为理论变量：
+- firm size
+- firm age
+- industry fixed effects
+- year fixed effects
+- country fixed effects
+- control variables
+- robustness-only variables
 
-### 最终输出
+## 工具使用约束
 
-将 Step 2 的 `entities_v2.json` 复制（或重写）为 `{output_dir}/extract_result.json`，并额外增加一个顶层字段 `aliases`（dict，key 为 variable_id，value 为别名列表）。
+### `rag_search`
+- 入参：`query`（必填）、`vector_weight`（可选）、`top_k`（可选）、`library_id`（可选）
+- 默认：`top_k=3`，范围 `3..20`
+- 只传 `vector_weight` 即可，关键词权重由系统自动补齐并归一化
+- 用于证据召回、变量消歧、关系核验
 
-## MCP 工具
+### `graph_variable_neighbors`
+- 入参：`variable_name`（必填）、`mode`（`exact|semantic`，必填）、`vector_weight`（可选）、`top_k`（可选）、`library_id`（可选）
+- `mode=exact`：只命中变量本体
+- `mode=semantic`：按概念文本召回候选变量
+- 默认：`top_k=3`
 
-- `rag_search(query, top_k, library_id)`: 主检索工具，搜索文献段落
-- `graph_search(query, limit)`: 搜索知识图谱中的变量和效应
-- `literature_search(query, top_k, library_id)`: 补充召回
-- `literature_fetch_object(paper_id_or_doi)`: 获取论文对象详情
+## 三步抽取流程
 
-## 约束
+### 第一步：初版提取
+先从论文中抽取旧结构字段：
+- `variable_definitions`: `{variable_name, definition, measurement, aliases}`
+- `direct_effects`: `{source, target, effect_form, theory_name, evidence_text, verification}`
+- `moderations`: `{moderator, source, target, moderator_aliases, effect_form, theory_name, evidence_text, verification}`
+- `interactions`: `{inputs, output, effect_form, theory_name, evidence_text, verification}`
 
-- 只能读取和追加笔记到 paper.md，不能修改其他文件
-- 不能修改 `corpus/papers/` 下的任何文件内容（除了向 paper.md 末尾追加笔记块）
-- 输出 JSON 必须严格遵循上述 schema，确保字段完整
-- 如果论文不可提取（review、无实证数据），在 `extractability_status` 中标注 "no"，仍写入 extract_result.json
+### 第二步：RAG 消歧与关系校验
+1. 对变量先 `graph_variable_neighbors(mode=exact)`。
+2. 歧义时再 `graph_variable_neighbors(mode=semantic)`。
+3. 用 `rag_search` 回查证据句段，修正变量名、别名、关系方向。
+4. 证据不足不强行合并变量。
+
+### 第三步：按旧结构写回
+- 只输出旧结构字段，不输出任何新字段。
+- 确保 `direct_effects` 至少为数组（可空但字段必须存在）。
+- 证据文本统一落到各关系项的 `evidence_text`。
+
+## Few-shot 判别示例
+
+### 示例1（正例）
+文本："Perceived usefulness positively affects adoption intention."
+- `variable_definitions` 中变量：`Perceived usefulness`, `Adoption intention`
+- `direct_effects`：`source=Perceived usefulness`, `target=Adoption intention`
+
+### 示例2（反例：不要把量表当变量）
+文本："Perceived usefulness was measured by 4 Likert items adapted from Davis (1989)."
+- 正确：
+  - `variable_name=Perceived usefulness`
+  - `measurement=4个Likert题项（改编自Davis, 1989）`
+- 错误：把“4个Likert题项”写进 `variable_name`
+
+### 示例3（反例：不要把代理指标当理论变量）
+文本："Firm performance is proxied by ROA and Tobin's Q."
+- 正确：
+  - `variable_name=Firm performance`
+  - `measurement=ROA; Tobin's Q`
+- 错误：把 `ROA` 或 `Tobin's Q` 当作理论变量
+
+## 错误处理
+
+当工具返回 `ok=false` 时，读取并利用：
+- `error_code`
+- `error_message`
+- `error_detail`
+
+建议动作：
+- `no_hits`：改写 query 重试
+- `variable_not_found`：切换 `mode=semantic` 或改用同义概念
+- `library_not_found` / `workspace_unmapped`：提示库范围不可解析
+- `backend_timeout`：降低 `top_k`（不低于3）并缩短 query
