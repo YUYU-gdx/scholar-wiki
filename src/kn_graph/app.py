@@ -10,6 +10,7 @@ from kn_graph.services.literature_service import LiteratureService
 from kn_graph.services.pipeline_service import PipelineService
 from kn_graph.services.workspace_service import WorkspaceService
 from kn_graph.services.settings_service import SettingsService
+from kn_graph.services.pipeline_stage_runtime import start_pipeline_stage_workers
 
 from kn_graph.routers import graph, chat, literature, pipeline, workspace, settings as settings_router
 
@@ -70,6 +71,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(pipeline.create_router(pipeline_service))
     app.include_router(workspace.create_router(workspace_service))
     app.include_router(settings_router.create_router(settings_service))
+
+    if settings.pipeline_executor.strip().lower() == "stage_queue":
+        workers = start_pipeline_stage_workers(settings)
+        app.state.pipeline_stage_workers = workers
+        logger.info("pipeline_stage_workers_started count=%s", len(workers))
 
     @app.get("/healthz")
     async def healthz():

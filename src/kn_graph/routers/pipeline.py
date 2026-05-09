@@ -126,7 +126,24 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
         }
         pipeline_service.create_job(payload)
 
-        if pipeline_service._settings.pipeline_executor.strip().lower() == "inline":
+        use_stage_queue = str(parsed_options.get("use_stage_queue", "") or "").strip().lower() in {"1", "true", "yes"}
+        if not use_stage_queue:
+            use_stage_queue = pipeline_service._settings.pipeline_executor.strip().lower() == "stage_queue"
+
+        if use_stage_queue:
+            pipeline_service.enqueue_stage_task(
+                {
+                    "job_id": job_id,
+                    "stage": "mineru_parse",
+                    "status": "queued",
+                    "priority": 100,
+                    "attempt": 0,
+                    "max_attempts": 3,
+                    "idempotency_key": f"{job_id}:mineru_parse",
+                    "input_json": {},
+                }
+            )
+        elif pipeline_service._settings.pipeline_executor.strip().lower() == "inline":
             store = pipeline_service._ensure_store()
             pipeline_runtime.dispatch_inline(
                 store,
@@ -206,6 +223,13 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
         result = pipeline_service.get_job(job_id)
         if result is None:
             return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
+        return result
+
+    @router.get("/jobs/{job_id}/stages")
+    async def get_job_stages(job_id: str):
+        result = pipeline_service.get_job_stages(job_id)
+        if isinstance(result, dict) and result.get("error") == "job_not_found":
+            return JSONResponse(status_code=404, content=result)
         return result
 
     @router.get("/jobs/{job_id}/result")
