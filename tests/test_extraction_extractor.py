@@ -1,22 +1,12 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-import sys
 import unittest
 
-
-_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "smj_pipeline" / "extraction" / "extractor.py"
-_SPEC = importlib.util.spec_from_file_location("smj_pipeline_extraction_extractor", _SCRIPT_PATH)
-if _SPEC is None or _SPEC.loader is None:
-    raise RuntimeError(f"Unable to load script module: {_SCRIPT_PATH}")
-_MOD = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = _MOD
-_SPEC.loader.exec_module(_MOD)
-
-ExtractionBundle = _MOD.ExtractionBundle
-extract_records = _MOD.extract_records
-parse_extraction_response = _MOD.parse_extraction_response
+from kn_graph.services.extraction_extractor import (
+    ExtractionBundle,
+    extract_records,
+    parse_extraction_response,
+)
 
 
 class _FakeLLMClient:
@@ -190,8 +180,11 @@ class ExtractionExtractorTest(unittest.TestCase):
           ]
         }
         """
-        with self.assertRaises(ValueError):
-            parse_extraction_response(response_text)
+        bundle = parse_extraction_response(response_text)
+        interaction = bundle.interactions[0]
+        self.assertEqual(interaction["inputs"], ["X1", "X2"])
+        self.assertEqual(interaction["output"], "Y")
+        self.assertEqual(interaction["verification"], "mixed")
 
 
 if __name__ == "__main__":

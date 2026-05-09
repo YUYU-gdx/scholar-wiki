@@ -38,16 +38,16 @@ def _load_sibling_module(module_name: str, relative_path: str):
 
 _QUALIFIER_MOD = _load_sibling_module("smj_pipeline_extraction_qualifier", "extraction/qualifier.py")
 _LOCATOR_MOD = _load_sibling_module("smj_pipeline_extraction_locator", "extraction/locator.py")
-_EXTRACTOR_MOD = _load_sibling_module("smj_pipeline_extraction_extractor", "extraction/extractor.py")
 _VALIDATOR_MOD = _load_sibling_module("smj_pipeline_extraction_validator", "extraction/validator.py")
 _REVIEW_QUEUE_MOD = _load_sibling_module("smj_pipeline_extraction_review_queue", "extraction/review_queue.py")
 
 classify_document = _QUALIFIER_MOD.classify_document
 locate_main_model_evidence = _LOCATOR_MOD.locate_main_model_evidence
-extract_records_with_raw = _EXTRACTOR_MOD.extract_records_with_raw
 validate_relation_records = _VALIDATOR_MOD.validate_relation_records
 build_review_queue = _REVIEW_QUEUE_MOD.build_review_queue
 write_review_queue_jsonl = _REVIEW_QUEUE_MOD.write_review_queue_jsonl
+
+from kn_graph.services.extraction_extractor import extract_records_with_raw
 
 from kn_graph.providers.zhipu import ZhipuChatCompletionsClient  # noqa: E402
 from kn_graph.providers.nvidia import NvidiaChatCompletionsClient  # noqa: E402
@@ -413,5 +413,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

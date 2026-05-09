@@ -1,24 +1,13 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 from pathlib import Path
 import sqlite3
-import sys
 from typing import Any
 
+from kn_graph.services.extraction_extractor import parse_extraction_response
 from kn_graph.services.sqlite_repo import SqliteRepo
-
-
-def _load_module(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load module: {path}")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def _iter_jsonl(path: Path):
@@ -55,12 +44,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    _repo_root = Path(__file__).resolve().parents[3]
-    extractor = _load_module(
-        "smj_pipeline_extractor_import_raw",
-        _repo_root / "scripts" / "smj_pipeline" / "extraction" / "extractor.py",
-    )
-
     total = 0
     ok = 0
     failed = 0
@@ -87,7 +70,7 @@ def main() -> None:
 
         raw_response = str(row.get("raw_response", "") or "")
         try:
-            bundle = extractor.parse_extraction_response(raw_response)
+            bundle = parse_extraction_response(raw_response)
         except Exception:
             failed += 1
             continue
@@ -140,11 +123,6 @@ def main_inline(
     source_html_path: str = "",
 ) -> dict[str, Any]:
     """Programmatic entry point used by pipeline_runtime."""
-    _repo_root = Path(__file__).resolve().parents[3]
-    extractor = _load_module(
-        "smj_pipeline_extractor_import_inline",
-        _repo_root / "scripts" / "smj_pipeline" / "extraction" / "extractor.py",
-    )
 
     total = 0
     ok = 0
@@ -170,7 +148,7 @@ def main_inline(
             continue
         raw_response = str(row.get("raw_response", "") or "")
         try:
-            bundle = extractor.parse_extraction_response(raw_response)
+            bundle = parse_extraction_response(raw_response)
         except Exception:
             failed += 1
             continue
