@@ -72,6 +72,7 @@ def _append_agent_event(
     with log_path.open("a", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(payload, ensure_ascii=False))
         f.write("\n")
+    return payload
 
 
 
@@ -83,6 +84,63 @@ def _stage_update(store: JobStore, job_id: str, stage: str, progress: int, event
     payload = {"stage": stage, "progress": int(progress), "last_event": event}
     payload.update(extra)
     store.update_job(job_id, payload)
+
+
+def _cleanup_redundant_job_files(
+    *,
+    input_pdf: Path,
+    run_dir: Path,
+    keep_intermediates: bool,
+) -> dict[str, Any]:
+    """Remove duplicated parse/input artifacts after successful materialization.
+
+    Keep extraction/event/result artifacts in run_dir, but remove parse outputs and
+    the uploaded input PDF copy because canonical assets are under corpus/papers.
+    """
+    if keep_intermediates:
+        return {"cleanup_enabled": False, "removed": []}
+
+    removed: list[str] = []
+
+    parse_dir = run_dir / "parse"
+    if parse_dir.exists():
+        import shutil
+        shutil.rmtree(parse_dir, ignore_errors=True)
+        removed.append(str(parse_dir))
+
+    try:
+        # job root layout: .../runs/<job_id>/{input,parse,extract,...}
+        run_parent = run_dir.parent
+        input_dir = run_parent / "input"
+        if input_dir.exists():
+            import shutil
+            shutil.rmtree(input_dir, ignore_errors=True)
+            removed.append(str(input_dir))
+    except Exception:
+        pass
+
+    # Best-effort fallback if input path still exists outside input_dir.
+    try:
+        if input_pdf.exists():
+            input_pdf.unlink(missing_ok=True)
+            removed.append(str(input_pdf))
+    except Exception:
+        pass
+
+    return {"cleanup_enabled": True, "removed": removed}
+
+
+def _purge_job_workspace(*, run_dir: Path, enabled: bool) -> dict[str, Any]:
+    """Delete whole job workspace (runs/<job_id>) after completion."""
+    if not enabled:
+        return {"purge_enabled": False, "purged": False, "job_root": str(run_dir.parent)}
+    job_root = run_dir.parent
+    try:
+        import shutil
+        shutil.rmtree(job_root, ignore_errors=True)
+        return {"purge_enabled": True, "purged": True, "job_root": str(job_root)}
+    except Exception as exc:
+        return {"purge_enabled": True, "purged": False, "job_root": str(job_root), "error": str(exc)}
 
 
 def _is_cancel_requested(store: JobStore, job_id: str) -> bool:
@@ -217,7 +275,6 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
         "model": str(options.get("pipeline_agent_model", "") or "").strip(),
         "api_key": str(options.get("pipeline_agent_api_key", "") or "").strip(),
         "base_url": str(options.get("pipeline_agent_base_url", "") or "").strip(),
-        "endpoint_url": str(options.get("pipeline_agent_endpoint_url", "") or "").strip(),
         "reasoning_effort": str(options.get("pipeline_agent_reasoning_effort", "") or "").strip().lower(),
     }
     agent_config = {k: v for k, v in agent_config.items() if v}
@@ -279,7 +336,7 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     _stage_update(store, job_id, "extract_entities", 60, "agent_running", status="running")
 
     # Call agent with timeout
-    agent_timeout_seconds = int(os.getenv("PIPELINE_AGENT_TURN_TIMEOUT_SECONDS", "600") or "600")
+    agent_timeout_seconds = int(os.getenv("PIPELINE_AGENT_TURN_TIMEOUT_SECONDS", "1200") or "1200")
     if agent_timeout_seconds < 60:
         agent_timeout_seconds = 60
     try:
@@ -289,13 +346,18 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
             nonlocal event_seq
             event_seq += 1
             try:
-                _append_agent_event(
+                saved = _append_agent_event(
                     log_path=event_log_path,
                     seq=event_seq,
                     job_id=job_id,
                     backend=backend,
                     event=evt if isinstance(evt, dict) else {"method": "unknown", "params": {"raw": str(evt)}},
                 )
+                if hasattr(store, "append_agent_event") and isinstance(saved, dict):
+                    try:
+                        store.append_agent_event(job_id, saved)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -540,22 +602,22 @@ def _run_finalize_after_import(
                 if not isinstance(meta, dict):
                     meta = {}
                 title = str(meta.get("title", "") or "").strip() or str(m.get("title", "") or str(m.get("paper_key", "")) or "").strip()
-                cur.execute(
-                    """UPDATE papers SET doi = ?, title = ?,
-                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
-                       source_html_path = ?, metadata_source = ?
-                       WHERE paper_id = ?""",
-                    (
-                        str(m.get("doi", "") or ""),
-                        title,
-                        str(m.get("html_path", "") or ""),
-                        str(m.get("source_pdf_path", "") or ""),
-                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""),
-                        str(m.get("html_path", "") or ""),
-                        "literature_import",
-                        pid,
-                    ),
-                )
+                cur.execute( 
+                    """UPDATE papers SET doi = ?, title = ?, 
+                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?, 
+                       source_html_path = ?, metadata_source = ? 
+                       WHERE paper_id = ?""", 
+                    ( 
+                        str(m.get("doi", "") or ""), 
+                        title, 
+                        str(m.get("html_path", "") or ""), 
+                        str(m.get("source_pdf_path", "") or ""), 
+                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""), 
+                        str(m.get("html_path", "") or ""), 
+                        "literature_import", 
+                        pid, 
+                    ), 
+                ) 
             conn.commit()
             conn.close()
             _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
@@ -569,6 +631,14 @@ def _run_finalize_after_import(
         except Exception as exc:
             graph_warning = str(exc)
 
+    keep_intermediates = bool(options.get("retain_job_intermediates", False))
+    cleanup = _cleanup_redundant_job_files(
+        input_pdf=input_pdf,
+        run_dir=run_dir,
+        keep_intermediates=keep_intermediates,
+    )
+
+    purge_job_workspace = bool(options.get("purge_job_workspace", True))
     result = {
         "job_id": job_id,
         "run_dir": str(run_dir),
@@ -583,6 +653,8 @@ def _run_finalize_after_import(
         "graph_updated": bool(graph_updated),
         "graph_output_path": graph_output_path,
         "graph_output_size": int(graph_output_size),
+        "cleanup": cleanup,
+        "purge_job_workspace": {"enabled": purge_job_workspace},
         "final_verdict": "success",
         "finished_at": _now_iso(),
     }
@@ -599,6 +671,11 @@ def _run_finalize_after_import(
             "last_event": "completed",
         },
     )
+    purge = _purge_job_workspace(run_dir=run_dir, enabled=purge_job_workspace)
+    if purge.get("purged"):
+        store.update_job(job_id, {"output_path": "", "result_json": _safe_json_dumps({**result, "purge_job_workspace": purge})})
+    else:
+        store.update_job(job_id, {"result_json": _safe_json_dumps({**result, "purge_job_workspace": purge})})
     return result
 
 
@@ -709,22 +786,22 @@ def _run_finalize(
                     meta = {}
                 title = str(meta.get("title", "") or "").strip() or str(m.get("title", "") or str(m.get("paper_key", "")) or "").strip()
                 # Use UPDATE to avoid clearing extraction fields (extractability etc.)
-                cur.execute(
-                    """UPDATE papers SET doi = ?, title = ?,
-                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
-                       source_html_path = ?, metadata_source = ?
-                       WHERE paper_id = ?""",
-                    (
-                        str(m.get("doi", "") or ""),
-                        title,
-                        str(m.get("html_path", "") or ""),
-                        str(m.get("source_pdf_path", "") or ""),
-                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""),
-                        str(m.get("html_path", "") or ""),
-                        "literature_import",
-                        pid,
-                    ),
-                )
+                cur.execute( 
+                    """UPDATE papers SET doi = ?, title = ?, 
+                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?, 
+                       source_html_path = ?, metadata_source = ? 
+                       WHERE paper_id = ?""", 
+                    ( 
+                        str(m.get("doi", "") or ""), 
+                        title, 
+                        str(m.get("html_path", "") or ""), 
+                        str(m.get("source_pdf_path", "") or ""), 
+                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""), 
+                        str(m.get("html_path", "") or ""), 
+                        "literature_import", 
+                        pid, 
+                    ), 
+                ) 
             conn.commit()
             conn.close()
             # Always rebuild graph_views — paper metadata is now in SQLite
@@ -739,6 +816,14 @@ def _run_finalize(
         except Exception as exc:
             graph_warning = str(exc)
 
+    keep_intermediates = bool(options.get("retain_job_intermediates", False))
+    cleanup = _cleanup_redundant_job_files(
+        input_pdf=input_pdf,
+        run_dir=run_dir,
+        keep_intermediates=keep_intermediates,
+    )
+
+    purge_job_workspace = bool(options.get("purge_job_workspace", True))
     result = {
         "job_id": job_id,
         "run_dir": str(run_dir),
@@ -753,6 +838,8 @@ def _run_finalize(
         "graph_updated": bool(graph_updated),
         "graph_output_path": graph_output_path,
         "graph_output_size": int(graph_output_size),
+        "cleanup": cleanup,
+        "purge_job_workspace": {"enabled": purge_job_workspace},
         "final_verdict": "success",
         "finished_at": _now_iso(),
     }
@@ -769,6 +856,11 @@ def _run_finalize(
             "last_event": "completed",
         },
     )
+    purge = _purge_job_workspace(run_dir=run_dir, enabled=purge_job_workspace)
+    if purge.get("purged"):
+        store.update_job(job_id, {"output_path": "", "result_json": _safe_json_dumps({**result, "purge_job_workspace": purge})})
+    else:
+        store.update_job(job_id, {"result_json": _safe_json_dumps({**result, "purge_job_workspace": purge})})
     return result
 
 
@@ -821,6 +913,20 @@ def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
     if not out.get("llm_timeout_seconds"):
         out["llm_timeout_seconds"] = 300
 
+    # Whether to keep duplicated job-level parse/input intermediates after success.
+    # Default false: keep corpus/papers as the single long-term source of files.
+    if "retain_job_intermediates" not in out:
+        out["retain_job_intermediates"] = str(
+            os.getenv("KN_PIPELINE_RETAIN_JOB_INTERMEDIATES", "0")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+
+    # Whether to remove whole runs/<job_id> after successful finalize.
+    # Default on: jobs are transient runtime state, corpus/papers is the sole long-term asset.
+    if "purge_job_workspace" not in out:
+        out["purge_job_workspace"] = str(
+            os.getenv("KN_PIPELINE_PURGE_JOB_WORKSPACE", "1")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+
     # extraction_mode
     if not str(out.get("extraction_mode", "") or "").strip():
         val = str(getattr(settings, "pipeline_extraction_mode", "fast") or "fast").strip()
@@ -854,12 +960,6 @@ def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
         val = str(getattr(settings, "pipeline_agent_base_url", "") or "").strip()
         if val:
             out["pipeline_agent_base_url"] = val
-
-    # pipeline_agent_endpoint_url
-    if not str(out.get("pipeline_agent_endpoint_url", "") or "").strip():
-        val = str(getattr(settings, "pipeline_agent_endpoint_url", "") or "").strip()
-        if val:
-            out["pipeline_agent_endpoint_url"] = val
 
     # pipeline_agent_reasoning_effort
     if not str(out.get("pipeline_agent_reasoning_effort", "") or "").strip():

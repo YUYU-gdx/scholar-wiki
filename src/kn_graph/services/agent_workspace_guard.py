@@ -54,9 +54,15 @@ def _claude_md_template(instance_type: str) -> str:
             "- If confidence is limited, state uncertainty reason (insufficient evidence / unstable retrieval / definition mismatch).\n"
             "- Do not replace evidence with graph-only intuition.\n\n"
             "## Incremental Note Maintenance\n"
+            "- Workspace directory map:\n"
+            "  - `corpus/papers/<paper_key>/source/`: source PDFs.\n"
+            "  - `corpus/papers/<paper_key>/derived/mineru/latest/`: parsed markdown/html and assets.\n"
+            "  - `runs/<job_id>/run/extract/`: extraction artifacts (`extract_result.json`, `raw_llm_outputs*.jsonl`).\n"
+            "  - `graph_views.json` / database artifacts: downstream graph/index materials.\n"
             "- Record only knowledge increment, not abstract restatement.\n"
             "- If linking to prior literature, include absolute-path markdown links and relation type.\n"
             "- Relation type examples: same variable, same relation, same mechanism, same context, extension, challenge, conflict, boundary condition.\n"
+            "- For literature-note maintenance, focus on: conflict vs prior work, shared findings, and what is novel in the new paper relative to linked prior papers.\n"
             "- Keep note text concise and evidence-grounded.\n"
         )
     if instance_type == "pipeline_library":
@@ -74,9 +80,15 @@ def _claude_md_template(instance_type: str) -> str:
             "- Do not infer causal or relational direction without textual support.\n"
             "- Prefer conservative extraction over speculative merging.\n\n"
             "## Incremental Note Maintenance\n"
+            "- Workspace directory map:\n"
+            "  - `corpus/papers/<paper_key>/source/`: source PDFs.\n"
+            "  - `corpus/papers/<paper_key>/derived/mineru/latest/`: parsed markdown/html and assets.\n"
+            "  - `runs/<job_id>/run/extract/`: extraction artifacts (`extract_result.json`, `raw_llm_outputs*.jsonl`).\n"
+            "  - `graph_views.json` / database artifacts: downstream graph/index materials.\n"
             "- Notes should capture incremental insight only.\n"
             "- When new paper links to prior papers, include absolute-path markdown links and relation type.\n"
             "- Relation type examples: same variable, same relation, same mechanism, same context, extension, challenge, conflict, boundary condition.\n"
+            "- For literature-note maintenance, focus on: conflict vs prior work, shared findings, and what is novel in the new paper relative to linked prior papers.\n"
             "- Use Reader-compatible note blocks when writing markdown notes.\n"
         )
     raise ValueError(f"instance_type_invalid:{instance_type}")

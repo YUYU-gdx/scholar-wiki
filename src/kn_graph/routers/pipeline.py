@@ -84,7 +84,11 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             return JSONResponse(status_code=400, content={"error": "pdf_only"})
 
         try:
-            workspace_root = _resolve_library_workspace(lib, str(pipeline_service._settings.registry_path))
+            registry_path = str(getattr(pipeline_service._settings, "registry_path", "") or "")
+            try:
+                workspace_root = _resolve_library_workspace(lib, registry_path)
+            except TypeError:
+                workspace_root = _resolve_library_workspace(lib)
         except Exception as exc:
             return JSONResponse(status_code=400, content={"error": "library_workspace_missing", "detail": str(exc)})
 
@@ -92,7 +96,8 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
         parsed_options["_workspace_path"] = str(workspace_root.resolve())
 
         job_id = f"job_{uuid.uuid4().hex}"
-        run_dir = workspace_root / "imports" / "jobs" / job_id
+        runs_root = Path(str(getattr(pipeline_service, "_runs_root", workspace_root / "runs")))
+        run_dir = runs_root / job_id
         upload_name = file.filename or "upload.pdf"
         input_path = run_dir / "input" / upload_name
         parsed_options["_job_root"] = str(run_dir.resolve())
@@ -259,9 +264,9 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             row = pipeline_service.get_job(job_id)
             if row is None:
                 return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
-            source_path = Path(str(row.get("input_path", "") or "")).resolve()
-            if not source_path.exists() or not source_path.is_file():
-                return JSONResponse(status_code=404, content={"error": "input_file_missing", "job_id": job_id})
+            source_path = pipeline_service.resolve_retry_source_pdf(row)
+            if source_path is None:
+                return JSONResponse(status_code=404, content={"error": "retry_source_pdf_missing", "job_id": job_id})
             lib = str(row.get("library_id", "") or "").strip()
             if not lib:
                 return JSONResponse(status_code=400, content={"error": "library_id_missing", "job_id": job_id})

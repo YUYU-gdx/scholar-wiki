@@ -146,10 +146,24 @@ class _SQLiteJobStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_table()
 
+    class _ConnCtx:
+        def __init__(self, conn: sqlite3.Connection) -> None:
+            self._conn = conn
+
+        def __enter__(self) -> sqlite3.Connection:
+            return self._conn
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            try:
+                self._conn.__exit__(exc_type, exc, tb)
+            finally:
+                self._conn.close()
+            return False
+
     def _conn(self):
         conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        return conn
+        return self._ConnCtx(conn)
 
     def _ensure_table(self) -> None:
         ddl = """
@@ -216,6 +230,17 @@ class _SQLiteJobStore:
             created_at text not null
         );
         create index if not exists idx_task_events_task_id on pipeline_task_events(task_id, id);
+
+        create table if not exists pipeline_agent_events (
+            id integer primary key autoincrement,
+            job_id text not null,
+            seq integer not null default 0,
+            ts text not null,
+            backend text not null default '',
+            method text not null default '',
+            params_json text not null default '{}'
+        );
+        create index if not exists idx_agent_events_job_id on pipeline_agent_events(job_id, id);
         """
         with self._conn() as conn:
             conn.executescript(ddl)
@@ -300,9 +325,9 @@ class _SQLiteJobStore:
         return self.update_job(job_id, {"requested_cancel": True})
 
     def delete_job(self, job_id: str) -> None:
-        conn = self._conn()
-        conn.execute("DELETE FROM pipeline_jobs WHERE job_id = ?", (job_id,))
-        conn.commit()
+        with self._conn() as conn:
+            conn.execute("DELETE FROM pipeline_jobs WHERE job_id = ?", (job_id,))
+            conn.commit()
 
     def enqueue_stage_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         now = _now_iso()
@@ -591,6 +616,59 @@ class _SQLiteJobStore:
                         item[key] = {}
                 out.append(item)
             return out
+
+    def append_agent_event(self, job_id: str, payload: dict[str, Any]) -> None:
+        row = {
+            "job_id": str(job_id or "").strip(),
+            "seq": int(payload.get("seq", 0) or 0),
+            "ts": str(payload.get("ts", "") or _now_iso()),
+            "backend": str(payload.get("backend", "") or "").strip(),
+            "method": str(payload.get("method", "") or "").strip(),
+            "params_json": _safe_json_dumps(payload.get("params", {}) if isinstance(payload.get("params"), dict) else {}),
+        }
+        if not row["job_id"]:
+            return
+        with self._conn() as conn:
+            conn.execute(
+                "insert into pipeline_agent_events (job_id,seq,ts,backend,method,params_json) values (?,?,?,?,?,?)",
+                (row["job_id"], row["seq"], row["ts"], row["backend"], row["method"], row["params_json"]),
+            )
+            conn.commit()
+
+    def list_agent_events(self, job_id: str, cursor: int = 0, limit: int = 200) -> tuple[list[dict[str, Any]], int, int]:
+        cur = max(0, int(cursor))
+        lim = max(1, min(1000, int(limit)))
+        with self._conn() as conn:
+            rows = conn.execute(
+                "select id,seq,ts,backend,method,params_json from pipeline_agent_events where job_id=? and id>? order by id asc limit ?",
+                (str(job_id), cur, lim),
+            ).fetchall()
+            total = int(
+                conn.execute(
+                    "select count(*) from pipeline_agent_events where job_id=?",
+                    (str(job_id),),
+                ).fetchone()[0]
+            )
+        out: list[dict[str, Any]] = []
+        next_cursor = cur
+        for row in rows:
+            next_cursor = int(row["id"])
+            params_raw = str(row["params_json"] or "{}")
+            try:
+                params_obj = json.loads(params_raw)
+            except Exception:
+                params_obj = {}
+            out.append(
+                {
+                    "seq": int(row["seq"] or 0),
+                    "ts": str(row["ts"] or ""),
+                    "job_id": str(job_id),
+                    "backend": str(row["backend"] or ""),
+                    "method": str(row["method"] or ""),
+                    "params": params_obj if isinstance(params_obj, dict) else {},
+                }
+            )
+        return out, next_cursor, total
 
     def list_jobs(
         self,
@@ -916,16 +994,14 @@ class PipelineService:
         row = store.get_job(job_id)
         if row is None:
             return None
-        # Clean up job directory
+        # Clean up runtime run directory
         import shutil
-        input_path = str(row.get("input_path", "") or "").strip()
-        if input_path:
-            job_dir = Path(input_path).resolve().parent.parent
-            if job_dir.exists():
-                try:
-                    shutil.rmtree(job_dir, ignore_errors=True)
-                except Exception:
-                    pass
+        run_dir = self._runs_root / job_id
+        if run_dir.exists():
+            try:
+                shutil.rmtree(run_dir, ignore_errors=True)
+            except Exception:
+                pass
         # Remove from store
         if hasattr(store, "delete_job"):
             store.delete_job(job_id)
@@ -938,6 +1014,29 @@ class PipelineService:
         status = str(row.get("status", "") or "").strip().lower()
         if status not in {"failed", "cancelled"}:
             return {"error": "job_not_retryable", "job_id": job_id, "status": str(row.get("status", "") or "")}
+        return None
+
+    def resolve_retry_source_pdf(self, row: dict[str, Any]) -> Path | None:
+        result_obj = row.get("result")
+        if isinstance(result_obj, dict):
+            import_result = result_obj.get("import_result")
+            if isinstance(import_result, dict):
+                mats = import_result.get("materialized_papers")
+                if isinstance(mats, list):
+                    for m in mats:
+                        if not isinstance(m, dict):
+                            continue
+                        p = Path(str(m.get("source_pdf_path", "") or "")).resolve()
+                        if p.exists() and p.is_file():
+                            return p
+        input_path = Path(str(row.get("input_path", "") or "")).resolve()
+        if input_path.exists() and input_path.is_file():
+            try:
+                runs_root = self._runs_root.resolve()
+                if str(input_path).startswith(str(runs_root)):
+                    return input_path
+            except Exception:
+                pass
         return None
 
     @staticmethod
@@ -963,35 +1062,15 @@ class PipelineService:
         row = store.get_job(job_id)
         if row is None:
             return {"error": "job_not_found", "job_id": job_id}
-        run_dir = self._resolve_run_dir_from_row(row)
-        if run_dir is None:
-            return {"events": [], "cursor": max(0, int(cursor)), "done": True}
-        log_path = run_dir / "events" / "agent_events.jsonl"
-        rows: list[dict[str, Any]] = []
-        if log_path.exists():
-            try:
-                with log_path.open("r", encoding="utf-8") as f:
-                    for line in f:
-                        text = line.strip()
-                        if not text:
-                            continue
-                        try:
-                            obj = json.loads(text)
-                        except Exception:
-                            continue
-                        if isinstance(obj, dict):
-                            rows.append(obj)
-            except Exception:
-                rows = []
-        cur = max(0, int(cursor))
-        lim = max(1, min(1000, int(limit)))
-        sliced = rows[cur:cur + lim]
-        next_cursor = cur + len(sliced)
+        if hasattr(store, "list_agent_events"):
+            sliced, next_cursor, total = store.list_agent_events(job_id, cursor=cursor, limit=limit)
+        else:
+            sliced, next_cursor, total = [], max(0, int(cursor)), 0
         status = _norm_status(row.get("status"))
-        done = status in TERMINAL_JOB_STATUSES and next_cursor >= len(rows)
+        done = status in TERMINAL_JOB_STATUSES and len(sliced) == 0
         return {
             "events": sliced,
             "cursor": next_cursor,
             "done": done,
-            "total": len(rows),
+            "total": total,
         }
