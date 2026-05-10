@@ -150,7 +150,7 @@ def _extract_agent_paper_metadata(agent_bundle: dict[str, Any]) -> dict[str, Any
 
 
 def _citation_metadata_from_markdown(md_path: Path) -> dict[str, Any]:
-    if not md_path.exists():
+    if not md_path.exists() or not md_path.is_file():
         return {}
     text = md_path.read_text(encoding="utf-8", errors="ignore")
     cite_line = ""
@@ -188,6 +188,63 @@ def _citation_metadata_from_markdown(md_path: Path) -> dict[str, Any]:
         if authors_json:
             out["authors_json"] = authors_json
     return out
+
+
+def _resolve_materialized_md_path(materialized: dict[str, Any]) -> str:
+    if not isinstance(materialized, dict):
+        return ""
+    for key in ("source_md_path", "mineru_main_md_path", "md_path", "md_library_path"):
+        value = str(materialized.get(key, "") or "").strip()
+        if not value:
+            continue
+        p = Path(value)
+        if p.exists():
+            if p.is_file():
+                return str(p)
+            if p.is_dir():
+                for name in ("full.md", "merged.md", "output.md"):
+                    cand = p / name
+                    if cand.exists() and cand.is_file():
+                        return str(cand)
+                md_files = sorted(p.glob("*.md"))
+                if md_files:
+                    return str(md_files[0])
+    return ""
+
+
+def _sync_variable_concept_index(
+    *,
+    workspace_path: str,
+    library_id: str,
+    db_path: Path,
+    materialized_papers: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str]:
+    paper_ids: list[str] = []
+    for paper in materialized_papers:
+        if not isinstance(paper, dict):
+            continue
+        paper_id = str(paper.get("paper_id", "") or paper.get("paper_key", "") or "").strip()
+        if paper_id:
+            paper_ids.append(paper_id)
+    if not paper_ids:
+        return {"synced_paper_count": 0, "paper_results": []}, ""
+
+    try:
+        from kn_graph.services.variable_concept_index import VariableConceptIndexService
+
+        service = VariableConceptIndexService(workspace_path=workspace_path)
+        paper_results: list[dict[str, Any]] = []
+        for paper_id in paper_ids:
+            upsert_result = service.upsert_paper_variable_concepts(
+                library_id=library_id,
+                paper_id=paper_id,
+                db_path=str(db_path),
+            )
+            result_payload = upsert_result if isinstance(upsert_result, dict) else {"value": upsert_result}
+            paper_results.append({"paper_id": paper_id, "result": result_payload})
+        return {"synced_paper_count": len(paper_results), "paper_results": paper_results}, ""
+    except Exception as exc:
+        return {}, str(exc)
 
 
 def _stage_update(store: JobStore, job_id: str, stage: str, progress: int, event: str, **extra: Any) -> None:
@@ -342,6 +399,8 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     if not agent_md_path.exists():
         raise RuntimeError(f"missing_markdown_for_extraction:{agent_md_path}")
     html_path = Path(str(parse_meta.get("html_path", ""))).resolve()
+    if not html_path.exists():
+        raise RuntimeError(f"missing_html_for_extraction:{html_path}")
 
     extract_dir = run_dir / "extract"
     extract_dir.mkdir(parents=True, exist_ok=True)
@@ -689,6 +748,8 @@ def _run_finalize_after_import(
 
     import_warning = ""
     graph_warning = ""
+    concept_index_result: dict[str, Any] = {}
+    concept_index_warning = ""
     graph_output_path = ""
     graph_updated = False
     graph_output_size = 0
@@ -705,8 +766,9 @@ def _run_finalize_after_import(
             mat0 = mats[0] or {} if mats else {}
             mat_paper_key = str(mat0.get("paper_key", "")).strip()
             mat_pdf_path = str(mat0.get("source_pdf_path", "") or "")
-            mat_md_path = str(mat0.get("md_library_path", "") or "")
+            mat_md_path = _resolve_materialized_md_path(mat0)
             mat_html_path = str(mat0.get("html_path", "") or "")
+            sqlite_import_succeeded = False
 
             raw_jsonl = run_dir / "extract" / "raw_llm_outputs.jsonl"
             if raw_jsonl.exists():
@@ -732,6 +794,14 @@ def _run_finalize_after_import(
                     source_md_path=mat_md_path,
                     source_html_path=mat_html_path,
                 )
+                sqlite_import_succeeded = True
+            if sqlite_import_succeeded:
+                concept_index_result, concept_index_warning = _sync_variable_concept_index(
+                    workspace_path=workspace_path,
+                    library_id=library_id,
+                    db_path=db_path,
+                    materialized_papers=[m for m in mats if isinstance(m, dict)],
+                )
             cur = conn.cursor()
             for m in mats:
                 if not isinstance(m, dict):
@@ -749,8 +819,7 @@ def _run_finalize_after_import(
                 if not isinstance(meta, dict):
                     meta = {}
                 title = str(meta.get("title", "") or "").strip() or str(m.get("title", "") or str(m.get("paper_key", "")) or "").strip()
-                md_dir = Path(str(m.get("md_library_path", "") or m.get("md_path", "") or ""))
-                md_full = md_dir / "full.md" if md_dir.is_dir() else md_dir
+                md_full = Path(_resolve_materialized_md_path(m))
                 cite_meta = _citation_metadata_from_markdown(md_full)
                 doi = str(m.get("doi", "") or cite_meta.get("doi", "") or "").strip()
                 authors_json = cite_meta.get("authors_json", [])
@@ -771,7 +840,7 @@ def _run_finalize_after_import(
                         publication_year,
                         str(m.get("html_path", "") or ""),
                         str(m.get("source_pdf_path", "") or ""),
-                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""),
+                        _resolve_materialized_md_path(m),
                         str(m.get("html_path", "") or ""),
                         "literature_import",
                         pid,
@@ -808,6 +877,8 @@ def _run_finalize_after_import(
         "import_result": import_result,
         "import_warning": import_warning,
         "graph_warning": graph_warning,
+        "concept_index_result": concept_index_result,
+        "concept_index_warning": concept_index_warning,
         "imported_paper_count": imported_count,
         "graph_updated": bool(graph_updated),
         "graph_output_path": graph_output_path,
@@ -857,6 +928,8 @@ def _run_finalize(
     import_result: dict[str, Any] = {}
     import_warning = ""
     graph_output_path = ""
+    concept_index_result: dict[str, Any] = {}
+    concept_index_warning = ""
     graph_updated = False
     graph_output_size = 0
     if library_id:
@@ -905,6 +978,7 @@ def _run_finalize(
 
             mats = import_result.get("materialized_papers", []) or []
             mat_paper_key = str((mats[0] or {}).get("paper_key", "") if mats else "").strip()
+            sqlite_import_succeeded = False
 
             # Import extraction results into SQLite first (writes paper metadata + variables)
             raw_jsonl = run_dir / "extract" / "raw_llm_outputs.jsonl"
@@ -926,6 +1000,14 @@ def _run_finalize(
                     raw_jsonl = fixed_path
                 _stage_update(store, job_id, "finalize", 98, "importing_to_sqlite", status="running")
                 _import_sqlite_main_inline(db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False)
+                sqlite_import_succeeded = True
+            if sqlite_import_succeeded:
+                concept_index_result, concept_index_warning = _sync_variable_concept_index(
+                    workspace_path=workspace_path,
+                    library_id=library_id,
+                    db_path=db_path,
+                    materialized_papers=[m for m in mats if isinstance(m, dict)],
+                )
             # Write paper file paths (UPDATE to preserve extraction metadata)
             cur = conn.cursor()
             for m in mats:
@@ -944,8 +1026,7 @@ def _run_finalize(
                 if not isinstance(meta, dict):
                     meta = {}
                 title = str(meta.get("title", "") or "").strip() or str(m.get("title", "") or str(m.get("paper_key", "")) or "").strip()
-                md_dir = Path(str(m.get("md_library_path", "") or m.get("md_path", "") or ""))
-                md_full = md_dir / "full.md" if md_dir.is_dir() else md_dir
+                md_full = Path(_resolve_materialized_md_path(m))
                 cite_meta = _citation_metadata_from_markdown(md_full)
                 doi = str(m.get("doi", "") or cite_meta.get("doi", "") or "").strip()
                 authors_json = cite_meta.get("authors_json", [])
@@ -967,7 +1048,7 @@ def _run_finalize(
                         publication_year,
                         str(m.get("html_path", "") or ""),
                         str(m.get("source_pdf_path", "") or ""),
-                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""),
+                        _resolve_materialized_md_path(m),
                         str(m.get("html_path", "") or ""),
                         "literature_import",
                         pid,
@@ -1005,6 +1086,8 @@ def _run_finalize(
         "import_result": import_result,
         "import_warning": import_warning,
         "graph_warning": graph_warning,
+        "concept_index_result": concept_index_result,
+        "concept_index_warning": concept_index_warning,
         "imported_paper_count": imported_count,
         "graph_updated": bool(graph_updated),
         "graph_output_path": graph_output_path,
@@ -1164,7 +1247,7 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
                 raise RuntimeError("import_noop:imported_count_is_zero")
             mats = import_result.get("materialized_papers", []) or []
             mat0 = mats[0] if isinstance(mats, list) and mats else {}
-            materialized_md_path = str((mat0 or {}).get("md_library_path", "") or "").strip()
+            materialized_md_path = _resolve_materialized_md_path(mat0 if isinstance(mat0, dict) else {})
             options = dict(options)
             options["_workspace_path"] = workspace_path
             options["_materialized_md_path"] = materialized_md_path

@@ -168,6 +168,19 @@ def _safe_windows_filename(raw: str, fallback: str = "document") -> str:
     return text[:180]
 
 
+def _dedupe_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    for i in range(1, 1000):
+        cand = parent / f"{stem}_{i}{suffix}"
+        if not cand.exists():
+            return cand
+    return parent / f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
+
+
 def segment_html(paper_id: str, html: str, doi: str = "", title: str = "") -> dict[str, Any]:
     text = _strip_html(html)
     paragraphs = _split_paragraphs(text)
@@ -713,10 +726,6 @@ class LiteratureService:
         md_text = markdown_path.read_text(encoding="utf-8", errors="ignore")
         md_title = _extract_first_md_h1(md_text)
 
-        md_name = _safe_windows_filename(md_title, fallback=markdown_path.stem) + ".md"
-        target_md = out_dir / md_name
-        shutil.copy2(str(markdown_path), str(target_md))
-
         html_text = f"<html><body><pre>{html.escape(md_text)}</pre></body></html>"
         target_html = out_dir / f"{_safe_windows_filename(md_title, fallback='parsed')}.html"
         target_html.write_text(html_text, encoding="utf-8")
@@ -733,6 +742,28 @@ class LiteratureService:
                 else:
                     shutil.copy2(str(item), str(dest))
 
+        # Rename unpacked full.md using its first H1 (Windows-safe filename).
+        full_md = out_dir / "full.md"
+        if not full_md.exists():
+            md_candidates = sorted(out_dir.rglob("full.md"))
+            full_md = md_candidates[0] if md_candidates else Path()
+        renamed_main_md = Path()
+        if full_md.exists():
+            full_md_text = full_md.read_text(encoding="utf-8", errors="ignore")
+            full_md_h1 = _extract_first_md_h1(full_md_text)
+            fallback_name = full_md.stem or markdown_path.stem or "document"
+            new_name = _safe_windows_filename(full_md_h1 or md_title, fallback=fallback_name) + ".md"
+            new_path = _dedupe_path(full_md.with_name(new_name))
+            if full_md.resolve() != new_path.resolve():
+                full_md.rename(new_path)
+            renamed_main_md = new_path
+
+        if not renamed_main_md.exists():
+            md_name = _safe_windows_filename(md_title, fallback=markdown_path.stem) + ".md"
+            target_md = _dedupe_path(out_dir / md_name)
+            shutil.copy2(str(markdown_path), str(target_md))
+            renamed_main_md = target_md
+
         # Clean up intermediate work directory.
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -744,7 +775,7 @@ class LiteratureService:
             "source_kind": "html",
             "html_files": [str(x.resolve()) for x in html_files],
             "md_files": [str(x.resolve()) for x in md_files],
-            "main_md_path": str(target_md.resolve()),
+            "main_md_path": str(renamed_main_md.resolve()),
             "md_title": md_title,
             "command": ["mineru_cloud_api"],
         }
@@ -793,7 +824,7 @@ class LiteratureService:
             html_text = str(mineru.get("html_text", "") or "")
             mineru_main_md_path = str(mineru.get("main_md_path", "") or "")
             md_library_path = str(mineru_latest_dir.resolve())
-            source_md_path = md_library_path
+            source_md_path = mineru_main_md_path or md_library_path
         elif isinstance(source_path, Path) and source_path.exists() and source_path.is_file() and ext == ".md":
             md_raw = source_path.read_text(encoding="utf-8", errors="ignore")
             md_h1 = _extract_first_md_h1(md_raw)
