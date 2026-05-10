@@ -102,7 +102,7 @@ description: 五步工作流提取论文实体并结构化输出：信息抽取 
 - `publication_date`: 发表日期（`YYYY` / `YYYY-MM` / `YYYY-MM-DD`）
 - `online_date`: 在线发表日期（同上格式）
 - `publication_year`: 发表年份（整数）
-- `doi`: DOI（规范文本，不带 URL 前缀）
+- `doi`: 文章的DOI号（规范文本，不带 URL 前缀）
 - `article_url`: 文章 URL（完整链接）
 
 规则：
@@ -118,9 +118,12 @@ description: 五步工作流提取论文实体并结构化输出：信息抽取 
 - `uncertain`：材料不完整，无法判断。
 
 ### 变量与测量
-1. 只提取理论变量（construct），不要把量表项当变量。
+1. 只提取理论变量（construct），不要把量表项和测量方式当变量。
 2. 测量方式写入 `variable_definitions[].measurement`。
 3. 变量名写入 `variable_definitions[].variable_name`，定义写入 `definition`。
+4. 所有位置的变量名使用原文表述，不要自行添加下划线。
+5. 注意提取的效应中的source和target变量名要与variable_definitions中的variable_name理论变量名保持一致。
+6. 所有提取的效应中的source和target变量和variable_definitions中的变量数量和概念完全对齐。
 
 ### moderation 与 interaction
 - 明确“Z 调节 X->Y”写入 `moderations`。
@@ -130,13 +133,6 @@ description: 五步工作流提取论文实体并结构化输出：信息抽取 
 ### 枚举约束
 - `effect_form` 只能是：`positive` / `negative` / `nonlinear` / `unclear`
 - `verification` 只能是：`supported` / `not_supported` / `mixed` / `unclear`
-
-## 工具使用
-### `graph_variable_neighbors`
-- 先 `mode=exact`，未命中或定义不一致再 `mode=semantic`。
-
-### `rag_search`
-- 用于证据回查、文献联系、关系核验。
 
 ## 五步流程
 ### 第一步：信息抽取
