@@ -70,7 +70,12 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=3, help="rag_search top_k")
     args = parser.parse_args()
 
-    mcp_server_path = Path(__file__).resolve().parent / "mcp_server.py"
+    mcp_server_path = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "smj_pipeline"
+        / "kn_mcp_server.py"
+    )
     cmd = [sys.executable, str(mcp_server_path), "--api-base-url", str(args.api_base_url)]
     proc = subprocess.Popen(
         cmd,

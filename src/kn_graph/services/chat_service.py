@@ -146,7 +146,16 @@ class ChatService:
                 {
                     "name": "kn_graph_tools",
                     "command": "uv",
-                    "args": ["run", "python", str(Path(__file__).resolve().parent / "mcp_server.py")],
+                    "args": [
+                        "run",
+                        "python",
+                        str(
+                            Path(__file__).resolve().parents[3]
+                            / "scripts"
+                            / "smj_pipeline"
+                            / "kn_mcp_server.py"
+                        ),
+                    ],
                     "env": {},
                 }
             ],
