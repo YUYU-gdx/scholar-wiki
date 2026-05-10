@@ -1,102 +1,31 @@
-# KN Graph ��Ŀ��������
+﻿# KN Graph 项目规约
 
-## ���̹淶
+## 工程约束
+- 默认先使用 `using-superpowers`。
+- Python 命令统一使用 `uv run`。
+- 禁止手工改用户本地 JSON 配置，除非用户明确要求。
+- 长任务必须设置超时，后台进程用 `Start-Process`。
 
-- Ĭ�����̼��ܣ�`using-superpowers`���ڱ��ֿ��ڣ�������ִ��ʵ�ֻ����ǰ��Ӧ���ȵ��ò���ѭ `using-superpowers`��
-- Python ����������ִ��ͳһʹ�� `uv`��
-- �Ͻ�Ҫ�������û���д��ճ����༭ JSON ���ã������û������������ͨ����ȷ�ı����ؼ��ṩ��
-- ִ�� Bash ����ʱ������ʼ�����ú����� timeout ���������룩����ֹ�޳�ʱ�������ȴ�����̨����Ӧʹ�� `Start-Process` �����������ý��������ѯȷ�Ͼ��������������ڽ�������ϡ�
+## 当前架构（已收口）
+- 唯一后端主链路：`src/kn_graph`。
+- 统一服务入口：`uv run python -m kn_graph serve --port 8013`。
+- Pipeline 运行时在 `src/kn_graph/services/pipeline_runtime.py`。
+- PDF 解析固定为：MinerU 精准解析接口（返回 zip）只调用一次。
+- 解析后流程固定为：重命名主 Markdown（按首个 H1，Windows 安全）并落到 `derived/mineru/latest`。
+- MCP 服务入口：`uv run python src/kn_graph/services/kn_mcp_server.py`。
 
-## ��Ŀ����
+## 目录
+- `src/kn_graph/`：生产代码（唯一业务实现）。
+- `scripts/`：已删除。
+- `tests/`：测试。
+- `docs/`：文档。
 
-KN Graph ������ѧ�����׵�֪ʶͼ�׹������ʴ�ƽ̨����������Χ�ƹ�Ӧ���������ĵĽ�����ʵ���ȡ����ϵ���������ӻ�����������ʴ�
-
-## ��Ŀ�ṹ
-
-```
-kn_gragh/
-������ src/kn_graph/                  �� ����������ع��У������ scripts/��
-������ scripts/smj_pipeline/          �� ��ǰ�����ڣ���Ǩ�ƣ�
-��   ������ serve_graph_api.py          �� ͼ��/Chat/���� API���˿� 8013��
-��   ������ serve_async_pipeline_api.py �� �첽 Pipeline API���˿� 8021��
-��   ������ kn_mcp_server.py            �� MCP ���߷�������stdin/stdout��
-��   ������ ...                         �� ҵ��ű�����ȡ�����ݴ�����
-������ config/                        �� LLM Provider ����
-������ prompt/                         �� ��ȡ��ʾ��ģ��
-������ outputs/                        �� ���в��graph_views.json �ȣ�
-������ tests/                          �� ����
-������ docs/                           �� �ĵ�
-```
-
-## ������ʽ
-
-### ͳһ API ����Ŀ��ܹ�����ʵ�֣�
-
+## 运行命令
 ```bash
 uv run python -m kn_graph serve --port 8013
-```
-
-### ��ǰ������ʽ���ع�ǰ��
-
-```bash
-# ͼ�� + Chat + ���� API
-uv run python scripts/smj_pipeline/serve_graph_api.py --port 8013 --views-json outputs/.../graph_views.json --allow-non-supply-chain
-
-# �첽 Pipeline API
-uv run python scripts/smj_pipeline/serve_async_pipeline_api.py --host 127.0.0.1 --port 8021
-
-# �������������Զ����������������� + ���������
-uv run python scripts/smj_pipeline/app_launcher.py
-```
-
-### MCP ���߷�����
-
-```bash
-uv run python scripts/smj_pipeline/kn_mcp_server.py
-```
-
-## �ؼ�����
-
-| �������� | ��; | Ĭ��ֵ |
-|----------|------|--------|
-| `KN_GRAPH_PORT` | Graph API �˿� | `8013` |
-| `KN_ASYNC_PIPELINE_PORT` | �첽 Pipeline �˿� | `8021` |
-| `CHAT_STORE_DSN` | Chat �洢 DSN | �ڴ� |
-| `PIPELINE_JOB_STORE_DSN` | Pipeline �洢 DSN | SQLite |
-| `PIPELINE_EXECUTOR` | ִ�������� | `inline` |
-| `PIPELINE_REDIS_URL` | Celery broker | `redis://127.0.0.1:6379/0` |
-| `ZHIPU_API_KEY` | ���� API ��Կ | �� |
-| `NVIDIA_API_KEY` | NVIDIA API ��Կ | �� |
-| `LLM_PROVIDER_CONFIG_PATH` | LLM ����·�� | `config/llm_providers.json` |
-| `CHROMADB_PATH` | ChromaDB 持久化目录 | `{data_dir}/chromadb` |
-
-## �ع�״̬
-
-- **������**����˺ϲ�Ϊ�� FastAPI Ӧ�ã���� `docs/superpowers/specs/2026-04-30-backend-unification-design.md`
-- **��ֹ**����Ҫ�������޸� `frontend/` Ŀ¼�µ��κ�����
-
-## ��� API �˵����
-
-### �˿� 8013��Graph API �� �ع�ǰ��
-
-| �� | �˵��� | �ؼ�·�� |
-|----|--------|----------|
-| Graph | 7 | `/graph/overview`, `/graph/full`, `/graph/search`, `/graph/neighborhood`, `/paper/{id}`, `/paper/{id}/files`, `/variable/{id}` |
-| Chat | 15 | `/chat/sessions/*`, `/chat/codex/*`, `/chat/provider-*` |
-| Literature | 4 | `/literature/search`, `/literature/libraries`, `/literature/import`, `/literature/answer` |
-| Workspace | 3 | `/api/v2/workspace/layout*` |
-
-### �˿� 8021��Pipeline API �� �ع�ǰ��
-
-| �� | �˵��� | �ؼ�·�� |
-|----|--------|----------|
-| Health | 2 | `/healthz`, `/v1/pipeline/health` |
-| Jobs | 5 | `/v1/jobs`, `/v1/jobs/{id}`, `/v1/jobs/{id}/result`, `/v1/jobs/{id}/cancel`, `/v1/jobs/{id}/retry` |
-| Pipeline | 2 | `/v1/pipeline/parse-extract`, `/v1/pipeline/parse-extract/batch` |
-| SSE | 1 | `/v1/jobs/{id}/events` |
-
-## ����
-
-```bash
 uv run python -m unittest discover -s tests -p "test_*.py" -v
 ```
+
+## 禁止项
+- 禁止修改 `frontend/`。
+- 禁止新增对已删除目录 `scripts/*` 的运行时依赖。

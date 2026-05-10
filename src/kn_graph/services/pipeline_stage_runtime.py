@@ -83,7 +83,7 @@ def _handler_paper_extract(service: PipelineService, task: dict[str, Any], _shou
             raise RuntimeError("import_noop:imported_count_is_zero")
         mats = import_result.get("materialized_papers", []) or []
         mat0 = mats[0] if isinstance(mats, list) and mats else {}
-        materialized_md_path = str((mat0 or {}).get("md_library_path", "") or "").strip()
+        materialized_md_path = pipeline_runtime._resolve_materialized_md_path(mat0 if isinstance(mat0, dict) else {})
         options["_workspace_path"] = workspace_path
         options["_materialized_md_path"] = materialized_md_path
         extract_result = pipeline_runtime._run_agent_extraction(job_id, parse_meta, run_dir, store, options)
@@ -173,4 +173,3 @@ def start_pipeline_stage_workers(settings: Settings) -> list[threading.Thread]:
         )
     )
     return threads
-

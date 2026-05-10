@@ -702,84 +702,6 @@ class LiteratureService:
             for paper_key in sorted(existing.keys()):
                 f.write(json.dumps(existing[paper_key], ensure_ascii=False) + "\n")
 
-    def _run_mineru_cloud_to_dir(self, source_pdf: Path, out_dir: Path) -> dict[str, Any]:
-        """Run Mineru cloud API to parse a single PDF, placing outputs in *out_dir*."""
-        if out_dir.exists():
-            shutil.rmtree(out_dir, ignore_errors=True)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        # parse_single_pdf creates parse/ inside the run_dir, so we use an
-        # intermediate work directory and then copy results into out_dir.
-        work_dir = out_dir.parent / "_mineru_cloud_work"
-        if work_dir.exists():
-            shutil.rmtree(work_dir, ignore_errors=True)
-
-        try:
-            result = parse_single_pdf(source_pdf, work_dir, options={"mineru_api_key": self._settings.mineru_api_key})
-        except Exception as exc:
-            raise RuntimeError(f"mineru_cloud_failed: {exc}") from exc
-
-        markdown_path = Path(str(result.get("markdown_path", "") or ""))
-        if not markdown_path.exists():
-            raise RuntimeError("mineru_cloud_produced_no_markdown")
-
-        md_text = markdown_path.read_text(encoding="utf-8", errors="ignore")
-        md_title = _extract_first_md_h1(md_text)
-
-        html_text = f"<html><body><pre>{html.escape(md_text)}</pre></body></html>"
-        target_html = out_dir / f"{_safe_windows_filename(md_title, fallback='parsed')}.html"
-        target_html.write_text(html_text, encoding="utf-8")
-
-        # Copy unpacked zip contents (images, supplementary files) into out_dir.
-        zip_unpacked = work_dir / "parse" / "mineru_zip_unpacked"
-        if zip_unpacked.exists():
-            for item in zip_unpacked.iterdir():
-                dest = out_dir / item.name
-                if item.is_dir():
-                    if dest.exists():
-                        shutil.rmtree(dest, ignore_errors=True)
-                    shutil.copytree(str(item), str(dest))
-                else:
-                    shutil.copy2(str(item), str(dest))
-
-        # Rename unpacked full.md using its first H1 (Windows-safe filename).
-        full_md = out_dir / "full.md"
-        if not full_md.exists():
-            md_candidates = sorted(out_dir.rglob("full.md"))
-            full_md = md_candidates[0] if md_candidates else Path()
-        renamed_main_md = Path()
-        if full_md.exists():
-            full_md_text = full_md.read_text(encoding="utf-8", errors="ignore")
-            full_md_h1 = _extract_first_md_h1(full_md_text)
-            fallback_name = full_md.stem or markdown_path.stem or "document"
-            new_name = _safe_windows_filename(full_md_h1 or md_title, fallback=fallback_name) + ".md"
-            new_path = _dedupe_path(full_md.with_name(new_name))
-            if full_md.resolve() != new_path.resolve():
-                full_md.rename(new_path)
-            renamed_main_md = new_path
-
-        if not renamed_main_md.exists():
-            md_name = _safe_windows_filename(md_title, fallback=markdown_path.stem) + ".md"
-            target_md = _dedupe_path(out_dir / md_name)
-            shutil.copy2(str(markdown_path), str(target_md))
-            renamed_main_md = target_md
-
-        # Clean up intermediate work directory.
-        shutil.rmtree(work_dir, ignore_errors=True)
-
-        html_files = list(out_dir.rglob("*.html"))
-        md_files = list(out_dir.rglob("*.md"))
-
-        return {
-            "html_text": html_text,
-            "source_kind": "html",
-            "html_files": [str(x.resolve()) for x in html_files],
-            "md_files": [str(x.resolve()) for x in md_files],
-            "main_md_path": str(renamed_main_md.resolve()),
-            "md_title": md_title,
-            "command": ["mineru_cloud_api"],
-        }
-
     def _materialize_workspace_assets(
         self,
         library_id: str,
@@ -820,11 +742,48 @@ class LiteratureService:
             parser_name = "mineru"
             parser_version = str(self._settings.mineru_version or "").strip() or "unknown"
             parser_run_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            mineru = self._run_mineru_cloud_to_dir(source_pdf, mineru_latest_dir)
-            html_text = str(mineru.get("html_text", "") or "")
-            mineru_main_md_path = str(mineru.get("main_md_path", "") or "")
+            preparsed_dir_raw = str(row.get("preparsed_mineru_dir", "") or "").strip()
+            preparsed_md_raw = str(row.get("preparsed_main_md_path", "") or "").strip()
+            preparsed_html_raw = str(row.get("preparsed_html_path", "") or "").strip()
+            preparsed_dir = Path(preparsed_dir_raw) if preparsed_dir_raw else None
+            preparsed_md = Path(preparsed_md_raw) if preparsed_md_raw else None
+            preparsed_html = Path(preparsed_html_raw) if preparsed_html_raw else None
+
+            if not (isinstance(preparsed_dir, Path) and preparsed_dir.exists() and preparsed_dir.is_dir()):
+                raise RuntimeError("missing_preparsed_mineru_output_for_pdf_import")
+            if mineru_latest_dir.exists():
+                shutil.rmtree(mineru_latest_dir, ignore_errors=True)
+            shutil.copytree(preparsed_dir, mineru_latest_dir, dirs_exist_ok=True)
+            md_candidates = sorted(mineru_latest_dir.rglob("*.md"))
+            chosen_md: Path | None = None
+            if isinstance(preparsed_md, Path) and preparsed_md.exists() and preparsed_md.is_file():
+                for cand in md_candidates:
+                    if cand.name == preparsed_md.name:
+                        chosen_md = cand
+                        break
+            if chosen_md is None and md_candidates:
+                preferred = [x for x in md_candidates if x.name.lower() not in {"full.md", "merged.md", "output.md"}]
+                chosen_md = preferred[0] if preferred else md_candidates[0]
+            if chosen_md is None or not chosen_md.exists():
+                raise RuntimeError("missing_markdown_in_preparsed_mineru_output")
+
+            chosen_text = chosen_md.read_text(encoding="utf-8", errors="ignore")
+            chosen_h1 = _extract_first_md_h1(chosen_text)
+            new_name = _safe_windows_filename(chosen_h1 or title_candidate or chosen_md.stem, fallback=chosen_md.stem) + ".md"
+            target_md = _dedupe_path(mineru_latest_dir / new_name)
+            if chosen_md.resolve() != target_md.resolve():
+                chosen_md.rename(target_md)
+            mineru_main_md_path = str(target_md.resolve())
+            source_md_path = mineru_main_md_path
+            for leftover in sorted(mineru_latest_dir.rglob("*.md")):
+                if leftover.resolve() != target_md.resolve():
+                    leftover.unlink(missing_ok=True)
             md_library_path = str(mineru_latest_dir.resolve())
-            source_md_path = mineru_main_md_path or md_library_path
+            if isinstance(preparsed_html, Path) and preparsed_html.exists() and preparsed_html.is_file():
+                html_text = preparsed_html.read_text(encoding="utf-8", errors="ignore")
+            else:
+                md_text = Path(mineru_main_md_path).read_text(encoding="utf-8", errors="ignore")
+                html_text = f"<html><body><pre>{html.escape(md_text)}</pre></body></html>"
         elif isinstance(source_path, Path) and source_path.exists() and source_path.is_file() and ext == ".md":
             md_raw = source_path.read_text(encoding="utf-8", errors="ignore")
             md_h1 = _extract_first_md_h1(md_raw)

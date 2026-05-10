@@ -1,146 +1,115 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 # KN Graph
 
-学术文献知识图谱构建与问答平台，聚焦供应链研究方向。
-
-## 快速启动
-
+瀛︽湳鏂囩尞鐭ヨ瘑鍥捐氨鏋勫缓涓庨棶绛斿钩鍙帮紝鑱氱劍渚涘簲閾剧爺绌舵柟鍚戙€?
+## 蹇€熷惎鍔?
 ```bash
-# 新统一入口（FastAPI 单服务，重构中）：
+# 鏂扮粺涓€鍏ュ彛锛團astAPI 鍗曟湇鍔★紝閲嶆瀯涓級锛?uv run python -m kn_graph serve --port 8013
+
+# 鏃х増鍏ュ彛锛堜粛鍦ㄤ娇鐢級锛?# 涓?API 鏈嶅姟锛堝浘璋?+ 瀵硅瘽 + 鏂囩尞 + 宸ヤ綔鍖猴級锛岀鍙?8013
 uv run python -m kn_graph serve --port 8013
 
-# 旧版入口（仍在使用）：
-# 主 API 服务（图谱 + 对话 + 文献 + 工作区），端口 8013
-uv run python scripts/smj_pipeline/serve_graph_api.py --port 8013 --views-json outputs/.../graph_views.json --allow-non-supply-chain
+# 寮傛绠＄嚎 API锛圥DF 瑙ｆ瀽 + 鎶藉彇浠诲姟锛夛紝绔彛 8021
+uv run python -m kn_graph serve --port 8013
 
-# 异步管线 API（PDF 解析 + 抽取任务），端口 8021
-uv run python scripts/smj_pipeline/serve_async_pipeline_api.py --host 127.0.0.1 --port 8021
+# 妗岄潰鍚姩鍣紙鍚屾椂鍚姩涓や釜鏈嶅姟骞舵墦寮€娴忚鍣級
+uv run python -m kn_graph serve --port 8013
 
-# 桌面启动器（同时启动两个服务并打开浏览器）
-uv run python scripts/smj_pipeline/app_launcher.py
-
-# 启动 Celery worker（分布式管线执行）
-uv run python -m kn_graph worker
+# 鍚姩 Celery worker锛堝垎甯冨紡绠＄嚎鎵ц锛?uv run python -m kn_graph worker
 ```
 
-## 常用命令
+## 甯哥敤鍛戒护
 
 ```bash
-# 运行全部测试（unittest）
-uv run python -m unittest discover -s tests -p "test_*.py" -v
+# 杩愯鍏ㄩ儴娴嬭瘯锛坲nittest锛?uv run python -m unittest discover -s tests -p "test_*.py" -v
 
-# 运行全部测试（pytest）
-uv run pytest tests/ -v
+# 杩愯鍏ㄩ儴娴嬭瘯锛坧ytest锛?uv run pytest tests/ -v
 
-# 运行单个测试文件
+# 杩愯鍗曚釜娴嬭瘯鏂囦欢
 uv run python -m unittest tests/test_provider_registry.py -v
 uv run pytest tests/test_provider_registry.py -v
 
-# 运行单个测试用例
+# 杩愯鍗曚釜娴嬭瘯鐢ㄤ緥
 uv run python -m unittest tests.test_provider_registry.TestProviderRegistry.test_load_config -v
 uv run pytest tests/test_provider_registry.py::TestProviderRegistry::test_load_config -v
 ```
 
-## 架构概览
+## 鏋舵瀯姒傝
 
-### 当前状态：双服务（正在统一）
+### 褰撳墠鐘舵€侊細鍙屾湇鍔★紙姝ｅ湪缁熶竴锛?
+1. **serve_graph_api.py** 鈥?鍩轰簬 stdlib `http.server`锛岀鍙?8013銆傚鐞嗗浘璋辫鍥俱€佸璇濅細璇濄€佹枃鐚绱€佸伐浣滃尯甯冨眬鍙婇潤鎬佸墠绔墭绠°€傚崟鏂囦欢绾?2000 琛屻€?2. **serve_async_pipeline_api.py** 鈥?鍩轰簬 FastAPI锛岀鍙?8021銆傚鐞?PDF 涓婁紶 鈫?瑙ｆ瀽 鈫?鎶藉彇鐨勭绾夸换鍔＄敓鍛藉懆鏈熴€?3. **kn_mcp_server.py** 鈥?stdin/stdout 鏂瑰紡鐨?MCP 宸ュ叿鏈嶅姟锛堥潪 HTTP锛夈€備负 Codex CLI 鎻愪緵 `rag_search` 鍜?`graph_search` 宸ュ叿銆?
+### 鐩爣鐘舵€侊細鍗曚竴 FastAPI 搴旂敤 (`src/kn_graph/`)
 
-1. **serve_graph_api.py** — 基于 stdlib `http.server`，端口 8013。处理图谱视图、对话会话、文献检索、工作区布局及静态前端托管。单文件约 2000 行。
-2. **serve_async_pipeline_api.py** — 基于 FastAPI，端口 8021。处理 PDF 上传 → 解析 → 抽取的管线任务生命周期。
-3. **kn_mcp_server.py** — stdin/stdout 方式的 MCP 工具服务（非 HTTP）。为 Codex CLI 提供 `rag_search` 和 `graph_search` 工具。
-
-### 目标状态：单一 FastAPI 应用 (`src/kn_graph/`)
-
-重构将两个服务合并到 `src/kn_graph/`，采用基于路由的模块化设计。详见 `docs/superpowers/specs/2026-04-30-backend-unification-design.md`。
-
+閲嶆瀯灏嗕袱涓湇鍔″悎骞跺埌 `src/kn_graph/`锛岄噰鐢ㄥ熀浜庤矾鐢辩殑妯″潡鍖栬璁°€傝瑙?`docs/superpowers/specs/2026-04-30-backend-unification-design.md`銆?
 ```
 src/kn_graph/
-├── __main__.py          # 入口：python -m kn_graph serve|worker
-├── app.py               # FastAPI 应用工厂，挂载所有路由
-├── config.py            # Pydantic Settings（环境变量前缀 KN_GRAPH_）
-├── routers/             # /graph/*, /chat/*, /literature/*, /pipeline/*, /workspace/*
-├── models/              # Pydantic 请求/响应模型
-├── services/            # 业务逻辑
-├── migration.py         # 旧数据迁移
-└── workers/celery_app.py
+鈹溾攢鈹€ __main__.py          # 鍏ュ彛锛歱ython -m kn_graph serve|worker
+鈹溾攢鈹€ app.py               # FastAPI 搴旂敤宸ュ巶锛屾寕杞芥墍鏈夎矾鐢?鈹溾攢鈹€ config.py            # Pydantic Settings锛堢幆澧冨彉閲忓墠缂€ KN_GRAPH_锛?鈹溾攢鈹€ routers/             # /graph/*, /chat/*, /literature/*, /pipeline/*, /workspace/*
+鈹溾攢鈹€ models/              # Pydantic 璇锋眰/鍝嶅簲妯″瀷
+鈹溾攢鈹€ services/            # 涓氬姟閫昏緫
+鈹溾攢鈹€ migration.py         # 鏃ф暟鎹縼绉?鈹斺攢鈹€ workers/celery_app.py
 ```
 
-新旧服务的 URL 路径保持一致。
-
-### 抽取管线（核心业务逻辑）
-
-PDF 上传 → MinerU 解析（→ markdown）→ LLM 抽取（→ 结构化 JSON，按 `extraction/schemas.py` 定义）→ 校验 → 可选人工审核 → Postgres 入库 → `build_graph_views.py` → `graph_views.json` 由 API 对外服务。
-
-关键管线脚本位于 `scripts/smj_pipeline/`：
-- `extraction/schemas.py` — 抽取结构的 Pydantic 模型（变量、直接效应、交互、调节）
-- `extraction/extractor.py` — LLM 抽取执行器
-- `extraction/validator.py` — 抽取后校验
-- `storage/postgres_repo.py` — Postgres DDL 与 CRUD
-- `import_raw_outputs_to_postgres.py` — 批量入库
-- `build_graph_views.py` — 从 Postgres 构建 `graph_views.json`
+鏂版棫鏈嶅姟鐨?URL 璺緞淇濇寔涓€鑷淬€?
+### 鎶藉彇绠＄嚎锛堟牳蹇冧笟鍔￠€昏緫锛?
+PDF 涓婁紶 鈫?MinerU 瑙ｆ瀽锛堚啋 markdown锛夆啋 LLM 鎶藉彇锛堚啋 缁撴瀯鍖?JSON锛屾寜 `extraction/schemas.py` 瀹氫箟锛夆啋 鏍￠獙 鈫?鍙€変汉宸ュ鏍?鈫?Postgres 鍏ュ簱 鈫?`build_graph_views.py` 鈫?`graph_views.json` 鐢?API 瀵瑰鏈嶅姟銆?
+鍏抽敭绠＄嚎鑴氭湰浣嶄簬 `src/kn_graph/services/`锛?- `extraction/schemas.py` 鈥?鎶藉彇缁撴瀯鐨?Pydantic 妯″瀷锛堝彉閲忋€佺洿鎺ユ晥搴斻€佷氦浜掋€佽皟鑺傦級
+- `extraction/extractor.py` 鈥?LLM 鎶藉彇鎵ц鍣?- `extraction/validator.py` 鈥?鎶藉彇鍚庢牎楠?- `storage/postgres_repo.py` 鈥?Postgres DDL 涓?CRUD
+- `import_raw_outputs_to_postgres.py` 鈥?鎵归噺鍏ュ簱
+- `build_graph_views.py` 鈥?浠?Postgres 鏋勫缓 `graph_views.json`
 
 ### graph_views.json
 
-API 消费的核心只读数据产物。包含节点（变量/概念）、边（直接效应）、调节链接、交互链接、论文元数据及搜索索引。由 `build_graph_views.py` 从 Postgres 构建。API 通过 `active.json` → 库注册表 → 工作区路径来解析使用哪个 views 文件。
+API 娑堣垂鐨勬牳蹇冨彧璇绘暟鎹骇鐗┿€傚寘鍚妭鐐癸紙鍙橀噺/姒傚康锛夈€佽竟锛堢洿鎺ユ晥搴旓級銆佽皟鑺傞摼鎺ャ€佷氦浜掗摼鎺ャ€佽鏂囧厓鏁版嵁鍙婃悳绱㈢储寮曘€傜敱 `build_graph_views.py` 浠?Postgres 鏋勫缓銆侫PI 閫氳繃 `active.json` 鈫?搴撴敞鍐岃〃 鈫?宸ヤ綔鍖鸿矾寰勬潵瑙ｆ瀽浣跨敤鍝釜 views 鏂囦欢銆?
+### 鏂囩尞妫€绱?
+鍩轰簬瀛︽湳璁烘枃鐗囨鐨勬贩鍚堝叧閿瘝+鍚戦噺妫€绱€侰hromaDB锛堝祵鍏ュ紡鍚戦噺鏁版嵁搴擄級瀛樺偍宓屽叆鍚戦噺锛孲QLite FTS5 鎻愪緵 BM25 鍏抽敭璇嶆绱紝RRF 铻嶅悎鎺掑簭銆備互鏂囩尞搴撲负鍗曚綅闅旂瀛樺偍銆?
+### 瀵硅瘽鏈嶅姟
 
-### 文献检索
-
-基于学术论文片段的混合关键词+向量检索。ChromaDB（嵌入式向量数据库）存储嵌入向量，SQLite FTS5 提供 BM25 关键词检索，RRF 融合排序。以文献库为单位隔离存储。
-
-### 对话服务
-
-基于 Codex CLI 的 Agent RAG 对话。会话存储在 SQLite（`chat/store.sqlite`）。对话服务将文献检索、图谱搜索、论文/变量查询及 Codex runner 配置串联在一起。
-
+鍩轰簬 Codex CLI 鐨?Agent RAG 瀵硅瘽銆備細璇濆瓨鍌ㄥ湪 SQLite锛坄chat/store.sqlite`锛夈€傚璇濇湇鍔″皢鏂囩尞妫€绱€佸浘璋辨悳绱€佽鏂?鍙橀噺鏌ヨ鍙?Codex runner 閰嶇疆涓茶仈鍦ㄤ竴璧枫€?
 ### scholarai-workbench/
 
-独立的前端应用（Node.js / React + Vite + Tailwind），用于阅读和批注学术论文。基于 Google AI Studio 应用模板构建。**不同于**已废弃的 `frontend/` 目录（该目录禁止修改）。
+鐙珛鐨勫墠绔簲鐢紙Node.js / React + Vite + Tailwind锛夛紝鐢ㄤ簬闃呰鍜屾壒娉ㄥ鏈鏂囥€傚熀浜?Google AI Studio 搴旂敤妯℃澘鏋勫缓銆?*涓嶅悓浜?*宸插簾寮冪殑 `frontend/` 鐩綍锛堣鐩綍绂佹淇敼锛夈€?
+## 閰嶇疆
 
-## 配置
-
-| 环境变量 | 用途 | 默认值 |
+| 鐜鍙橀噺 | 鐢ㄩ€?| 榛樿鍊?|
 |---------------------|---------|---------|
-| `KN_GRAPH_PORT` | 主 API 端口 | `8013` |
-| `KN_ASYNC_PIPELINE_PORT` | 管线 API 端口 | `8021` |
-| `CHAT_STORE_DSN` | 对话存储 DSN | 内存 |
-| `PIPELINE_JOB_STORE_DSN` | 管线任务存储 DSN | SQLite |
-| `PIPELINE_EXECUTOR` | 执行器类型（`inline` 或 `celery`） | `inline` |
+| `KN_GRAPH_PORT` | 涓?API 绔彛 | `8013` |
+| `KN_ASYNC_PIPELINE_PORT` | 绠＄嚎 API 绔彛 | `8021` |
+| `CHAT_STORE_DSN` | 瀵硅瘽瀛樺偍 DSN | 鍐呭瓨 |
+| `PIPELINE_JOB_STORE_DSN` | 绠＄嚎浠诲姟瀛樺偍 DSN | SQLite |
+| `PIPELINE_EXECUTOR` | 鎵ц鍣ㄧ被鍨嬶紙`inline` 鎴?`celery`锛?| `inline` |
 | `PIPELINE_REDIS_URL` | Celery broker | `redis://127.0.0.1:6379/0` |
-| `ZHIPU_API_KEY` | 智谱 API 密钥 | — |
-| `NVIDIA_API_KEY` | NVIDIA API 密钥 | — |
-| `LLM_PROVIDER_CONFIG_PATH` | LLM 配置文件路径 | `config/llm_providers.json` |
-| `CHROMADB_PATH` | ChromaDB 持久化目录 | `{data_dir}/chromadb` |
-| `GRAPH_EMBEDDING_MODEL` | 图谱搜索可选嵌入模型 | （哈希回退） |
-| `LITERATURE_LIBRARY_INDEX_ROOT` | 文献库索引根目录 | `outputs/literature_libraries` |
-| `CHAT_CODEX_CONFIG_PATH` | Codex runner 配置 | `outputs/chat/codex_runner_config.json` |
+| `ZHIPU_API_KEY` | 鏅鸿氨 API 瀵嗛挜 | 鈥?|
+| `NVIDIA_API_KEY` | NVIDIA API 瀵嗛挜 | 鈥?|
+| `LLM_PROVIDER_CONFIG_PATH` | LLM 閰嶇疆鏂囦欢璺緞 | `config/llm_providers.json` |
+| `CHROMADB_PATH` | ChromaDB 鎸佷箙鍖栫洰褰?| `{data_dir}/chromadb` |
+| `GRAPH_EMBEDDING_MODEL` | 鍥捐氨鎼滅储鍙€夊祵鍏ユā鍨?| 锛堝搱甯屽洖閫€锛?|
+| `LITERATURE_LIBRARY_INDEX_ROOT` | 鏂囩尞搴撶储寮曟牴鐩綍 | `outputs/literature_libraries` |
+| `CHAT_CODEX_CONFIG_PATH` | Codex runner 閰嶇疆 | `outputs/chat/codex_runner_config.json` |
 
-所有配置项使用 `KN_GRAPH_` 环境变量前缀。本地开发请将 `.env.example` 复制为 `.env`。
+鎵€鏈夐厤缃」浣跨敤 `KN_GRAPH_` 鐜鍙橀噺鍓嶇紑銆傛湰鍦板紑鍙戣灏?`.env.example` 澶嶅埗涓?`.env`銆?
+## Run 绠＄悊
 
-## Run 管理
+绠＄嚎杈撳嚭鎸?run 缁勭粐鍦?`outputs/runs/` 涓嬨€俙outputs/runs/active.json` 鎸囧悜褰撳墠娲昏穬鐨?run銆備娇鐢?`src/kn_graph/services/` 涓殑鑴氭湰绠＄悊锛?- `list_runs.py` 鈥?鍒楀嚭鍙敤 run
+- `activate_run.py` 鈥?鍒囨崲娲昏穬 run
+- `finalize_batch_run.py` 鈥?瀹屾垚涓€涓壒閲?run
 
-管线输出按 run 组织在 `outputs/runs/` 下。`outputs/runs/active.json` 指向当前活跃的 run。使用 `scripts/smj_pipeline/` 中的脚本管理：
-- `list_runs.py` — 列出可用 run
-- `activate_run.py` — 切换活跃 run
-- `finalize_batch_run.py` — 完成一个批量 run
+## 鏂囨。绱㈠紩
 
-## 文档索引
+- 椤圭洰瑙勭害鎬昏锛歚docs/project_spec_index.md`
+- 鍥捐氨 API 瑙勭害锛歚docs/api.md`
+- 寮傛绠＄嚎 API 瑙勭害锛歚docs/async_pipeline_api.md`
+- 鏁版嵁妯″瀷瑙勭害锛歚docs/data_model.md`
+- 鏂囦欢瀛樺偍涓庣鍙ｈ绾︼細`docs/storage_and_port_conventions.md`
+- 鍚庣缁熶竴璁捐锛歚docs/superpowers/specs/2026-04-30-backend-unification-design.md`
 
-- 项目规约总览：`docs/project_spec_index.md`
-- 图谱 API 规约：`docs/api.md`
-- 异步管线 API 规约：`docs/async_pipeline_api.md`
-- 数据模型规约：`docs/data_model.md`
-- 文件存储与端口规约：`docs/storage_and_port_conventions.md`
-- 后端统一设计：`docs/superpowers/specs/2026-04-30-backend-unification-design.md`
+## 閲嶆瀯鐘舵€?
+- **杩涜涓?*锛氬悗绔粺涓€涓哄崟涓€ `src/kn_graph/` FastAPI 鍖呫€傝繃娓℃湡闂?`src/kn_graph/services/` 涓殑鏃ц剼鏈粛鍙甯镐娇鐢ㄣ€傛柊浠ｇ爜搴旀斁鍏?`src/kn_graph/`銆?- **绂佹**锛氫笉寰楀垱寤烘垨淇敼 `frontend/` 鐩綍鐨勪换浣曞唴瀹广€?
+## LLM 鎻愪緵鍟嗛厤缃?
+- 閰嶇疆鏂囦欢锛歚config/llm_providers.json`
+- 瀵硅瘽銆佸紓姝ョ绾垮拰鎶藉彇鍧囦娇鐢ㄥ悓涓€涓彁渚涘晢娉ㄥ唽琛細`src/kn_graph/providers/registry.py`
+- 瑕嗙洊閰嶇疆璺緞锛歚set LLM_PROVIDER_CONFIG_PATH=path/to/config.json`
 
-## 重构状态
-
-- **进行中**：后端统一为单一 `src/kn_graph/` FastAPI 包。过渡期间 `scripts/smj_pipeline/` 中的旧脚本仍可正常使用。新代码应放入 `src/kn_graph/`。
-- **禁止**：不得创建或修改 `frontend/` 目录的任何内容。
-
-## LLM 提供商配置
-
-- 配置文件：`config/llm_providers.json`
-- 对话、异步管线和抽取均使用同一个提供商注册表：`scripts/smj_pipeline/llm/provider_registry.py`
-- 覆盖配置路径：`set LLM_PROVIDER_CONFIG_PATH=path/to/config.json`

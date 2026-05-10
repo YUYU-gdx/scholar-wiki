@@ -34,7 +34,7 @@ class ClassifyBaseDatasetABCTest(unittest.TestCase):
                 "uv",
                 "run",
                 "python",
-                "scripts/smj_pipeline/classify_base_dataset_abc.py",
+                "src/kn_graph/services/classify_base_dataset_abc.py",
                 "--input-base-dataset",
                 str(base_jsonl),
                 "--output-dir",

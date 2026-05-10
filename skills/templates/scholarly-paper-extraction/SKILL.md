@@ -167,7 +167,7 @@ description: 五步工作流提取论文实体并结构化输出：信息抽取 
 ### 第五步：结构化输出
 分别按照要求结构化输出到：
 - extract_result.json
-- 当前文献 Reader Note
+- 当前文献 Reader Note（若无关联文献则不必）
 
 ## Reader Notes 回写规范（如果执行回写）
 使用固定块语法写入新导入文献的md文件中：

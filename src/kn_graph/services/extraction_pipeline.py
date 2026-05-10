@@ -2,50 +2,13 @@
 
 from dataclasses import asdict, dataclass
 import argparse
-import importlib.util
 import json
 from pathlib import Path
-import sys
 from typing import Any, Iterable, Iterator, Protocol
-
-_SCRIPTS_SMJ_DIR = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline"
-
-
-def _load_env_utils():
-    module_path = _SCRIPTS_SMJ_DIR / "env_utils.py"
-    spec = importlib.util.spec_from_file_location("smj_pipeline_env_utils_for_run_extraction_mvp", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load module: {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_ENV_UTILS = _load_env_utils()
-
-
-def _load_sibling_module(module_name: str, relative_path: str):
-    module_path = _SCRIPTS_SMJ_DIR / relative_path
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load module: {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_QUALIFIER_MOD = _load_sibling_module("smj_pipeline_extraction_qualifier", "extraction/qualifier.py")
-_LOCATOR_MOD = _load_sibling_module("smj_pipeline_extraction_locator", "extraction/locator.py")
-_VALIDATOR_MOD = _load_sibling_module("smj_pipeline_extraction_validator", "extraction/validator.py")
-_REVIEW_QUEUE_MOD = _load_sibling_module("smj_pipeline_extraction_review_queue", "extraction/review_queue.py")
-
-classify_document = _QUALIFIER_MOD.classify_document
-locate_main_model_evidence = _LOCATOR_MOD.locate_main_model_evidence
-validate_relation_records = _VALIDATOR_MOD.validate_relation_records
-build_review_queue = _REVIEW_QUEUE_MOD.build_review_queue
-write_review_queue_jsonl = _REVIEW_QUEUE_MOD.write_review_queue_jsonl
+from kn_graph.services.extraction.qualifier import classify_document
+from kn_graph.services.extraction.locator import locate_main_model_evidence
+from kn_graph.services.extraction.review_queue import build_review_queue, write_review_queue_jsonl
+from kn_graph.services.extraction.validator import validate_relation_records
 
 from kn_graph.services.extraction_extractor import extract_records_with_raw
 

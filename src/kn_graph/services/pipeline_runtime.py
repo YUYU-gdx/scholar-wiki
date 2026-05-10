@@ -202,6 +202,11 @@ def _resolve_materialized_md_path(materialized: dict[str, Any]) -> str:
             if p.is_file():
                 return str(p)
             if p.is_dir():
+                # Prefer the primary titled markdown file over generic full.md.
+                md_files = sorted(x for x in p.glob("*.md") if x.is_file())
+                preferred = [x for x in md_files if x.name.lower() not in {"full.md", "merged.md", "output.md"}]
+                if preferred:
+                    return str(preferred[0])
                 for name in ("full.md", "merged.md", "output.md"):
                     cand = p / name
                     if cand.exists() and cand.is_file():
@@ -715,6 +720,10 @@ def _run_materialize_import(
                 "title": title,
                 "offline_html_path": str(parsed_html),
                 "source_path": str(input_pdf.resolve()),
+                "preparsed_main_md_path": str(parse_meta.get("markdown_path", "") or ""),
+                "preparsed_html_path": str(parse_meta.get("html_path", "") or ""),
+                "preparsed_zip_path": str(parse_meta.get("zip_path", "") or ""),
+                "preparsed_mineru_dir": str((run_dir / "parse" / "mineru_zip_unpacked").resolve()),
             }
             manifest_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
             import_result = literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id})

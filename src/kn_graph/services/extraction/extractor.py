@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib.util
 import json
+from pathlib import Path
+import sys
 from typing import Any, Protocol
 
-from kn_graph.models import extraction as schemas
-from kn_graph.services.extraction import prompts as extraction_prompts
 
 _REQUIRED_SCALAR_KEYS = (
     "extractability_status",
@@ -13,8 +14,14 @@ _REQUIRED_SCALAR_KEYS = (
     "extractability_reason",
     "extractability_evidence_section",
 )
-_REQUIRED_LIST_KEYS = ("direct_effects",)
-_OPTIONAL_LIST_KEYS = ("variable_definitions", "moderations", "interactions")
+_REQUIRED_LIST_KEYS = (
+    "direct_effects",
+)
+_OPTIONAL_LIST_KEYS = (
+    "variable_definitions",
+    "moderations",
+    "interactions",
+)
 
 
 class LLMClient(Protocol):
@@ -40,10 +47,11 @@ def extract_records(document_html: str, llm_client: LLMClient) -> ExtractionBund
 
 
 def extract_records_with_raw(document_html: str, llm_client: LLMClient) -> tuple[ExtractionBundle, str]:
-    system_prompt, user_content = extraction_prompts.build_extraction_messages(document_html)
+    prompts_module = _load_sibling_module("smj_pipeline_extraction_prompts", "prompts.py")
+    system_prompt, user_content = prompts_module.build_extraction_messages(document_html)
     response_text = _complete_with_messages(llm_client, user_content=user_content, system_prompt=system_prompt)
     bundle = parse_extraction_response(response_text)
-    html_domains = list(extraction_prompts.extract_domain_tags_from_html(document_html))
+    html_domains = list(getattr(prompts_module, "extract_domain_tags_from_html")(document_html))
     if html_domains:
         bundle.paper_domains = html_domains
     return bundle, response_text
@@ -59,6 +67,8 @@ def parse_extraction_response(response_text: str) -> ExtractionBundle:
     missing_keys = missing_scalar + missing_list
     if missing_keys:
         raise ValueError(f"missing extraction keys: {', '.join(missing_keys)}")
+
+    schemas = _load_sibling_module("smj_pipeline_extraction_schemas_for_extractor", "schemas.py")
 
     extractability_status = _normalize_extractability_status(payload.get("extractability_status", ""))
     if extractability_status not in set(schemas.ALLOWED_EXTRACTABILITY_STATUS):
@@ -86,10 +96,10 @@ def parse_extraction_response(response_text: str) -> ExtractionBundle:
     moderations = [_normalize_moderation_row(r) for r in normalized_lists["moderations"]]
     interactions = [_normalize_interaction_row(r) for r in normalized_lists["interactions"]]
 
-    _validate_direct_effects(direct_effects)
+    _validate_direct_effects(direct_effects, schemas)
     _validate_variable_definitions(variable_definitions)
-    _validate_moderations(moderations)
-    _validate_interactions(interactions)
+    _validate_moderations(moderations, schemas)
+    _validate_interactions(interactions, schemas)
 
     return ExtractionBundle(
         extractability_status=extractability_status,
@@ -104,9 +114,10 @@ def parse_extraction_response(response_text: str) -> ExtractionBundle:
     )
 
 
-def _validate_direct_effects(rows: list[dict[str, Any]]) -> None:
+def _validate_direct_effects(rows: list[dict[str, Any]], schemas: Any) -> None:
     allowed_form = set(schemas.ALLOWED_EFFECT_FORM)
     allowed_ver = set(schemas.ALLOWED_VERIFICATION)
+
     for i, row in enumerate(rows):
         _require_non_empty(row, ("source", "target", "effect_form", "verification", "evidence_text"), f"direct_effects[{i}]")
         if row["effect_form"] not in allowed_form:
@@ -120,9 +131,10 @@ def _validate_variable_definitions(rows: list[dict[str, Any]]) -> None:
         _require_non_empty(row, ("variable_name", "definition"), f"variable_definitions[{i}]")
 
 
-def _validate_moderations(rows: list[dict[str, Any]]) -> None:
+def _validate_moderations(rows: list[dict[str, Any]], schemas: Any) -> None:
     allowed_form = set(schemas.ALLOWED_EFFECT_FORM)
     allowed_ver = set(schemas.ALLOWED_VERIFICATION)
+
     for i, row in enumerate(rows):
         _require_non_empty(row, ("moderator", "source", "target", "effect_form", "verification", "evidence_text"), f"moderations[{i}]")
         if row["effect_form"] not in allowed_form:
@@ -131,9 +143,10 @@ def _validate_moderations(rows: list[dict[str, Any]]) -> None:
             raise ValueError(f"moderations[{i}].verification is invalid")
 
 
-def _validate_interactions(rows: list[dict[str, Any]]) -> None:
+def _validate_interactions(rows: list[dict[str, Any]], schemas: Any) -> None:
     allowed_form = set(schemas.ALLOWED_EFFECT_FORM)
     allowed_ver = set(schemas.ALLOWED_VERIFICATION)
+
     for i, row in enumerate(rows):
         _require_non_empty(row, ("output", "effect_form", "verification", "evidence_text"), f"interactions[{i}]")
         if row["effect_form"] not in allowed_form:
@@ -155,18 +168,21 @@ def _require_non_empty(row: dict[str, Any], fields: tuple[str, ...], row_name: s
 
 
 def _resolve_source_target(row: dict[str, Any]) -> tuple[str, str]:
+    """Resolve source/target from canonical or alt field names (independent/dependent, iv/dv)."""
     source = str(row.get("source", "") or row.get("independent", "") or row.get("iv", "") or "").strip()
     target = str(row.get("target", "") or row.get("dependent", "") or row.get("dv", "") or "").strip()
     return source, target
 
 
 def _resolve_effect_form(row: dict[str, Any]) -> str:
+    """Resolve effect_form from canonical field or alt 'direction' (+/− → positive/negative)."""
     raw = str(row.get("effect_form", "") or row.get("direction", "") or "").strip().lower()
     mapping = {"+": "positive", "-": "negative", "0": "unclear"}
     return mapping.get(raw, raw)
 
 
 def _resolve_verification(row: dict[str, Any]) -> str:
+    """Resolve verification from canonical field or alt 'significance'."""
     raw = str(row.get("verification", "") or row.get("significance", "") or "").strip().lower()
     raw = raw.replace("_", " ")
     sig_map = {
@@ -244,6 +260,7 @@ def _coerce_json_payload_text(response_text: str) -> str:
     text = str(response_text or "").strip()
     if not text:
         return text
+
     if text.startswith("```"):
         lines = text.splitlines()
         if lines:
@@ -251,6 +268,7 @@ def _coerce_json_payload_text(response_text: str) -> str:
         if lines and lines[-1].strip().startswith("```"):
             lines = lines[:-1]
         text = "\n".join(lines).strip()
+
     return text
 
 
@@ -275,7 +293,13 @@ def _try_parse_embedded_json(text: str) -> dict[str, Any] | None:
     if start == -1 or end == -1 or end <= start:
         return None
     snippet = text[start : end + 1]
-    marker_hit = any(marker in snippet for marker in ('"extractability_status"', '"direct_effects"'))
+    marker_hit = any(
+        marker in snippet
+        for marker in (
+            '"extractability_status"',
+            '"direct_effects"',
+        )
+    )
     if not marker_hit:
         return None
     try:
@@ -328,6 +352,30 @@ def _coerce_string_list(value: Any) -> list[str]:
         seen.add(key)
         out.append(txt)
     return out
+
+
+def _slug(text: str) -> str:
+    value = " ".join(str(text or "").strip().lower().split())
+    value = "".join(ch if ch.isalnum() else "-" for ch in value)
+    while "--" in value:
+        value = value.replace("--", "-")
+    return value.strip("-") or "unknown"
+
+
+def _canonical_var_id(text: str) -> str:
+    value = " ".join(str(text or "").strip().split())
+    return f"var::{value}" if value else "var::unknown"
+
+
+def _load_sibling_module(module_name: str, relative_path: str):
+    module_path = Path(__file__).resolve().parent / relative_path
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _complete_with_messages(llm_client: LLMClient, user_content: str, system_prompt: str) -> str:

@@ -10,23 +10,7 @@
 
 ## 启动方式
 
-### 当前方式（重构前）
-
-```bash
-# 图谱 + Chat + 文献 API
-uv run python scripts/smj_pipeline/serve_graph_api.py --port 8013 --views-json outputs/.../graph_views.json --allow-non-supply-chain
-
-# 异步 Pipeline API
-uv run python scripts/smj_pipeline/serve_async_pipeline_api.py --host 127.0.0.1 --port 8021
-
-# 桌面启动器（自动启动以上服务 + 打开浏览器）
-uv run python scripts/smj_pipeline/app_launcher.py
-
-# MCP 工具服务器
-uv run python scripts/smj_pipeline/kn_mcp_server.py
-```
-
-### 目标方式（重构后）
+### 统一主入口（唯一）
 
 ```bash
 # 统一 API 服务
@@ -35,8 +19,8 @@ uv run python -m kn_graph serve --port 8013
 # Celery Worker（可选）
 uv run python -m kn_graph worker
 
-# MCP 工具服务器（不变）
-uv run python scripts/smj_pipeline/kn_mcp_server.py
+# MCP 工具服务器
+uv run python src/kn_graph/services/kn_mcp_server.py
 ```
 
 ## 测试
@@ -63,17 +47,18 @@ uv run python -m unittest discover -s tests -p "test_*.py" -v
 ## LLM Provider 配置
 
 - 配置文件：`config/llm_providers.json`
-- 代理注册表：`scripts/smj_pipeline/llm/provider_registry.py`
+- 代理注册表：`src/kn_graph/providers/registry.py`
 - 覆盖配置：`set LLM_PROVIDER_CONFIG_PATH=path/to/config.json`
 
 ## 生产提示词来源
 
 - 当前生产抽取提示词：`prompt/extraction_system_prompt.md`
-- 接口通过 `scripts/smj_pipeline/extraction/prompts.py` 动态加载
+- 接口通过 `src/kn_graph/services/extraction/prompts.py` 加载
 
-## 重构状态
+## 后端状态
 
-- **进行中**：后端合并为单 FastAPI 应用，详见设计文档
+- **已收口**：后端统一为单 FastAPI 应用（`src/kn_graph`）
+- **约束**：`scripts/` 已删除，后端逻辑仅允许位于 `src/kn_graph/`
 - **禁止**：不要创建或修改 `frontend/` 目录
 
 ## 前端维护策略（已收敛）
