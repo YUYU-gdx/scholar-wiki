@@ -34,6 +34,24 @@ function firstTitle(v: Record<string, unknown>, paperId: string): string {
   return pretty(paperId);
 }
 
+function metaLine(v: Record<string, unknown>): string {
+  const authors = Array.isArray(v.authors_json)
+    ? (v.authors_json as unknown[])
+      .map((x) => {
+        if (x && typeof x === 'object' && 'name' in (x as Record<string, unknown>)) {
+          return String((x as Record<string, unknown>).name || '').trim();
+        }
+        if (typeof x === 'string') return x.trim();
+        return '';
+      })
+      .filter(Boolean)
+    : [];
+  const authorText = authors.length ? authors.slice(0, 3).join('、') : '未知作者';
+  const journal = String(v.journal || '').trim() || '未知期刊';
+  const date = String(v.publication_date || '').trim() || (v.publication_year ? String(v.publication_year) : '未知时间');
+  return `${authorText} | ${journal} | ${date}`;
+}
+
 export default function LibraryView() {
   const {
     graphData,
@@ -87,6 +105,7 @@ export default function LibraryView() {
         rawPaperId,
         libraryId,
         title: firstTitle(d, paperId),
+        metaLine: metaLine(d),
         sourcePdfName: String(d.source_pdf_name || ''),
         variables: paperVars,
       };
@@ -328,10 +347,10 @@ export default function LibraryView() {
                 <div className="flex items-center justify-between gap-3">
                   <button onClick={(e) => (e.stopPropagation(), setExpandedPapers((prev) => ({ ...prev, [p.scopedKey]: !prev[p.scopedKey] })))} className="flex items-center gap-2 text-left">
                     {expanded ? <ChevronDown className="w-4 h-4 text-outline" /> : <ChevronRight className="w-4 h-4 text-outline" />}
-                    <div>
-                      <div className="text-sm font-semibold text-on-surface">{p.title}</div>
-                      <div className="text-xs text-on-surface-variant">{p.paperId}</div>
-                    </div>
+                      <div>
+                        <div className="text-sm font-semibold text-on-surface">{p.title}</div>
+                      <div className="text-xs text-on-surface-variant">{p.metaLine}</div>
+                      </div>
                   </button>
                   {loadingFiles ? (
                     <div className="w-6 h-6 rounded-full border border-outline-variant bg-surface-container flex items-center justify-center" title="加载中">

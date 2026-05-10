@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { CloudUpload, FileText, RefreshCw, XCircle, Info, Terminal, Trash2 } from 'lucide-react';
+import { CloudUpload, FileText, RefreshCw, XCircle, Info, Terminal, Trash2, ChevronDown } from 'lucide-react';
 import { useApp } from '../App';
 import { api } from '../api';
 import type { PipelineAgentEvent, PipelineJob } from '../types';
@@ -22,7 +22,7 @@ const STATUS_OPTIONS = [
   { value: 'cancelled', label: 'Cancelled' },
 ] as const;
 
-type JobLogRow = { time: string; level: 'info' | 'warn' | 'error'; text: string };
+type JobLogRow = { time: string; level: 'info' | 'warn' | 'error'; text: string; detail?: string };
 
 function formatTs(ts?: string): string {
   if (!ts) return '-';
@@ -98,16 +98,21 @@ function agentEventToLogRow(e: PipelineAgentEvent): JobLogRow {
   const t = formatTs(e.ts);
   const method = String(e.method || '');
   const params = e.params || {};
+  if (method === 'system/init') {
+    const p = params as Record<string, unknown>;
+    return { time: t, level: 'info', text: '会话初始化', detail: `session_id=${String(p.session_id || '')}\nmodel=${String(p.model || '')}` };
+  }
   if (method === 'item/agentMessage/delta') {
     const delta = flattenText((params as Record<string, unknown>).delta);
-    return { time: t, level: 'info', text: `[模型输出] ${delta || '(empty delta)'}` };
+    return { time: t, level: 'info', text: '模型输出增量', detail: delta || '(empty delta)' };
   }
   if (method === 'item/started') {
     const item = ((params as Record<string, unknown>).item || {}) as Record<string, unknown>;
     return {
       time: t,
       level: 'info',
-      text: `[工具开始] ${String(item.tool || item.type || 'unknown')} args=${flattenText(item.arguments || {})}`,
+      text: `步骤开始：${String(item.tool || item.type || 'unknown')}`,
+      detail: flattenText(item.arguments || {}),
     };
   }
   if (method === 'item/completed') {
@@ -117,16 +122,17 @@ function agentEventToLogRow(e: PipelineAgentEvent): JobLogRow {
     return {
       time: t,
       level: lvl,
-      text: `[工具完成] ${String(item.tool || item.type || 'unknown')} status=${status} result=${flattenText(item.result || {})}`,
+      text: `步骤完成：${String(item.tool || item.type || 'unknown')}（${status}）`,
+      detail: flattenText(item.result || {}),
     };
   }
   if (method === 'turn/completed') {
-    return { time: t, level: 'info', text: '[回合完成] agent turn completed' };
+    return { time: t, level: 'info', text: '回合完成', detail: flattenText(params) };
   }
   if (method === 'item/thinking/delta') {
-    return { time: t, level: 'info', text: `[思考] ${flattenText((params as Record<string, unknown>).thinking)}` };
+    return { time: t, level: 'info', text: '思考中', detail: flattenText((params as Record<string, unknown>).thinking) };
   }
-  return { time: t, level: 'info', text: `[${method || 'event'}] ${flattenText(params)}` };
+  return { time: t, level: 'info', text: method || 'event', detail: flattenText(params) };
 }
 
 export default function PipelineView() {
@@ -144,15 +150,23 @@ export default function PipelineView() {
   const [selectedJob, setSelectedJob] = useState<PipelineJob | null>(null);
   const [logJob, setLogJob] = useState<PipelineJob | null>(null);
   const [liveJobLogs, setLiveJobLogs] = useState<JobLogRow[]>([]);
+  const [expandedLogItems, setExpandedLogItems] = useState<Record<string, boolean>>({});
   const [liveLogConnected, setLiveLogConnected] = useState(false);
   const agentLogSseRef = useRef<EventSource | null>(null);
   const autoReconnectedRef = useRef(false);
+  const completedDispatchedRef = useRef<Set<string>>(new Set());
 
   const fetchJobs = useCallback(async () => {
     try {
       const res = await api.pipeline.listJobs(page, 25, statusFilter || undefined, activeLibraryId);
       const filtered = (res.jobs || []).filter((j) => !stageFilter || (j.stage_code || j.stage || '') === stageFilter);
       setPipelineJobs(filtered);
+      for (const j of filtered) {
+        if (j.status === 'completed' && !completedDispatchedRef.current.has(j.job_id)) {
+          completedDispatchedRef.current.add(j.job_id);
+          window.dispatchEvent(new CustomEvent('pipeline-completed', { detail: { libraryId: j.library_id || activeLibraryId } }));
+        }
+      }
       if (!autoReconnectedRef.current && !sseRef.current) {
         autoReconnectedRef.current = true;
         const running = filtered.filter((j) => j.status === 'queued' || j.status === 'running');
@@ -199,6 +213,7 @@ export default function PipelineView() {
       return;
     }
     setLiveJobLogs(buildJobLogs(logJob));
+    setExpandedLogItems({});
     const es = api.pipeline.streamJobAgentEvents(logJob.job_id, 0);
     agentLogSseRef.current = es;
     setLiveLogConnected(true);
@@ -545,12 +560,25 @@ export default function PipelineView() {
             </div>
             <div className="space-y-2">
               {liveJobLogs.map((r, idx) => (
-                <div key={`${r.time}-${idx}`} className="flex items-start gap-3 p-2 rounded border border-outline-variant bg-surface-container-low/30">
-                  <span className="text-[10px] font-mono text-outline w-44 shrink-0">{r.time}</span>
-                  <span className={`text-[11px] font-mono shrink-0 ${r.level === 'error' ? 'text-error' : r.level === 'warn' ? 'text-amber-600' : 'text-secondary'}`}>
-                    [{r.level.toUpperCase()}]
-                  </span>
-                  <span className="text-sm text-on-surface break-all">{r.text}</span>
+                <div key={`${r.time}-${idx}`} className="rounded border border-outline-variant bg-surface-container-low/30 overflow-hidden">
+                  <button
+                    onClick={() => setExpandedLogItems((prev) => ({ ...prev, [`${r.time}-${idx}`]: !prev[`${r.time}-${idx}`] }))}
+                    className="w-full flex items-center gap-3 p-2 text-left hover:bg-surface-container-low transition-colors"
+                  >
+                    <span className="text-[10px] font-mono text-outline w-44 shrink-0">{r.time}</span>
+                    <span className={`text-[11px] font-mono shrink-0 ${r.level === 'error' ? 'text-error' : r.level === 'warn' ? 'text-amber-600' : 'text-secondary'}`}>
+                      [{r.level.toUpperCase()}]
+                    </span>
+                    <span className="text-sm text-on-surface break-all flex-1">{r.text}</span>
+                    <ChevronDown className={`w-3.5 h-3.5 text-outline transition-transform ${expandedLogItems[`${r.time}-${idx}`] ? 'rotate-180' : ''}`} />
+                  </button>
+                  {expandedLogItems[`${r.time}-${idx}`] && (
+                    <div className="px-3 pb-3">
+                      <div className="text-xs text-on-surface-variant whitespace-pre-wrap break-all bg-surface-container p-2 rounded border border-outline-variant/40">
+                        {r.detail || '(no detail)'}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

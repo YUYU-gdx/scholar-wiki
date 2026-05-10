@@ -5,6 +5,7 @@ import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any, Protocol
 
 from kn_graph.providers.registry import ProviderRegistry
@@ -75,6 +76,160 @@ def _append_agent_event(
     return payload
 
 
+def _coerce_authors_json(value: Any) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                name = str(item.get("name", "") or "").strip()
+                if not name:
+                    continue
+                affiliation = str(item.get("affiliation", "") or "").strip()
+                entry: dict[str, str] = {"name": name}
+                if affiliation:
+                    entry["affiliation"] = affiliation
+                out.append(entry)
+            elif isinstance(item, str):
+                name = item.strip()
+                if name:
+                    out.append({"name": name})
+    elif isinstance(value, str):
+        name = value.strip()
+        if name:
+            out.append({"name": name})
+    return out
+
+
+def _coerce_publication_year(value: Any, publication_date: str = "") -> int | None:
+    text = str(value or "").strip()
+    if text:
+        try:
+            return int(float(text))
+        except ValueError:
+            pass
+    date_text = str(publication_date or "").strip()
+    if len(date_text) >= 4 and date_text[:4].isdigit():
+        return int(date_text[:4])
+    return None
+
+
+def _extract_agent_paper_metadata(agent_bundle: dict[str, Any]) -> dict[str, Any]:
+    metadata = agent_bundle.get("paper_metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    publication_date = str(
+        metadata.get("publication_date", "")
+        or metadata.get("date", "")
+        or agent_bundle.get("publication_date", "")
+        or ""
+    ).strip()
+    return {
+        "title": str(metadata.get("title", "") or agent_bundle.get("title", "") or "").strip(),
+        "authors_json": _coerce_authors_json(metadata.get("authors_json", metadata.get("authors", []))),
+        "abstract": str(metadata.get("abstract", "") or agent_bundle.get("abstract", "") or "").strip(),
+        "journal": str(
+            metadata.get("journal", "")
+            or metadata.get("publication_title", "")
+            or agent_bundle.get("journal", "")
+            or ""
+        ).strip(),
+        "publication_date": publication_date,
+        "online_date": str(metadata.get("online_date", "") or agent_bundle.get("online_date", "") or "").strip(),
+        "publication_year": _coerce_publication_year(
+            metadata.get("publication_year", agent_bundle.get("publication_year")),
+            publication_date=publication_date,
+        ),
+        "doi": str(metadata.get("doi", "") or agent_bundle.get("doi", "") or "").strip(),
+        "article_url": str(
+            metadata.get("article_url", "")
+            or metadata.get("url", "")
+            or agent_bundle.get("article_url", "")
+            or ""
+        ).strip(),
+    }
+
+
+def _citation_metadata_from_markdown(md_path: Path) -> dict[str, Any]:
+    if not md_path.exists():
+        return {}
+    text = md_path.read_text(encoding="utf-8", errors="ignore")
+    cite_line = ""
+    for line in text.splitlines():
+        if "How to cite this article:" in line:
+            cite_line = line.strip()
+            break
+    if not cite_line:
+        return {}
+
+    out: dict[str, Any] = {}
+    doi_match = re.search(r"(10\.\d{4,9}/[^\s]+)", cite_line)
+    if doi_match:
+        out["doi"] = doi_match.group(1).rstrip(").,;")
+
+    year_match = re.search(r"\((19|20)\d{2}\)", cite_line)
+    if year_match:
+        year_text = year_match.group(0)[1:-1]
+        out["publication_year"] = int(year_text)
+        out["publication_date"] = year_text
+
+    journal_match = re.search(r"\.\s([^.,\n]*Journal[^,\n]*),\s*\d", cite_line)
+    if journal_match:
+        out["journal"] = journal_match.group(1).strip()
+
+    # Authors are before "(YYYY)" in the cite line.
+    if year_match:
+        authors_text = cite_line.split(year_match.group(0), 1)[0]
+        authors_text = authors_text.replace("How to cite this article:", "").strip().strip(".")
+        # Parse author segments like "Surname, X." while preserving initials.
+        matches = re.findall(r"[^,]+,\s*(?:[A-Z](?:\.\s*)?)+(?:[A-Z](?:\.\s*)?)*", authors_text)
+        if not matches:
+            matches = [s.strip() for s in re.split(r"\s*&\s*", authors_text) if s.strip()]
+        authors_json = [{"name": m.strip().lstrip("& ").strip()} for m in matches if m.strip()]
+        if authors_json:
+            out["authors_json"] = authors_json
+    return out
+
+
+def _ensure_reader_note_written(md_path: Path, job_id: str, bundle: dict[str, Any]) -> None:
+    if not md_path.exists():
+        return
+    text = md_path.read_text(encoding="utf-8", errors="ignore")
+    note_id = f"pipeline-{job_id}"
+    if f"Note ID: {note_id}" in text:
+        return
+
+    direct_effects = bundle.get("direct_effects", [])
+    lines: list[str] = []
+    if isinstance(direct_effects, list) and direct_effects:
+        for row in direct_effects[:6]:
+            if not isinstance(row, dict):
+                continue
+            src = str(row.get("source", "") or "").strip()
+            tgt = str(row.get("target", "") or "").strip()
+            eff = str(row.get("effect_form", "") or "").strip()
+            ver = str(row.get("verification", "") or "").strip()
+            if src and tgt:
+                lines.append(f"- {src} -> {tgt} ({eff}, {ver})")
+    if not lines:
+        lines.append("- No validated direct effects extracted.")
+
+    abs_path = str(md_path.resolve()).replace("\\", "/")
+    note_text = (
+        "\n\n## Reader Notes\n\n"
+        "> [!NOTE] Reader Note\n"
+        f"> Note ID: {note_id}\n"
+        "> Quote:\n"
+        "> Automated extraction summary from pipeline run.\n"
+        ">\n"
+        "> Note:\n"
+        f"> Source paper: [full.md]({abs_path})\n"
+        f"> Extractability: {str(bundle.get('extractability_status', '') or '').strip()}\n"
+        + "".join(f"> {line}\n" for line in lines)
+        + ">\n"
+        "> Time:\n"
+        f"> {datetime.now(timezone.utc).isoformat()}\n"
+    )
+    md_path.write_text(text + note_text, encoding="utf-8")
 
 
 def _stage_update(store: JobStore, job_id: str, stage: str, progress: int, event: str, **extra: Any) -> None:
@@ -342,6 +497,31 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     try:
         event_seq = 0
 
+        # Persist full invocation context for audit/debug.
+        input_event = {
+            "method": "pipeline/agent_input",
+            "params": {
+                "library_id": library_id,
+                "workspace_path": workspace_path,
+                "markdown_path": str(agent_md_path),
+                "extract_dir": str(extract_dir),
+                "query": extraction_prompt,
+            },
+        }
+        event_seq += 1
+        saved_input = _append_agent_event(
+            log_path=event_log_path,
+            seq=event_seq,
+            job_id=job_id,
+            backend=backend,
+            event=input_event,
+        )
+        if hasattr(store, "append_agent_event") and isinstance(saved_input, dict):
+            try:
+                store.append_agent_event(job_id, saved_input)
+            except Exception:
+                pass
+
         def _on_agent_event(evt: dict[str, Any]) -> None:
             nonlocal event_seq
             event_seq += 1
@@ -388,15 +568,26 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     except Exception as exc:
         raise RuntimeError(f"agent_extraction_failed:invalid_extract_result_json:{exc}") from exc
 
+    _ensure_reader_note_written(agent_md_path, job_id, agent_bundle if isinstance(agent_bundle, dict) else {})
+
     # Convert agent bundle to raw_output_jsonl format for downstream compatibility
     paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
     doi = str(options.get("doi", "") or f"job::{job_id}").strip()
+    extracted_meta = _extract_agent_paper_metadata(agent_bundle)
     raw_record = {
         "paper_id": paper_id,
-        "doi": doi,
+        "doi": extracted_meta.get("doi") or doi,
         "status": "ok",
         "evidence_spans": 1,
         "paper_domains": agent_bundle.get("paper_domains", []),
+        "title": extracted_meta.get("title", ""),
+        "authors_json": extracted_meta.get("authors_json", []),
+        "abstract": extracted_meta.get("abstract", ""),
+        "journal": extracted_meta.get("journal", ""),
+        "publication_date": extracted_meta.get("publication_date", ""),
+        "online_date": extracted_meta.get("online_date", ""),
+        "publication_year": extracted_meta.get("publication_year"),
+        "article_url": extracted_meta.get("article_url", ""),
         "raw_response": json.dumps(agent_bundle, ensure_ascii=False),
     }
     raw_output_path.write_text(json.dumps(raw_record, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -602,22 +793,34 @@ def _run_finalize_after_import(
                 if not isinstance(meta, dict):
                     meta = {}
                 title = str(meta.get("title", "") or "").strip() or str(m.get("title", "") or str(m.get("paper_key", "")) or "").strip()
-                cur.execute( 
-                    """UPDATE papers SET doi = ?, title = ?, 
-                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?, 
-                       source_html_path = ?, metadata_source = ? 
-                       WHERE paper_id = ?""", 
-                    ( 
-                        str(m.get("doi", "") or ""), 
-                        title, 
-                        str(m.get("html_path", "") or ""), 
-                        str(m.get("source_pdf_path", "") or ""), 
-                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""), 
-                        str(m.get("html_path", "") or ""), 
-                        "literature_import", 
-                        pid, 
-                    ), 
-                ) 
+                md_dir = Path(str(m.get("md_library_path", "") or m.get("md_path", "") or ""))
+                md_full = md_dir / "full.md" if md_dir.is_dir() else md_dir
+                cite_meta = _citation_metadata_from_markdown(md_full)
+                doi = str(m.get("doi", "") or cite_meta.get("doi", "") or "").strip()
+                authors_json = cite_meta.get("authors_json", [])
+                journal = str(cite_meta.get("journal", "") or "").strip()
+                publication_date = str(cite_meta.get("publication_date", "") or "").strip()
+                publication_year = cite_meta.get("publication_year")
+                cur.execute(
+                    """UPDATE papers SET doi = ?, title = ?, authors_json = ?, journal = ?, publication_date = ?, publication_year = ?,
+                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
+                       source_html_path = ?, metadata_source = ?
+                       WHERE paper_id = ?""",
+                    (
+                        doi,
+                        title,
+                        json.dumps(authors_json, ensure_ascii=False),
+                        journal,
+                        publication_date,
+                        publication_year,
+                        str(m.get("html_path", "") or ""),
+                        str(m.get("source_pdf_path", "") or ""),
+                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""),
+                        str(m.get("html_path", "") or ""),
+                        "literature_import",
+                        pid,
+                    ),
+                )
             conn.commit()
             conn.close()
             _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
@@ -785,23 +988,35 @@ def _run_finalize(
                 if not isinstance(meta, dict):
                     meta = {}
                 title = str(meta.get("title", "") or "").strip() or str(m.get("title", "") or str(m.get("paper_key", "")) or "").strip()
+                md_dir = Path(str(m.get("md_library_path", "") or m.get("md_path", "") or ""))
+                md_full = md_dir / "full.md" if md_dir.is_dir() else md_dir
+                cite_meta = _citation_metadata_from_markdown(md_full)
+                doi = str(m.get("doi", "") or cite_meta.get("doi", "") or "").strip()
+                authors_json = cite_meta.get("authors_json", [])
+                journal = str(cite_meta.get("journal", "") or "").strip()
+                publication_date = str(cite_meta.get("publication_date", "") or "").strip()
+                publication_year = cite_meta.get("publication_year")
                 # Use UPDATE to avoid clearing extraction fields (extractability etc.)
-                cur.execute( 
-                    """UPDATE papers SET doi = ?, title = ?, 
-                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?, 
-                       source_html_path = ?, metadata_source = ? 
-                       WHERE paper_id = ?""", 
-                    ( 
-                        str(m.get("doi", "") or ""), 
-                        title, 
-                        str(m.get("html_path", "") or ""), 
-                        str(m.get("source_pdf_path", "") or ""), 
-                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""), 
-                        str(m.get("html_path", "") or ""), 
-                        "literature_import", 
-                        pid, 
-                    ), 
-                ) 
+                cur.execute(
+                    """UPDATE papers SET doi = ?, title = ?, authors_json = ?, journal = ?, publication_date = ?, publication_year = ?,
+                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
+                       source_html_path = ?, metadata_source = ?
+                       WHERE paper_id = ?""",
+                    (
+                        doi,
+                        title,
+                        json.dumps(authors_json, ensure_ascii=False),
+                        journal,
+                        publication_date,
+                        publication_year,
+                        str(m.get("html_path", "") or ""),
+                        str(m.get("source_pdf_path", "") or ""),
+                        str(m.get("md_library_path", "") or m.get("md_path", "") or ""),
+                        str(m.get("html_path", "") or ""),
+                        "literature_import",
+                        pid,
+                    ),
+                )
             conn.commit()
             conn.close()
             # Always rebuild graph_views — paper metadata is now in SQLite

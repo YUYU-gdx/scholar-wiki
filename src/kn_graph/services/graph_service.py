@@ -110,6 +110,13 @@ def _paper_links(p: dict[str, Any], pid: str) -> tuple[str, str]:
 
 
 def _relation_summary_from_mention(m: dict[str, Any]) -> dict[str, Any]:
+    theory_name = str(
+        m.get("theory_name", "")
+        or m.get("hypothesis_label", "")
+        or m.get("relation_type_std", "")
+        or m.get("relation_type_raw", "")
+        or ""
+    ).strip()
     kind = str(m.get("mention_kind", "edge") or "edge")
     if kind == "interaction":
         return {
@@ -119,6 +126,7 @@ def _relation_summary_from_mention(m: dict[str, Any]) -> dict[str, Any]:
             "relation_form": "interaction",
             "relation_type": str(m.get("relation_type_std", "interaction") or "interaction"),
             "evidence_section": str(m.get("evidence_text", "") or "").strip(),
+            "theory_name": theory_name,
         }
     if kind == "moderation":
         moderator = str(m.get("moderator_name", "") or "").strip()
@@ -131,6 +139,7 @@ def _relation_summary_from_mention(m: dict[str, Any]) -> dict[str, Any]:
             "relation_form": str(m.get("effect_form", "linear") or "linear"),
             "relation_type": "moderation",
             "evidence_section": str(m.get("evidence_text", "") or "").strip(),
+            "theory_name": theory_name,
         }
     src = str(m.get("source_name", "") or "").strip()
     tgt = str(m.get("target_name", "") or "").strip()
@@ -141,6 +150,7 @@ def _relation_summary_from_mention(m: dict[str, Any]) -> dict[str, Any]:
         "relation_form": str(m.get("effect_form", "") or "").strip(),
         "relation_type": str(m.get("relation_type_std", "") or "").strip(),
         "evidence_section": str(m.get("evidence_text", "") or "").strip(),
+        "theory_name": theory_name,
     }
 
 
@@ -338,11 +348,13 @@ class GraphService:
                 "target_name": str(edge.get("target_name_local", "") or self._node_id_to_name.get(target, target)),
                 "source_name_canonical": self._node_id_to_name.get(source, source),
                 "target_name_canonical": self._node_id_to_name.get(target, target),
-                "direction": str(edge.get("effect_form", "") or ""),
-                "relation_form": str(edge.get("effect_form", "") or ""),
+                "direction": str(edge.get("effect_form", "") or edge.get("direction", "") or edge.get("relation_form", "") or ""),
+                "relation_form": str(edge.get("effect_form", "") or edge.get("relation_form", "") or ""),
                 "relation_type_std": str(edge.get("relation_type_std", "") or str(edge.get("relation_type", "") or "")),
                 "relation_type_raw": str(edge.get("relation_type_raw", "") or str(edge.get("relation_type", "") or "")),
-                "evidence_section": str(edge.get("evidence_text", "") or ""),
+                "evidence_text": str(edge.get("evidence_text", "") or edge.get("evidence_snippet", "") or ""),
+                "evidence_section": str(edge.get("evidence_text", "") or edge.get("evidence_snippet", "") or ""),
+                "theory_name": str(edge.get("theory_name", "") or edge.get("hypothesis_label", "") or edge.get("relation_type_std", "") or edge.get("relation_type", "") or ""),
             }
             mention["mention_kind"] = "edge"
             if source != target:
@@ -472,7 +484,7 @@ class GraphService:
             for item in definitions:
                 if not isinstance(item, dict):
                     continue
-                variable = str(item.get("variable_name", "") or "").strip()
+                variable = str(item.get("variable_name", "") or item.get("variable", "") or "").strip()
                 definition = str(item.get("definition", "") or "").strip()
                 evidence = str(item.get("measurement", "") or "").strip()
                 norm = _norm_rel_text(variable)
@@ -630,7 +642,10 @@ class GraphService:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT paper_id, title, doi, source_pdf_path, source_md_path, source_html_path, offline_html_path, article_url FROM papers")
+        cur.execute(
+            "SELECT paper_id, title, doi, authors_json, journal, publication_date, publication_year, "
+            "source_pdf_path, source_md_path, source_html_path, offline_html_path, article_url FROM papers"
+        )
         for r in cur.fetchall():
             meta = dict(r)
             pid = str(meta.get("paper_id", "") or "").strip()
@@ -670,6 +685,17 @@ class GraphService:
             base["display_title"] = base["title"]
             base["doi"] = str(meta.get("doi", "") or pid)
             base["article_url"] = str(meta.get("article_url", "") or "")
+            base["authors_json"] = []
+            authors_raw = meta.get("authors_json", "[]")
+            try:
+                parsed_authors = json.loads(str(authors_raw or "[]"))
+                if isinstance(parsed_authors, list):
+                    base["authors_json"] = parsed_authors
+            except Exception:
+                base["authors_json"] = []
+            base["journal"] = str(meta.get("journal", "") or "")
+            base["publication_date"] = str(meta.get("publication_date", "") or "")
+            base["publication_year"] = _parse_year_value(meta.get("publication_year"))
             paper_map_with_display[pid] = base
 
         # Build mapping: graph_views paper_id → SQLite paper_id
@@ -1034,6 +1060,11 @@ class GraphService:
         moderation_paper_ids = self._node_to_papers_moderation.get(nid, set())
         interaction_paper_ids = self._node_to_papers_interaction.get(nid, set())
         paper_ids = sorted(edge_paper_ids.union(moderation_paper_ids).union(interaction_paper_ids))
+        if not paper_ids:
+            node_row = self._nodes.get(nid, {}) if isinstance(self._nodes.get(nid), dict) else {}
+            profile = node_row.get("paper_profile")
+            if isinstance(profile, dict):
+                paper_ids = sorted(str(k).strip() for k in profile.keys() if str(k).strip())
 
         papers_payload: list[dict[str, Any]] = []
         paper_groups: list[dict[str, Any]] = []
@@ -1059,12 +1090,12 @@ class GraphService:
             raw_defs = list(p.get("variable_definitions", []) or [])
             concepts = [
                 {
-                    "variable": str(d.get("variable_name", "") or "").strip(),
+                    "variable": str(d.get("variable_name", "") or d.get("variable", "") or "").strip(),
                     "definition": str(d.get("definition", "") or "").strip(),
                     "evidence_section": str(d.get("measurement", "") or "").strip(),
                 }
                 for d in raw_defs
-                if _norm_rel_text(str(d.get("variable_name", "") or "")) == _norm_rel_text(variable_name)
+                if _norm_rel_text(str(d.get("variable_name", "") or d.get("variable", "") or "")) == _norm_rel_text(variable_name)
                 and str(d.get("definition", "") or "").strip()
             ]
             operationalization = p.get("variable_definitions", [])
@@ -1073,7 +1104,7 @@ class GraphService:
                 for d in operationalization:
                     if not isinstance(d, dict):
                         continue
-                    v_txt = str(d.get("variable_name", "") or "").strip()
+                    v_txt = str(d.get("variable_name", "") or d.get("variable", "") or "").strip()
                     if _norm_rel_text(v_txt) != _norm_rel_text(variable_name):
                         continue
                     measurement = str(d.get("measurement", "") or "").strip()

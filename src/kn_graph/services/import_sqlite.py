@@ -77,6 +77,10 @@ def main() -> None:
 
         payload: dict[str, Any] = {
             "doi": str(row.get("doi", "") or paper_id),
+            "title": str(row.get("title", "") or ""),
+            "authors_json": row.get("authors_json", []) or [],
+            "abstract": str(row.get("abstract", "") or ""),
+            "journal": str(row.get("journal", "") or ""),
             "offline_html_path": str(row.get("offline_html_path", "") or row.get("full_html_path", "") or ""),
             "article_url": str(row.get("article_url", "") or ""),
             "publication_date": str(row.get("publication_date", "") or row.get("pub_date", "") or ""),
@@ -154,6 +158,10 @@ def main_inline(
             continue
         payload: dict[str, Any] = {
             "doi": str(row.get("doi", "") or paper_id),
+            "title": str(row.get("title", "") or ""),
+            "authors_json": row.get("authors_json", []) or [],
+            "abstract": str(row.get("abstract", "") or ""),
+            "journal": str(row.get("journal", "") or ""),
             "offline_html_path": str(row.get("offline_html_path", "") or row.get("full_html_path", "") or ""),
             "article_url": str(row.get("article_url", "") or ""),
             "source_pdf_path": source_pdf_path,
