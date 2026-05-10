@@ -1,0 +1,440 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8"/>
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="description" content="Zotero is a free, easy-to-use tool to help you collect, organize, cite, and share research."/>
+
+        <link rel="shortcut icon"  type="image/ico" href="/favicon.ico" />
+
+        <!-- auto discovery links -->
+        <link rel="alternate" type="application/rss+xml" title="Zotero Blog" href="http://feeds.feedburner.com/zotero/" />
+<title>
+	dev:web_api:v3:types_and_fields [Zotero Documentation]
+</title>
+
+<meta name="generator" content="DokuWiki"/>
+<meta name="robots" content="index,follow"/>
+<meta name="keywords" content="dev,web_api,v3,types_and_fields"/>
+<link rel="search" type="application/opensearchdescription+xml" href="/support/lib/exe/opensearch.php" title="Zotero Documentation"/>
+<link rel="start" href="/support/"/>
+<link rel="contents" href="/support/dev/web_api/v3/types_and_fields?do=index" title="Sitemap"/>
+<link rel="manifest" href="/support/lib/exe/manifest.php"/>
+<link rel="alternate" type="application/rss+xml" title="Recent Changes" href="/support/feed.php"/>
+<link rel="alternate" type="application/rss+xml" title="Current namespace" href="/support/feed.php?mode=list&amp;ns=dev:web_api:v3"/>
+<link rel="alternate" type="text/html" title="Plain HTML" href="/support/_export/xhtml/dev/web_api/v3/types_and_fields"/>
+<link rel="alternate" type="text/plain" title="Wiki Markup" href="/support/_export/raw/dev/web_api/v3/types_and_fields"/>
+<link rel="canonical" href="https://www.zotero.org/support/dev/web_api/v3/types_and_fields"/>
+<link rel="stylesheet" href="/support/lib/exe/css.php?t=zotero-theme&amp;tseed=1cd5bc49b659ced571ac50752fa8735d"/>
+<!--[if gte IE 9]><!-->
+<script >/*<![CDATA[*/var NS='dev:web_api:v3';var JSINFO = {"toc":{"initial_state":1},"id":"dev:web_api:v3:types_and_fields","namespace":"dev:web_api:v3","ACT":"show","useHeadingNavigation":0,"useHeadingContent":0};
+/*!]]>*/</script>
+<script src="/support/lib/exe/jquery.php?tseed=f0349b609f9b91a485af8fd8ecd4aea4" defer="defer">/*<![CDATA[*/
+/*!]]>*/</script>
+<script src="/support/lib/exe/js.php?t=zotero-theme&amp;tseed=1cd5bc49b659ced571ac50752fa8735d" defer="defer">/*<![CDATA[*/
+/*!]]>*/</script>
+<!--<![endif]-->
+
+<!-- css -->
+    <link rel="stylesheet" href="/static/css/style.1698016953.css" type="text/css" media="screen" charset="utf-8"/>
+    <script type="text/javascript" charset="utf-8">
+        if(typeof zoteroData == 'undefined'){
+            var zoteroData = {};
+        }
+        var baseURL = "";
+        var staticPath = "/static";
+        var baseDomain = "https://www.zotero.org";
+        var nonZendPage = true;
+
+                    let zoterojsSearchContext = "documentation";
+            let initializeSearch = function() {
+                let searchForm = document.getElementById('simple-search');
+                searchForm.addEventListener('submit', function(evt) {
+                    evt.preventDefault();
+                    let searchBox = document.getElementById('header-search-query');
+                    let query = searchBox.value;
+                    let q = encodeURIComponent(query + " site:www.zotero.org/support");
+                    let url = "https://duckduckgo.com/?q=" + q;
+                    window.location = url;
+                })
+            };
+            if(document.readyState === 'interactive' || document.readyState === 'complete'){
+                initializeSearch();
+            } else {
+                document.onreadystatechange = () => {
+                    if (document.readyState === 'interactive' || document.readyState === 'complete') {
+                        initializeSearch();
+                    }
+                };
+            }
+            </script>
+</head>
+
+<body class="dokuwiki">
+        <!-- Header -->
+    <header role="banner" class="container">
+        <div class="center container">
+                                    
+            <h1 id="logohead">
+            <a href="/"><img src="/static/images/theme/zotero-logo.1519224037.svg" alt="Zotero"></a>
+        </h1>
+
+        <div id="login-links">
+                            <a href="/user/login/">Log In</a>
+                <a href="/user/register">Register</a>
+                    </div>
+        
+                    <a href="/storage" class="button" id="purchase-storage-link"><img src="/static/images/theme/archive.png" /> Upgrade Storage</a>
+                
+        <div id="navbar" class="container">
+        <nav id="sitenav">
+                        <ul>
+            <li><a href="/">Home</a></li>
+                        <li><a href="/groups/">Groups</a></li>
+                        <li class='selected'><a href="/support/">Documentation</a></li>
+            <li ><a href="https://forums.zotero.org/categories/">Forums</a></li>
+            <li><a href="/getinvolved/">Get Involved</a></li>
+        </ul>
+        </nav>
+                <form action="https://www.zotero.org/search/" id="simple-search">
+            <div>
+                <input type="text" name="q" size="20" id="header-search-query"/>
+                <input type="submit" class="button" value="Search" />
+            </div>
+        </form>
+                </div>
+        </div>
+    </header>
+    <div id="content">
+        <div class="center container">
+<div class="dokuwiki container">
+	
+		<div id="breadcrumbs">
+		<span class="bchead">You are here: </span><span class="home"><bdi><a href="/support/start" class="wikilink1" title="start" data-wiki-id="start">start</a></bdi></span> > <bdi><a href="/support/dev/start" class="wikilink1" title="dev:start" data-wiki-id="dev:start">dev</a></bdi> > <bdi><a href="/support/dev/web_api/start" class="wikilink1" title="dev:web_api:start" data-wiki-id="dev:web_api:start">web_api</a></bdi> > <bdi><a href="/support/dev/web_api/v3/start" class="wikilink1" title="dev:web_api:v3:start" data-wiki-id="dev:web_api:v3:start">v3</a></bdi> > <bdi><a href="/support/dev/web_api/v3/types_and_fields" class="wikilink1" title="dev:web_api:v3:types_and_fields" data-wiki-id="dev:web_api:v3:types_and_fields">types_and_fields</a></bdi>	</div>
+		<div class="stylehead">
+
+		<div class="header">
+				<div class="pagename">
+									</div>
+		</div>
+
+		
+	</div>
+	
+	<div class="page major-col">
+		
+		<!-- wikipage start -->
+		
+<h1 class="sectionedit1" id="zotero_web_api_item_typefield_requests">Zotero Web API Item Type/Field Requests</h1>
+<div class="level1">
+
+<p>
+For a <a href="/support/dev/web_api/v3/start" class="wikilink1" title="dev:web_api:v3:start" data-wiki-id="dev:web_api:v3:start">Zotero Web API</a> client to present an editing UI to its users, it must know what combinations of Zotero item types, fields, and creator types are valid. Clients can request this data from the Zotero <abbr title="Application Programming Interface">API</abbr>.
+</p>
+
+<p>
+As schema changes are currently rare, clients should cache type/field data for a period of time (e.g., one hour) without making further requests. Subsequent requests for new data should then include <code>If-Modified-Since</code> headers containing the contents of the <code>Last-Modified</code> header from the original response. If no changes have occurred, the server will return a <code>304 Not Modified</code> and clients should continue to use cached data for the same period of time. <em>[Conditional requests – i.e. <code>If-Modified-Since</code> – are not yet implemented.]</em>
+</p>
+
+<p>
+User-friendly type/field names will be returned in English by default. Clients can request names in other languages by passing a <code>locale</code> parameter (e.g., <code>GET /itemTypes?locale=fr-FR</code>).
+</p>
+
+<p>
+Note: the entire schema, including translations for all locales, can also be downloaded as a single file at <a href="https://api.zotero.org/schema" class="urlextern" title="https://api.zotero.org/schema" rel="ugc nofollow">https://api.zotero.org/schema</a>. See the <a href="https://github.com/zotero/zotero-schema" class="urlextern" title="https://github.com/zotero/zotero-schema" rel="ugc nofollow">GitHub repository of the schema</a> for caching instructions.
+</p>
+
+</div>
+
+<h3 class="sectionedit2" id="getting_all_item_types">Getting All Item Types</h3>
+<div class="level3">
+<pre class="code">GET /itemTypes
+If-Modified-Since: Mon, 14 Mar 2011 22:30:17 GMT</pre>
+<pre class="code javascript"><span class="br0">&#91;</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;itemType&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;book&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;Book&quot;</span> <span class="br0">&#125;</span><span class="sy0">,</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;itemType&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;note&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;Note&quot;</span> <span class="br0">&#125;</span><span class="sy0">,</span>
+  <span class="br0">&#40;</span>…<span class="br0">&#41;</span>
+<span class="br0">&#93;</span></pre>
+<div class="table sectionedit3"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0" colspan="2"> Common responses </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<td class="col0"> <code>200 OK</code> </td><td class="col1"> </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0"> <code>304 Not Modified</code> </td><td class="col1"> No changes have occurred since <code>If-Modified-Since</code> time. </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0"> <code>400 Bad Request</code> </td><td class="col1"> Locale not supported. </td>
+	</tr>
+</table></div>
+
+</div>
+
+<h3 class="sectionedit4" id="getting_all_item_fields">Getting All Item Fields</h3>
+<div class="level3">
+<pre class="code">GET /itemFields
+If-Modified-Since: Mon, 14 Mar 2011 22:30:17 GMT</pre>
+<pre class="code javascript"><span class="br0">&#91;</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;field&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;title&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;Title&quot;</span> <span class="br0">&#125;</span><span class="sy0">,</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;field&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;url&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;URL&quot;</span> <span class="br0">&#125;</span><span class="sy0">,</span>
+  <span class="br0">&#40;</span>…<span class="br0">&#41;</span>
+<span class="br0">&#93;</span></pre>
+<div class="table sectionedit5"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0" colspan="2"> Common responses </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<td class="col0"> <code>200 OK</code> </td><td class="col1"> </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0"> <code>304 Not Modified</code> </td><td class="col1"> No changes have occurred since <code>If-Modified-Since</code> time. </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0"> <code>400 Bad Request</code> </td><td class="col1"> Locale not supported. </td>
+	</tr>
+</table></div>
+
+</div>
+
+<h3 class="sectionedit6" id="getting_all_valid_fields_for_an_item_type">Getting All Valid Fields for an Item Type</h3>
+<div class="level3">
+
+<p>
+Note: <abbr title="Application Programming Interface">API</abbr> consumers intending to write to the server should generally use <a href="#getting_a_template_for_a_new_item" title="dev:web_api:v3:types_and_fields ↵" class="wikilink1">/items/new</a> combined with <a href="#getting_all_item_types" title="dev:web_api:v3:types_and_fields ↵" class="wikilink1">/itemTypes</a> instead of this request.
+</p>
+<pre class="code">GET /itemTypeFields?itemType=book
+If-Modified-Since: Mon, 14 Mar 2011 22:30:17 GMT</pre>
+<pre class="code javascript"><span class="br0">&#91;</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;field&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;title&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;Title&quot;</span> <span class="br0">&#125;</span><span class="sy0">,</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;field&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;abstractNote&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;Abstract&quot;</span> <span class="br0">&#125;</span><span class="sy0">,</span>
+  <span class="br0">&#40;</span>…<span class="br0">&#41;</span>
+<span class="br0">&#93;</span></pre>
+<div class="table sectionedit7"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0" colspan="2"> Common responses </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<td class="col0"> <code>200 OK</code> </td><td class="col1"> </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0"> <code>304 Not Modified</code> </td><td class="col1"> No changes have occurred since <code>If-Modified-Since</code> time. </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0"> <code>400 Bad Request</code> </td><td class="col1"> Locale not supported. </td>
+	</tr>
+</table></div>
+
+</div>
+
+<h3 class="sectionedit8" id="getting_valid_creator_types_for_an_item_type">Getting Valid Creator Types for an Item Type</h3>
+<div class="level3">
+<pre class="code">GET /itemTypeCreatorTypes?itemType=book</pre>
+<pre class="code javascript"><span class="br0">&#91;</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;creatorType&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;author&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;Author&quot;</span> <span class="br0">&#125;</span><span class="sy0">,</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;creatorType&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;editor&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;Editor&quot;</span> <span class="br0">&#125;</span><span class="sy0">,</span>
+  <span class="br0">&#40;</span>…<span class="br0">&#41;</span>
+<span class="br0">&#93;</span></pre>
+<div class="table sectionedit9"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0" colspan="2"> Common responses </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<td class="col0"> <code>200 OK</code> </td><td class="col1"> </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0"> <code>304 Not Modified</code> </td><td class="col1"> No changes have occurred since <code>If-Modified-Since</code> time. </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0"> <code>400 Bad Request</code> </td><td class="col1"> &#039;itemType&#039; is unspecified or invalid; locale not supported. </td>
+	</tr>
+</table></div>
+
+</div>
+
+<h3 class="sectionedit10" id="getting_localized_creator_fields">Getting Localized Creator Fields</h3>
+<div class="level3">
+<pre class="code">GET /creatorFields
+If-Modified-Since: Mon, 14 Mar 2011 22:30:17 GMT</pre>
+<pre class="code javascript"><span class="br0">&#91;</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;field&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;firstName&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;First&quot;</span> <span class="br0">&#125;</span><span class="sy0">,</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;field&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;lastName&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;Last&quot;</span> <span class="br0">&#125;</span><span class="sy0">,</span>
+  <span class="br0">&#123;</span> <span class="st0">&quot;field&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;name&quot;</span><span class="sy0">,</span> <span class="st0">&quot;localized&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;Name&quot;</span> <span class="br0">&#125;</span>
+<span class="br0">&#93;</span></pre>
+<div class="table sectionedit11"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0" colspan="2"> Common responses </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<td class="col0"> <code>304 Not Modified</code> </td><td class="col1"> No changes have occurred since <code>If-Modified-Since</code> time. </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0"> <code>400 Bad Request</code> </td><td class="col1"> Locale not supported. </td>
+	</tr>
+</table></div>
+
+</div>
+
+<h3 class="sectionedit12" id="getting_a_template_for_a_new_item">Getting a Template for a New Item</h3>
+<div class="level3">
+<pre class="code">GET /items/new?itemType=book
+If-Modified-Since: Mon, 14 Mar 2011 22:30:17 GMT</pre>
+<pre class="code javascript"><span class="br0">&#123;</span>
+  <span class="st0">&quot;itemType&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;book&quot;</span><span class="sy0">,</span>
+  <span class="st0">&quot;title&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;&quot;</span><span class="sy0">,</span>
+  <span class="st0">&quot;creators&quot;</span> <span class="sy0">:</span> <span class="br0">&#91;</span>
+    <span class="br0">&#123;</span>
+      <span class="st0">&quot;creatorType&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;author&quot;</span><span class="sy0">,</span>
+      <span class="st0">&quot;firstName&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;&quot;</span><span class="sy0">,</span>
+      <span class="st0">&quot;lastName&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;&quot;</span>
+    <span class="br0">&#125;</span>
+  <span class="br0">&#93;</span><span class="sy0">,</span>
+  <span class="st0">&quot;url&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;&quot;</span><span class="sy0">,</span>
+  <span class="br0">&#40;</span>...<span class="br0">&#41;</span><span class="sy0">,</span>
+  <span class="st0">&quot;tags&quot;</span> <span class="sy0">:</span> <span class="br0">&#91;</span><span class="br0">&#93;</span><span class="sy0">,</span>
+  <span class="st0">&quot;collections&quot;</span> <span class="sy0">:</span> <span class="br0">&#91;</span><span class="br0">&#93;</span><span class="sy0">,</span>
+  <span class="st0">&quot;relations&quot;</span> <span class="sy0">:</span> <span class="br0">&#123;</span><span class="br0">&#125;</span>
+<span class="br0">&#125;</span></pre>
+<pre class="code">GET /items/new?itemType=note
+If-Modified-Since: Mon, 14 Mar 2011 22:30:17 GMT</pre>
+<pre class="code javascript"><span class="br0">&#123;</span>
+  <span class="st0">&quot;itemType&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;note&quot;</span><span class="sy0">,</span>
+  <span class="st0">&quot;note&quot;</span> <span class="sy0">:</span> <span class="st0">&quot;&quot;</span><span class="sy0">,</span>
+  <span class="st0">&quot;tags&quot;</span> <span class="sy0">:</span> <span class="br0">&#91;</span><span class="br0">&#93;</span><span class="sy0">,</span>
+  <span class="st0">&quot;collections&quot;</span> <span class="sy0">:</span> <span class="br0">&#91;</span><span class="br0">&#93;</span><span class="sy0">,</span>
+  <span class="st0">&quot;relations&quot;</span> <span class="sy0">:</span> <span class="br0">&#123;</span><span class="br0">&#125;</span>
+<span class="br0">&#125;</span></pre>
+
+<p>
+TODO: attachment creation (see <a href="/support/dev/web_api/v3/file_upload" class="wikilink1" title="dev:web_api:v3:file_upload" data-wiki-id="dev:web_api:v3:file_upload">File Uploads</a>)
+</p>
+<div class="table sectionedit13"><table class="inline">
+	<thead>
+	<tr class="row0">
+		<th class="col0" colspan="2"> Common responses </th>
+	</tr>
+	</thead>
+	<tr class="row1">
+		<td class="col0"> <code>200 OK</code> </td><td class="col1"> </td>
+	</tr>
+	<tr class="row2">
+		<td class="col0"> <code>304 Not Modified</code> </td><td class="col1"> No changes have occurred since <code>If-Modified-Since</code> time. </td>
+	</tr>
+	<tr class="row3">
+		<td class="col0"> <code>400 Bad Request</code> </td><td class="col1"> <code>itemType</code> is unspecified or invalid. </td>
+	</tr>
+</table></div>
+
+</div>
+
+		<!-- wikipage stop -->
+	</div>
+
+
+	
+	<div class="stylefoot minor-col">
+		<div class="meta">
+			<div class="nav">
+				<!-- TOC START -->
+<div id="dw__toc" class="dw__toc">
+<h3 class="toggle">Table of Contents</h3>
+<div>
+
+<ul class="toc">
+<li class="level1"><div class="li"><a href="#zotero_web_api_item_typefield_requests">Zotero Web API Item Type/Field Requests</a></div>
+<ul class="toc">
+<li class="clear">
+<ul class="toc">
+<li class="level3"><div class="li"><a href="#getting_all_item_types">Getting All Item Types</a></div></li>
+<li class="level3"><div class="li"><a href="#getting_all_item_fields">Getting All Item Fields</a></div></li>
+<li class="level3"><div class="li"><a href="#getting_all_valid_fields_for_an_item_type">Getting All Valid Fields for an Item Type</a></div></li>
+<li class="level3"><div class="li"><a href="#getting_valid_creator_types_for_an_item_type">Getting Valid Creator Types for an Item Type</a></div></li>
+<li class="level3"><div class="li"><a href="#getting_localized_creator_fields">Getting Localized Creator Fields</a></div></li>
+<li class="level3"><div class="li"><a href="#getting_a_template_for_a_new_item">Getting a Template for a New Item</a></div></li>
+</ul></li>
+</ul></li>
+</ul>
+</div>
+</div>
+<!-- TOC END -->
+			</div>
+			
+			<div class="user-info">
+								</div>
+			<div class="page-info">
+				<bdi>dev/web_api/v3/types_and_fields.txt</bdi> · Last modified: 2019/12/07 18:46 by <bdi>tomas_fiers</bdi>			</div>
+		</div>
+
+		<div class="bar" id="bar__bottom">
+			<div class="bar-left" id="bar__bottomleft">
+				<ul class="page-menu"><li><a href="/support/dev/web_api/v3/types_and_fields?do=revisions" title="Old revisions [o]" rel="nofollow" accesskey="o" class="zmenuitem revs">Old revisions</a></li></ul>				<ul class="wiki-menu"></ul><ul class="user-menu"></ul>			</div>
+					</div>
+
+	</div>
+
+</div>
+
+<div class="footerinc">
+
+
+<!--
+
+<rdf:RDF xmlns="http://web.resource.org/cc/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<Work rdf:about="">
+   <dc:type rdf:resource="http://purl.org/dc/dcmitype/Text" />
+   <license rdf:resource="http://creativecommons.org/licenses/by-nc-sa/2.0/" />
+</Work>
+
+<License rdf:about="http://creativecommons.org/licenses/by-nc-sa/2.0/">
+   <permits rdf:resource="http://web.resource.org/cc/Reproduction" />
+   <permits rdf:resource="http://web.resource.org/cc/Distribution" />
+   <requires rdf:resource="http://web.resource.org/cc/Notice" />
+   <requires rdf:resource="http://web.resource.org/cc/Attribution" />
+   <prohibits rdf:resource="http://web.resource.org/cc/CommercialUse" />
+   <permits rdf:resource="http://web.resource.org/cc/DerivativeWorks" />
+   <requires rdf:resource="http://web.resource.org/cc/ShareAlike" />
+</License>
+
+</rdf:RDF>
+
+-->
+
+
+</div>
+
+<div class="no"><img src="/support/lib/exe/taskrunner.php?id=dev%3Aweb_api%3Av3%3Atypes_and_fields&amp;1778339841" width="2" height="1" alt="" /></div>
+        </div>
+    </div>
+    <footer>
+        <div class="center container">
+            <nav role="secondary">
+            <ul>
+                <li><a href="/blog/">Blog</a></li>
+                <li><a href="https://forums.zotero.org/categories/">Forums</a></li>
+                <li><a href="/support/dev/start">Developers</a></li>
+                <li><a href="/support/">Support</a></li>
+                <li><a href="/support/privacy">Privacy</a></li>
+                <li><a href="/getinvolved/">Get Involved</a></li>
+                <li><a href="/jobs">Jobs</a></li>
+                <li class="last"><a href="/about/">About</a></li>
+            </ul>
+            </nav>
+            <p class="about">Zotero is a project of <a href="http://digitalscholar.org/">Digital Scholar</a>, a nonprofit organization dedicated to the development of software and services for researchers and cultural heritage institutions, and is developed by a <a href="/support/credits_and_acknowledgments">global community</a>.</p>
+        </div><!-- End footer -->
+        </footer>
+    </body>
+</html>

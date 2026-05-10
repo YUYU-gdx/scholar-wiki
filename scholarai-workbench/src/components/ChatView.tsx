@@ -134,15 +134,62 @@ function extractToolResult(toolCall: Record<string, unknown>): unknown {
   return undefined;
 }
 
-function shouldRenderToolCall(toolCall: Record<string, unknown>): boolean {
-  const kind = String(toolCall.kind || '').toLowerCase();
-  const state = String(toolCall.state || '').toLowerCase();
-  const summary = String(toolCall.summary || toolCall.tool || toolCall.name || '').toLowerCase();
-  if (kind === 'system') return false;
-  if (summary.includes('mcp.startup')) return false;
-  if (!state) return true;
-  return state === 'completed' || state === 'failed';
+type TimelineRow = {
+  title: string;
+  detail: string;
+  state: 'running' | 'completed' | 'failed' | 'info';
+  kind: 'delta_text' | 'event';
+};
+
+function toTimelineRow(raw: unknown): TimelineRow | null {
+  const row = (raw && typeof raw === 'object') ? (raw as Record<string, unknown>) : {};
+  const evt = String(row.event || '').trim().toLowerCase();
+  const summary = String(row.summary || row.tool || row.item || row.stage || '').trim();
+  const stateRaw = String(row.state || row.status || '').trim().toLowerCase();
+  const state: TimelineRow['state'] =
+    stateRaw === 'failed' || stateRaw === 'error' ? 'failed'
+      : stateRaw === 'completed' || stateRaw === 'ok' || stateRaw === 'success' ? 'completed'
+        : stateRaw === 'started' || stateRaw === 'running' || stateRaw === 'streaming' ? 'running'
+          : 'info';
+
+  if (evt === 'tool_call') {
+    const toolName = toolNameZh(extractToolName(row));
+    const detail = stringifyToolPayload({
+      参数: normalizeToolArgs(extractToolArgs(row)),
+      结果: normalizeToolResult(extractToolResult(row)),
+    });
+    return { title: `工具调用：${toolName}`, detail, state, kind: 'event' };
+  }
+  if (evt === 'agent_item_started' || evt === 'agent_item_completed') {
+    const item = String(row.item || row.kind || '步骤').trim();
+    const title = `${evt.endsWith('started') ? '步骤开始' : '步骤完成'}：${item || 'unknown'}`;
+    return { title, detail: stringifyToolPayload(row.detail || row), state, kind: 'event' };
+  }
+  if (evt === 'agent_item_delta') {
+    const text = String(row.text || row.summary || '').trim();
+    return { title: '模型增量输出', detail: text || '(empty)', state: 'running', kind: 'delta_text' };
+  }
+  if (evt === 'agent_item_thinking') {
+    const detail = String(row.detail || row.summary || '').trim();
+    return { title: '思考过程', detail: detail || '(empty)', state: 'running', kind: 'event' };
+  }
+  if (evt === 'status') {
+    const stage = String(row.stage || '').trim();
+    const label = String(row.label || '').trim();
+    return { title: `状态：${stage || 'unknown'}`, detail: label || stringifyToolPayload(row), state, kind: 'event' };
+  }
+  if (evt === 'citation') {
+    return { title: '检索事件', detail: stringifyToolPayload(row), state: 'info', kind: 'event' };
+  }
+  if (evt === 'started' || evt === 'completed' || evt === 'failed') {
+    return null;
+  }
+  if (summary || Object.keys(row).length > 0) {
+    return { title: summary || '事件', detail: stringifyToolPayload(row), state, kind: 'event' };
+  }
+  return null;
 }
+
 
 export default function ChatView() {
   const {
@@ -190,11 +237,38 @@ export default function ChatView() {
 
   useEffect(() => { refreshSessions(); }, [refreshSessions]);
 
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.close();
+        streamRef.current = null;
+      }
+    };
+  }, [activeSessionId]);
+
   const loadSession = useCallback(async (sessionId: string) => {
     setLoadingSession(true);
     try {
       const res = await api.chat.getSession(sessionId);
-      setMessages(res.messages || []);
+      const incoming = Array.isArray(res.messages) ? res.messages : [];
+      const normalized: ChatMessage[] = [];
+      incoming.forEach((msg) => {
+        const m = { ...msg, tool_trace: Array.isArray(msg.tool_trace) ? msg.tool_trace : [] } as ChatMessage;
+        const last = normalized.length > 0 ? normalized[normalized.length - 1] : null;
+        if (m.role === 'assistant' && last && last.role === 'assistant') {
+          normalized[normalized.length - 1] = {
+            ...last,
+            content: [String(last.content || '').trim(), String(m.content || '').trim()].filter(Boolean).join('\n'),
+            citations: [...(Array.isArray(last.citations) ? last.citations : []), ...(Array.isArray(m.citations) ? m.citations : [])],
+            tool_trace: [...(Array.isArray(last.tool_trace) ? last.tool_trace : []), ...(Array.isArray(m.tool_trace) ? m.tool_trace : [])],
+            status: m.status || last.status,
+            error_detail: m.error_detail || last.error_detail,
+          };
+          return;
+        }
+        normalized.push(m);
+      });
+      setMessages(normalized);
       setActiveSessionId(sessionId);
       if (res.session?.default_mode) setMode(res.session.default_mode as 'fast' | 'agent');
     } catch { setMessages([]); }
@@ -244,11 +318,27 @@ export default function ChatView() {
         const payload = JSON.parse(evt.data || '{}');
         setMessages(prev => prev.map(m =>
           m.message_id === messageId
-            ? { ...m, tool_trace: [...(m.tool_trace || []), payload], status: 'running' as const }
+            ? { ...m, tool_trace: [...(m.tool_trace || []), { ...payload, event: 'tool_call' }], status: 'running' as const }
             : m
         ));
       } catch { /* ignore */ }
     });
+
+    const pushEvent = (evtName: string, evt: Event) => {
+      try {
+        const payload = JSON.parse((evt as MessageEvent).data || '{}');
+        setMessages(prev => prev.map(m =>
+          m.message_id === messageId
+            ? { ...m, tool_trace: [...(m.tool_trace || []), { ...payload, event: evtName }], status: 'running' as const }
+            : m
+        ));
+      } catch { /* ignore */ }
+    };
+    es.addEventListener('agent_item_started', (evt) => pushEvent('agent_item_started', evt));
+    es.addEventListener('agent_item_completed', (evt) => pushEvent('agent_item_completed', evt));
+    es.addEventListener('agent_item_delta', (evt) => pushEvent('agent_item_delta', evt));
+    es.addEventListener('status', (evt) => pushEvent('status', evt));
+    es.addEventListener('citation', (evt) => pushEvent('citation', evt));
 
     es.addEventListener('completed', (evt) => {
       try {
@@ -260,7 +350,9 @@ export default function ChatView() {
                 content: payload.answer || m.content || '',
                 citations: Array.isArray(payload.citations) && payload.citations.length > 0 ? payload.citations : (m.citations || []),
                 retrieval: (payload.retrieval_trace && typeof payload.retrieval_trace === 'object') ? payload.retrieval_trace : (m.retrieval || {}),
-                tool_trace: Array.isArray(payload.tool_trace) && payload.tool_trace.length > 0 ? payload.tool_trace : (m.tool_trace || []),
+                tool_trace: (m.tool_trace && m.tool_trace.length > 0)
+                  ? m.tool_trace
+                  : (Array.isArray(payload.tool_trace) ? payload.tool_trace : []),
                 status: 'completed' as const,
               }
             : m
@@ -339,6 +431,15 @@ export default function ChatView() {
   }, [messages]);
 
   const runningAssistant = messages.find(m => m.role === 'assistant' && m.status === 'running');
+  const visibleMessages = messages.filter((m) => {
+    if (m.role !== 'assistant') return true;
+    const hasContent = String(m.content || '').trim().length > 0;
+    const hasTrace = Array.isArray(m.tool_trace) && m.tool_trace.length > 0;
+    const hasCitations = Array.isArray(m.citations) && m.citations.length > 0;
+    const hasError = String(m.error_detail || '').trim().length > 0 || m.status === 'failed';
+    const isRunning = m.status === 'running';
+    return hasContent || hasTrace || hasCitations || hasError || isRunning;
+  });
 
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -389,7 +490,7 @@ export default function ChatView() {
         ) : (
           <>
             <div ref={feedRef} className="flex-1 overflow-y-auto px-8 py-6 space-y-6 custom-scrollbar">
-              {messages.map((m) => (
+              {visibleMessages.map((m) => (
                 <div key={m.message_id} className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : ''}`}>
                   {m.role === 'assistant' && (
                     <div className="w-8 h-8 rounded-lg bg-secondary-container/30 border border-secondary/20 flex items-center justify-center flex-shrink-0">
@@ -399,10 +500,12 @@ export default function ChatView() {
                   <div className={`max-w-[80%] ${m.role === 'user' ? 'bg-primary-container text-on-primary rounded-2xl rounded-tr-none px-6 py-4 shadow-lg border border-primary/10' : 'space-y-3'}`}>
                     {m.role === 'assistant' ? (
                       <>
-                        <div className="font-serif text-[15px] text-on-surface leading-relaxed antialiased whitespace-pre-wrap">
-                          {ensureCitationMarkers(m.content || '', Array.isArray(m.citations) ? m.citations : []) || (m.status === 'running' ? 'Thinking...' : '')}
-                          {m.status === 'running' && <span className="animate-pulse-soft"> ▌</span>}
-                        </div>
+                        {(!Array.isArray(m.tool_trace) || m.tool_trace.length === 0) && (
+                          <div className="font-serif text-[15px] text-on-surface leading-relaxed antialiased whitespace-pre-wrap">
+                            {ensureCitationMarkers(m.content || '', Array.isArray(m.citations) ? m.citations : []) || (m.status === 'running' ? 'Thinking...' : '')}
+                            {m.status === 'running' && <span className="animate-pulse-soft"> ▌</span>}
+                          </div>
+                        )}
                         {m.status === 'failed' && m.error_detail && (
                           <div className="text-sm text-error bg-error-container/10 border border-error/20 rounded-lg px-3 py-2 mt-2">
                             失败: {m.error_detail}
@@ -428,50 +531,46 @@ export default function ChatView() {
                             ))}
                           </div>
                         )}
-                        {Array.isArray(m.tool_trace) && m.tool_trace.filter(t => shouldRenderToolCall((t && typeof t === 'object') ? (t as Record<string, unknown>) : {})).length > 0 && (
+                        {Array.isArray(m.tool_trace) && m.tool_trace.length > 0 && (
                           <div className="space-y-2 mt-2">
-                            {m.tool_trace.filter(t => shouldRenderToolCall((t && typeof t === 'object') ? (t as Record<string, unknown>) : {})).map((t, idx) => {
-                              const toolCall = (t && typeof t === 'object') ? (t as Record<string, unknown>) : {};
-                              const itemKey = `${m.message_id}-inline-${idx}`;
-                              const itemExpanded = !!expandedToolItems[itemKey];
-                              const toolName = extractToolName(toolCall);
+                            {(() => {
+                              const timelineRows = m.tool_trace
+                                .map((t) => toTimelineRow((t && typeof t === 'object') ? (t as Record<string, unknown>) : {}))
+                                .filter((x): x is TimelineRow => !!x);
                               return (
-                                <div key={idx} className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-[10px] font-mono overflow-hidden">
-                                  <button
-                                    onClick={() => setExpandedToolItems(prev => ({ ...prev, [itemKey]: !itemExpanded }))}
-                                    className="w-full text-left p-2.5 flex items-center justify-between hover:bg-surface-container-low transition-colors"
-                                  >
-                                    <span className="text-secondary font-bold truncate">{`工具调用：${toolNameZh(toolName)}`}</span>
-                                    <ChevronDown className={`w-3.5 h-3.5 text-outline transition-transform ${itemExpanded ? 'rotate-180' : ''}`} />
-                                  </button>
-                                  {itemExpanded && (
-                                    <div className="px-2.5 pb-2.5 space-y-2">
-                                      <div>
-                                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">参数</div>
-                                        <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
-                                          {normalizeToolArgs(extractToolArgs(toolCall)).map((row, i) => (
-                                            <div key={`${row.label}-${i}`} className="flex items-start gap-2">
-                                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-secondary-container/20 text-secondary tracking-wide">{row.label}</span>
-                                              <span className="text-[11px] text-on-surface-variant break-words">{row.value}</span>
-                                            </div>
-                                          ))}
+                                <>
+                                  {timelineRows.map((timeline, idx) => {
+                                    const itemKey = `${m.message_id}-inline-${idx}`;
+                                    const itemExpanded = !!expandedToolItems[itemKey];
+                                    if (timeline.kind === 'delta_text') {
+                                      return (
+                                        <div key={idx} className="text-sm text-on-surface-variant whitespace-pre-wrap break-words px-1 py-0.5">
+                                          {timeline.detail}
                                         </div>
-                                      </div>
-                                      <div>
-                                        <div className="text-[9px] text-outline uppercase tracking-widest mb-1">调用结果</div>
-                                        <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30 space-y-1">
-                                          {normalizeToolResult(extractToolResult(toolCall)).map((line, i) => (
-                                            <div key={`inline-res-${i}`} className="text-[11px] text-on-surface-variant break-words">
-                                              {line}
+                                      );
+                                    }
+                                    return (
+                                      <div key={idx} className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-[10px] font-mono overflow-hidden">
+                                        <button
+                                          onClick={() => setExpandedToolItems(prev => ({ ...prev, [itemKey]: !itemExpanded }))}
+                                          className="w-full text-left p-2.5 flex items-center justify-between hover:bg-surface-container-low transition-colors"
+                                        >
+                                          <span className={`${timeline.state === 'failed' ? 'text-error' : timeline.state === 'running' ? 'text-amber-600' : 'text-secondary'} font-bold truncate`}>{timeline.title}</span>
+                                          <ChevronDown className={`w-3.5 h-3.5 text-outline transition-transform ${itemExpanded ? 'rotate-180' : ''}`} />
+                                        </button>
+                                        {itemExpanded && (
+                                          <div className="px-2.5 pb-2.5 space-y-2">
+                                            <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30">
+                                              <div className="text-[11px] text-on-surface-variant break-words whitespace-pre-wrap">{timeline.detail}</div>
                                             </div>
-                                          ))}
-                                        </div>
+                                          </div>
+                                        )}
                                       </div>
-                                    </div>
-                                  )}
-                                </div>
+                                    );
+                                  })}
+                                </>
                               );
-                            })}
+                            })()}
                           </div>
                         )}
                       </>

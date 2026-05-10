@@ -582,10 +582,19 @@ class ClaudeCodeRunner(AgentRunner):
             )
             tid = str(thread_id or "").strip()
             if tid:
+                # Chat may pass a locally generated UUID placeholder before the first
+                # Claude SDK turn. Resume only when the session actually exists.
                 parts = tid.split("-")
                 is_uuid = len(parts) == 5 and all(len(p) in (8, 4, 4, 4, 12) for p in parts) and all(c in "0123456789abcdef-" for c in tid.lower())
                 if is_uuid:
-                    options.resume = tid
+                    try:
+                        from claude_agent_sdk import get_session_info as _claude_get_session_info
+                        _existing = _claude_get_session_info(tid, directory=workdir)
+                        if _existing is not None:
+                            options.resume = tid
+                    except Exception:
+                        # Treat missing / unreadable session as new conversation.
+                        pass
 
             async for message in claude_query(prompt=query, options=options):
                 # Drain pending tool results from hook callbacks
@@ -852,12 +861,20 @@ class ClaudeCodeRunner(AgentRunner):
                             if isinstance(block, dict) and isinstance(block.get("text"), str):
                                 parts.append(block["text"])
                         msg_content = "".join(parts)
+                blocks: list[dict[str, Any]] = []
+                if isinstance(msg_obj, dict):
+                    content_obj = msg_obj.get("content")
+                    if isinstance(content_obj, list):
+                        for block in content_obj:
+                            if isinstance(block, dict):
+                                blocks.append(dict(block))
                 messages.append(
                     {
                         "message_id": m.uuid if hasattr(m, "uuid") else "",
                         "session_id": thread_id,
                         "role": m.type if hasattr(m, "type") else "user",
                         "content": msg_content,
+                        "blocks": blocks,
                         "status": "completed",
                     }
                 )

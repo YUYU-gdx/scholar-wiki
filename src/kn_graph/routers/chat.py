@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
+from starlette.concurrency import run_in_threadpool
 
 from kn_graph.models.chat import (
     CreateSessionRequest,
@@ -20,11 +21,11 @@ def create_router(chat_service: ChatService) -> APIRouter:
 
     @router.get("/sessions")
     async def list_sessions(library_id: str = Query(default="")):
-        return chat_service.list_sessions(library_id=library_id)
+        return await run_in_threadpool(chat_service.list_sessions, library_id)
 
     @router.get("/sessions/{session_id}")
     async def get_session(session_id: str, library_id: str = Query(default="")):
-        result = chat_service.get_session(session_id=session_id, library_id=library_id)
+        result = await run_in_threadpool(chat_service.get_session, session_id, library_id)
         if result is None:
             return JSONResponse(status_code=404, content={"error": "session_not_found", "session_id": session_id})
         return result
@@ -32,12 +33,12 @@ def create_router(chat_service: ChatService) -> APIRouter:
     @router.post("/sessions")
     async def create_session(body: CreateSessionRequest):
         library_id = str(body.library_id or "").strip()
-        result = chat_service.create_session(title=body.title, library_id=library_id)
+        result = await run_in_threadpool(chat_service.create_session, body.title, library_id)
         return JSONResponse(status_code=201, content=result)
 
     @router.delete("/sessions/{session_id}")
     async def delete_session(session_id: str, library_id: str = Query(default="")):
-        result = chat_service.delete_session(session_id=session_id, library_id=library_id)
+        result = await run_in_threadpool(chat_service.delete_session, session_id, library_id)
         return result
 
     @router.post("/sessions/{session_id}/messages")
@@ -52,14 +53,15 @@ def create_router(chat_service: ChatService) -> APIRouter:
                 mode = "agent"
             provider = str(body.provider or "").strip() or ""
             model = str(body.model or "").strip() or ""
-            payload = chat_service.send_message(
-                session_id=session_id,
-                content=content,
-                mode=mode,
-                provider=provider,
-                model=model,
-                stream=body.stream,
-                library_id=library_id,
+            payload = await run_in_threadpool(
+                chat_service.send_message,
+                session_id,
+                content,
+                mode,
+                provider,
+                model,
+                body.stream,
+                library_id,
             )
             return JSONResponse(
                 status_code=202,
@@ -95,8 +97,10 @@ def create_router(chat_service: ChatService) -> APIRouter:
         async def event_generator():
             current_cursor = cursor
             for _ in range(240):
-                rows, new_cursor, done = chat_service.read_events(
-                    message_id=message_id, cursor=current_cursor,
+                rows, new_cursor, done = await run_in_threadpool(
+                    chat_service.read_events,
+                    message_id,
+                    current_cursor,
                 )
                 for row in rows:
                     event_type = str(row.get("type", "delta") or "delta")
@@ -116,7 +120,7 @@ def create_router(chat_service: ChatService) -> APIRouter:
 
     @router.post("/sessions/{session_id}/restore")
     async def restore_session(session_id: str, library_id: str = Query(default="")):
-        result = chat_service.restore_session(session_id=session_id, library_id=library_id)
+        result = await run_in_threadpool(chat_service.restore_session, session_id, library_id)
         if not isinstance(result, dict):
             return JSONResponse(status_code=500, content={"error": "chat_restore_failed"})
         if not bool(result.get("restored")):

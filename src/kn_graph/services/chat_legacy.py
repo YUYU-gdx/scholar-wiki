@@ -325,20 +325,139 @@ class ChatService:
             "source": backend,
         }
         messages: list[dict[str, Any]] = []
-        for m in (result.get("messages", []) if isinstance(result, dict) else []):
+        def _blocks_to_text(blocks: Any) -> str:
+            if not isinstance(blocks, list):
+                return ""
+            parts: list[str] = []
+            for b in blocks:
+                if not isinstance(b, dict):
+                    continue
+                if str(b.get("type", "") or "").strip().lower() != "text":
+                    continue
+                txt = str(b.get("text", "") or "").strip()
+                if txt:
+                    parts.append(txt)
+            return "\n".join(parts).strip()
+        def _blocks_to_timeline(blocks: Any) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            if not isinstance(blocks, list):
+                return out
+            for b in blocks:
+                if not isinstance(b, dict):
+                    continue
+                btype = str(b.get("type", "") or "").strip().lower()
+                if btype == "text":
+                    txt = str(b.get("text", "") or "").strip()
+                    if txt:
+                        out.append({"event": "agent_item_delta", "text": txt, "summary": txt[:120], "state": "running"})
+                    continue
+                if btype == "thinking":
+                    thinking = str(b.get("thinking", "") or "").strip()
+                    if thinking:
+                        out.append({"event": "agent_item_thinking", "summary": "thinking", "detail": thinking, "state": "running"})
+                    continue
+                if btype == "tool_use":
+                    out.append(
+                        {
+                            "event": "tool_call",
+                            "tool": str(b.get("name", "") or ""),
+                            "arguments": b.get("input", {}) if isinstance(b.get("input"), dict) else {},
+                            "summary": str(b.get("name", "") or "tool_use"),
+                            "state": "started",
+                            "kind": "tool",
+                            "step_id": str(b.get("id", "") or ""),
+                        }
+                    )
+                    continue
+                if btype == "tool_result":
+                    out.append(
+                        {
+                            "event": "tool_call",
+                            "tool": "tool_result",
+                            "result": {"content": b.get("content")},
+                            "summary": "tool_result",
+                            "state": "failed" if bool(b.get("is_error")) else "completed",
+                            "kind": "tool",
+                            "step_id": str(b.get("tool_use_id", "") or ""),
+                        }
+                    )
+                    continue
+                out.append({"event": "agent_item_unknown", "summary": btype or "unknown", "detail": _clip(json.dumps(b, ensure_ascii=False), 800), "state": "info"})
+            return out
+        raw_messages = (result.get("messages", []) if isinstance(result, dict) else [])
+        pending_assistant: dict[str, Any] | None = None
+
+        def _flush_pending_assistant() -> None:
+            nonlocal pending_assistant
+            if pending_assistant is None:
+                return
+            content_text = str(pending_assistant.get("content", "") or "").strip()
+            tool_trace = pending_assistant.get("tool_trace", [])
+            if not content_text and not tool_trace:
+                pending_assistant = None
+                return
             messages.append({
-                "message_id": str(m.get("message_id", "") or ""),
+                "message_id": str(pending_assistant.get("message_id", "") or ""),
                 "session_id": tid,
-                "role": str(m.get("role", "user") or "user"),
-                "content": str(m.get("content", "") or ""),
-                "status": str(m.get("status", "completed") or "completed"),
+                "role": "assistant",
+                "content": content_text,
+                "status": "completed",
                 "citations_json": "[]",
                 "retrieval_json": "{}",
-                "tool_trace_json": "[]",
+                "tool_trace_json": json.dumps(tool_trace, ensure_ascii=False),
+                "tool_trace": tool_trace,
                 "error_detail": "",
                 "created_at": "",
                 "updated_at": "",
             })
+            pending_assistant = None
+
+        for m in raw_messages:
+            role = str(m.get("role", "user") or "user").strip().lower()
+            blocks = m.get("blocks")
+            tool_trace = _blocks_to_timeline(blocks)
+            content_text = str(m.get("content", "") or "").strip()
+            if not content_text:
+                content_text = _blocks_to_text(blocks)
+
+            # Claude SDK may emit tool_result in role=user messages.
+            # Normalize all non-user-query payloads into assistant turns.
+            is_user_query = role == "user" and bool(content_text)
+            if is_user_query:
+                _flush_pending_assistant()
+                messages.append({
+                    "message_id": str(m.get("message_id", "") or ""),
+                    "session_id": tid,
+                    "role": "user",
+                    "content": content_text,
+                    "status": "completed",
+                    "citations_json": "[]",
+                    "retrieval_json": "{}",
+                    "tool_trace_json": "[]",
+                    "tool_trace": [],
+                    "error_detail": "",
+                    "created_at": "",
+                    "updated_at": "",
+                })
+                continue
+
+            if pending_assistant is None:
+                pending_assistant = {
+                    "message_id": str(m.get("message_id", "") or ""),
+                    "content": "",
+                    "tool_trace": [],
+                }
+
+            if content_text:
+                prev = str(pending_assistant.get("content", "") or "").strip()
+                pending_assistant["content"] = f"{prev}\n{content_text}".strip() if prev else content_text
+            if tool_trace:
+                pending_assistant["tool_trace"] = [
+                    *(pending_assistant.get("tool_trace", []) or []),
+                    *tool_trace,
+                ]
+
+        _flush_pending_assistant()
         return {"session": session, "messages": messages}
 
     def _build_codex_runtime_overrides(self, workspace: str, library_id: str) -> dict[str, Any]:
@@ -1053,7 +1172,7 @@ class ChatService:
                 return
 
         try:
-            agent_timeout_seconds = int(os.getenv("CHAT_AGENT_TURN_TIMEOUT_SECONDS", "180") or "180")
+            agent_timeout_seconds = int(os.getenv("CHAT_AGENT_TURN_TIMEOUT_SECONDS", "1200") or "1200")
             if agent_timeout_seconds < 30:
                 agent_timeout_seconds = 30
             effective_tid = str(thread_id or "").strip()

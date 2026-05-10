@@ -201,7 +201,7 @@ class ChatService:
         path.write_text(json.dumps({"current_agent": agent_id}, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _default_agent_provider_config(self, agent_id: str) -> dict[str, str]:
-        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map  # noqa: F811
+        from kn_graph.services.cherry_provider_catalog import provider_map  # noqa: F811
         agent_defaults: dict[str, dict[str, str]] = {
             "codex":       {"provider": "deepseek", "model": ""},
             "claude_code": {"provider": "anthropic", "model": ""},
@@ -218,12 +218,11 @@ class ChatService:
             "model": defaults["model"],
             "api_key": "",
             "base_url": base_url,
-            "endpoint_url": default_endpoint_url(base_url),
         }
 
     def get_agent_settings(self) -> dict[str, Any]:
         """Read agent settings from the active agent's config file."""
-        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map, provider_presets  # noqa: F811
+        from kn_graph.services.cherry_provider_catalog import provider_map, provider_presets  # noqa: F811
         known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
         current_agent = self._get_current_agent()
         if current_agent not in known:
@@ -241,12 +240,11 @@ class ChatService:
             "model": str(config.get("model", "") or defaults["model"]),
             "api_key": str(config.get("api_key", "") or ""),
             "base_url": base_url,
-            "endpoint_url": str(config.get("endpoint_url", "") or default_endpoint_url(base_url)),
             "provider_presets": provider_presets(),
         }
 
     def save_agent_settings(self, body: dict[str, Any]) -> dict[str, Any]:
-        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map  # noqa: F811
+        from kn_graph.services.cherry_provider_catalog import provider_map  # noqa: F811
         known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
         # Handle agent switch
         requested_agent = str(body.get("current_agent", "") or "").strip()
@@ -266,8 +264,6 @@ class ChatService:
             updates["api_key"] = str(body.get("api_key", "") or "").strip()
         if "base_url" in body:
             updates["base_url"] = str(body.get("base_url", "") or "").strip()
-        if "endpoint_url" in body:
-            updates["endpoint_url"] = str(body.get("endpoint_url", "") or "").strip()
         # Auto-fill base_url from provider if switching
         new_provider = str(updates.get("provider", "") or "").strip()
         if new_provider and "base_url" not in updates:
@@ -275,9 +271,6 @@ class ChatService:
             if catalog_base:
                 updates["base_url"] = catalog_base
         if updates:
-            base = str(updates.get("base_url", "") or "").strip()
-            if not str(updates.get("endpoint_url", "") or "").strip():
-                updates["endpoint_url"] = default_endpoint_url(base)
             self._write_agent_config(current_agent, updates)
 
         # Mirror agent settings to the root workspace so that running

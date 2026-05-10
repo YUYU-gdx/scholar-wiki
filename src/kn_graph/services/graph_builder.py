@@ -245,8 +245,11 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
                 "paper_id": pid,
                 "relation_type": "main_effect",
                 "relation_type_std": "main_effect",
+                "effect_form": eff.get("effect_form", ""),
                 "relation_form": eff.get("effect_form", ""),
+                "theory_name": eff.get("theory_name", ""),
                 "verification": eff.get("verification", ""),
+                "evidence_text": eff.get("evidence_text", ""),
                 "evidence_snippet": eff.get("evidence_text", ""),
                 "display_effect_class": "nonlinear",
             }
@@ -280,8 +283,11 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
                     "source_var": src, "target_var": tgt,
                     "source_node_id": src_id, "target_node_id": tgt_id,
                 },
+                "effect_form": mod.get("effect_form", ""),
                 "direction": mod.get("effect_form", ""),
+                "theory_name": mod.get("theory_name", ""),
                 "verification": mod.get("verification", ""),
+                "evidence_text": mod.get("evidence_text", ""),
                 "evidence_snippet": mod.get("evidence_text", ""),
             }
         )
@@ -299,6 +305,7 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
                 "output_var": row.get("output_var", ""),
                 "output_canonical_var_id": row.get("output_canonical_var_id", ""),
                 "effect_form": row.get("effect_form", ""),
+                "theory_name": row.get("theory_name", ""),
                 "verification": row.get("verification", ""),
                 "evidence_text": row.get("evidence_text", ""),
                 "inputs": [],
@@ -328,8 +335,11 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
                 "input_node_ids": g["input_canonical_var_ids"],
                 "output": out,
                 "output_node_id": out_id,
+                "effect_form": g["effect_form"],
                 "effect": g["effect_form"],
+                "theory_name": g.get("theory_name", ""),
                 "verification": g["verification"],
+                "evidence_text": g["evidence_text"],
                 "evidence_snippet": g["evidence_text"],
             }
         )

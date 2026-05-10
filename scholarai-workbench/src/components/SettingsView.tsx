@@ -85,7 +85,7 @@ export default function SettingsView() {
     if (!hit) return;
     const endpoint = `${hit.base_url.replace(/\/$/, '')}/v1/chat/completions`;
     const embEndpoint = `${hit.base_url.replace(/\/$/, '')}/embeddings`;
-    // When switching providers, only send the provider identity + base_url/endpoint_url.
+    // When switching providers, only send the provider identity + base_url.
     // Do NOT include model/api_key from the old provider's drafts — that would pollute
     // the new provider's saved data. The backend will return the new provider's saved
     // model/api_key (or empty defaults if never saved).
@@ -95,7 +95,7 @@ export default function SettingsView() {
     } else if (category === 'embedding') {
       body = { provider: providerId, endpoint_url: embEndpoint };
     } else if (category === 'agent_settings' || category === 'pipeline_agent') {
-      body = { provider: providerId, base_url: hit.base_url, endpoint_url: endpoint };
+      body = { provider: providerId, base_url: hit.base_url };
     } else {
       body = { provider: providerId, base_url: hit.base_url, endpoint_url: endpoint };
     }
@@ -109,7 +109,7 @@ export default function SettingsView() {
       } else if (category === 'embedding') {
         setDrafts((prev) => ({ ...prev, embedding: { ...asRecord(prev.embedding), provider: providerId, endpoint_url: embEndpoint } }));
       } else if (category === 'agent_settings' || category === 'pipeline_agent') {
-        setDrafts((prev) => ({ ...prev, [category]: { ...asRecord(prev[category]), provider: providerId, base_url: hit.base_url, endpoint_url: endpoint } }));
+        setDrafts((prev) => ({ ...prev, [category]: { ...asRecord(prev[category]), provider: providerId, base_url: hit.base_url } }));
       } else {
         setDrafts((prev) => ({ ...prev, translation: { ...asRecord(prev.translation), provider: providerId, base_url: hit.base_url, endpoint_url: endpoint } }));
       }
@@ -199,7 +199,6 @@ export default function SettingsView() {
                   <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
                   <label><div className="mb-1">API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} /></label>
                   <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField(id, 'base_url', e.target.value)} /></label>
-                  <label><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField(id, 'endpoint_url', e.target.value)} /></label>
                 </div>
               )}
 
@@ -249,7 +248,6 @@ export default function SettingsView() {
                   </label>
                   <label><div className="mb-1">API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} /></label>
                   <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField(id, 'base_url', e.target.value)} /></label>
-                  <label className="md:col-span-2"><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField(id, 'endpoint_url', e.target.value)} /></label>
                   <div className="md:col-span-2 text-on-surface-variant">Pipeline Agent 配置独立于 Chat Agent，用于论文提取任务。仅当提取模式选择「agent」时生效。</div>
                       </>
                     );

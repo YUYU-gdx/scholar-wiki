@@ -568,8 +568,6 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     except Exception as exc:
         raise RuntimeError(f"agent_extraction_failed:invalid_extract_result_json:{exc}") from exc
 
-    _ensure_reader_note_written(agent_md_path, job_id, agent_bundle if isinstance(agent_bundle, dict) else {})
-
     # Convert agent bundle to raw_output_jsonl format for downstream compatibility
     paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
     doi = str(options.get("doi", "") or f"job::{job_id}").strip()

@@ -112,7 +112,7 @@ class SettingsService:
         return self._get_pipeline_category()
 
     def _get_pipeline_agent_category(self) -> dict[str, Any]:
-        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map, provider_presets  # noqa: F811
+        from kn_graph.services.cherry_provider_catalog import provider_map, provider_presets  # noqa: F811
         store = self._read_store()
         saved = store.get("categories", {}).get("pipeline_agent", {})
         if not isinstance(saved, dict):
@@ -130,7 +130,6 @@ class SettingsService:
             "model": str(saved.get("model", "") or ""),
             "api_key": str(saved.get("api_key", "") or ""),
             "base_url": base_url,
-            "endpoint_url": str(saved.get("endpoint_url", "") or default_endpoint_url(base_url)),
             "reasoning_effort": str(saved.get("reasoning_effort", "") or ""),
             "provider_presets": provider_presets(),
             "reasoning_effort_options": {
@@ -141,7 +140,7 @@ class SettingsService:
         }
 
     def _save_pipeline_agent_category(self, body: dict[str, Any]) -> dict[str, Any]:
-        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map  # noqa: F811
+        from kn_graph.services.cherry_provider_catalog import provider_map  # noqa: F811
         store = self._read_store()
         categories = store.get("categories", {}) if isinstance(store.get("categories"), dict) else {}
         saved = categories.get("pipeline_agent", {}) if isinstance(categories.get("pipeline_agent"), dict) else {}
@@ -153,7 +152,7 @@ class SettingsService:
                 raise ValueError("settings_validation_failed: pipeline_agent.backend")
             saved["backend"] = backend
         backend = str(saved.get("backend", "") or "codex").strip().lower()
-        for key in ("provider", "model", "api_key", "base_url", "endpoint_url"):
+        for key in ("provider", "model", "api_key", "base_url"):
             if key in body:
                 saved[key] = str(body.get(key, "") or "").strip()
         if "reasoning_effort" in body:
@@ -173,8 +172,8 @@ class SettingsService:
             base_url = (provider_map().get(provider, {})).get("base_url", "")
             if base_url:
                 saved["base_url"] = base_url
-        if not str(saved.get("endpoint_url", "") or "").strip():
-            saved["endpoint_url"] = default_endpoint_url(base_url)
+        # Keep only one URL field for agent settings.
+        saved.pop("endpoint_url", None)
         categories["pipeline_agent"] = saved
         store["categories"] = categories
         self._write_store(store)
