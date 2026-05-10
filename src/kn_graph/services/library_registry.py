@@ -415,14 +415,58 @@ def delete_library(
 
     workspace_path_text = str(matched.get("workspace_root", "") or "").strip()
     deleted_workspace = False
-    if delete_workspace_data and workspace_path_text:
-        workspace_path = Path(workspace_path_text).resolve()
-        # Single-track behavior: if registry points to a real directory, remove it.
-        # Keep a minimal safety check to avoid deleting root-like paths.
-        is_safe_leaf = len(workspace_path.parts) >= 3 and workspace_path.name.strip() not in {"", ".", ".."}
-        if is_safe_leaf and workspace_path.exists() and workspace_path.is_dir():
+    deleted_workspace_paths: list[str] = []
+    if delete_workspace_data:
+        # Delete multiple candidate workspace roots to handle stale/migrated
+        # registry records and legacy workspace layouts.
+        candidates: list[Path] = []
+        if workspace_path_text:
+            try:
+                candidates.append(Path(workspace_path_text).resolve())
+            except Exception:
+                pass
+
+        # Try index payload workspace_root as an additional source-of-truth.
+        try:
+            if index_path.exists() and index_path.is_file():
+                idx_payload = json.loads(index_path.read_text(encoding="utf-8"))
+                if isinstance(idx_payload, dict):
+                    idx_ws = str(idx_payload.get("workspace_root", "") or "").strip()
+                    if idx_ws:
+                        candidates.append(Path(idx_ws).resolve())
+        except Exception:
+            pass
+
+        # Try current configured/default workspace base path.
+        try:
+            configured_ws = _get_configured_workspace_root()
+            ws_base = configured_ws.resolve() if configured_ws is not None else workspace_root_base_from_env().resolve()
+            candidates.append((ws_base / target).resolve())
+        except Exception:
+            pass
+
+        # Try legacy/default bases as fallback cleanup for old data layout.
+        for legacy_base in (_legacy_workspace_root_default(), _home_workspace_root_default(), Path(r"D:\KNGraphAppData\libraries\workspaces").resolve()):
+            try:
+                candidates.append((legacy_base / target).resolve())
+            except Exception:
+                pass
+
+        # De-duplicate candidates by resolved string.
+        uniq: dict[str, Path] = {}
+        for p in candidates:
+            uniq[str(p)] = p
+        for workspace_path in uniq.values():
+            # Safety: only delete directories whose final folder name is library_id.
+            # This avoids deleting shared parent directories.
+            if workspace_path.name != target:
+                continue
+            if not workspace_path.exists() or not workspace_path.is_dir():
+                continue
             shutil.rmtree(workspace_path, ignore_errors=True)
-            deleted_workspace = True
+            if not workspace_path.exists():
+                deleted_workspace = True
+                deleted_workspace_paths.append(str(workspace_path))
 
     registry["libraries"] = next_rows
     default_id = _safe_library_id(str(registry.get("default_library_id", "") or ""))
@@ -434,6 +478,7 @@ def delete_library(
         "library_id": target,
         "deleted": True,
         "deleted_workspace": deleted_workspace,
+        "deleted_workspace_paths": deleted_workspace_paths,
         "workspace_path": workspace_path_text,
         "index_path": str(index_path),
         "default_library_id": str(registry.get("default_library_id", "") or ""),
