@@ -190,48 +190,6 @@ def _citation_metadata_from_markdown(md_path: Path) -> dict[str, Any]:
     return out
 
 
-def _ensure_reader_note_written(md_path: Path, job_id: str, bundle: dict[str, Any]) -> None:
-    if not md_path.exists():
-        return
-    text = md_path.read_text(encoding="utf-8", errors="ignore")
-    note_id = f"pipeline-{job_id}"
-    if f"Note ID: {note_id}" in text:
-        return
-
-    direct_effects = bundle.get("direct_effects", [])
-    lines: list[str] = []
-    if isinstance(direct_effects, list) and direct_effects:
-        for row in direct_effects[:6]:
-            if not isinstance(row, dict):
-                continue
-            src = str(row.get("source", "") or "").strip()
-            tgt = str(row.get("target", "") or "").strip()
-            eff = str(row.get("effect_form", "") or "").strip()
-            ver = str(row.get("verification", "") or "").strip()
-            if src and tgt:
-                lines.append(f"- {src} -> {tgt} ({eff}, {ver})")
-    if not lines:
-        lines.append("- No validated direct effects extracted.")
-
-    abs_path = str(md_path.resolve()).replace("\\", "/")
-    note_text = (
-        "\n\n## Reader Notes\n\n"
-        "> [!NOTE] Reader Note\n"
-        f"> Note ID: {note_id}\n"
-        "> Quote:\n"
-        "> Automated extraction summary from pipeline run.\n"
-        ">\n"
-        "> Note:\n"
-        f"> Source paper: [full.md]({abs_path})\n"
-        f"> Extractability: {str(bundle.get('extractability_status', '') or '').strip()}\n"
-        + "".join(f"> {line}\n" for line in lines)
-        + ">\n"
-        "> Time:\n"
-        f"> {datetime.now(timezone.utc).isoformat()}\n"
-    )
-    md_path.write_text(text + note_text, encoding="utf-8")
-
-
 def _stage_update(store: JobStore, job_id: str, stage: str, progress: int, event: str, **extra: Any) -> None:
     existing = store.get_job(job_id) or {}
     if _norm_status(existing.get("status")) in TERMINAL_JOB_STATUSES and event != "cancelled":
