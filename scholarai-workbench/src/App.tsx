@@ -343,8 +343,25 @@ export default function App() {
               <div className="mb-2 flex items-center gap-1.5" key="create-lib">
                 <input
                   autoFocus
-                  defaultValue={newLibraryId}
-                  onInput={(e) => setNewLibraryId((e.target as HTMLInputElement).value)}
+                  value={newLibraryId}
+                  onChange={(e) => setNewLibraryId(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const libraryId = newLibraryId.trim();
+                      if (!libraryId) return;
+                      void (async () => {
+                        try {
+                          await api.literature.createLibrary(libraryId, '', false);
+                          setCreatingLibrary(false);
+                          setNewLibraryId('');
+                          refreshLibraries();
+                        } catch (err) {
+                          window.alert(`创建失败: ${String((err as Error)?.message || err)}`);
+                        }
+                      })();
+                    }
+                  }}
                   placeholder="library_id"
                   className="flex-1 bg-surface-container border border-outline-variant rounded px-2 py-1 text-xs font-mono text-on-surface outline-none focus:border-secondary"
                 />
