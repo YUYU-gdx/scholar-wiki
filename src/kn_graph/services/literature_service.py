@@ -17,13 +17,6 @@ from typing import Any
 import requests
 
 from kn_graph.providers.zhipu import ZhipuChatCompletionsClient
-from kn_graph.services.library_registry import (
-    create_library as _libreg_create_library,
-    delete_library as _libreg_delete_library,
-    ensure_registry,
-    list_libraries_payload,
-    resolve_workspace_root,
-)
 from kn_graph.services.mineru_runner import parse_single_pdf
 
 
@@ -643,17 +636,41 @@ class LiteratureService:
         cached = self._workspace_root_cache.get(lib)
         if cached is not None:
             return cached
-        try:
-            registry = ensure_registry()
-            root = str(resolve_workspace_root(registry, lib) or "").strip()
-        except Exception:
-            root = ""
-        if not root:
+        root = self._settings.workspaces_dir / lib
+        if not root.exists() or not root.is_dir():
             return None
         path = Path(root).resolve()
-        path.mkdir(parents=True, exist_ok=True)
         self._workspace_root_cache[lib] = path
         return path
+
+    def _iter_workspace_libraries(self) -> list[tuple[str, Path]]:
+        root = Path(self._settings.workspaces_dir).resolve()
+        if not root.exists() or not root.is_dir():
+            return []
+        rows: list[tuple[str, Path]] = []
+        for item in sorted(root.iterdir(), key=lambda p: p.name):
+            if not item.is_dir():
+                continue
+            name = str(item.name or "").strip()
+            if not name or name.startswith("."):
+                continue
+            rows.append((name, item.resolve()))
+        return rows
+
+    @staticmethod
+    def _count_papers_in_workspace(workspace_root: Path) -> int:
+        db_path = workspace_root / "kn_gragh.db"
+        if not db_path.exists() or not db_path.is_file():
+            return 0
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.cursor()
+            cur.execute("select count(*) from papers")
+            count = int(cur.fetchone()[0])
+            conn.close()
+            return max(0, count)
+        except Exception:
+            return 0
 
     def _paper_key_for_row(self, row: dict[str, Any], source_path: Path | None, html_text: str) -> str:
         doi_norm = _normalize_doi_for_key(str(row.get("doi", "") or ""))
@@ -921,22 +938,36 @@ class LiteratureService:
     # ------------------------------------------------------------------
 
     def list_libraries(self) -> dict[str, Any]:
-        registry = ensure_registry(
-            registry_path=self._settings.registry_path,
-            legacy_index_root=self._settings.indexes_dir,
-        )
-        return list_libraries_payload(registry)
+        libraries: list[dict[str, Any]] = []
+        for lib, ws in self._iter_workspace_libraries():
+            libraries.append(
+                {
+                    "library_id": lib,
+                    "paper_count": self._count_papers_in_workspace(ws),
+                    "updated_at": "",
+                    "path": "",
+                    "workspace_path": str(ws),
+                }
+            )
+        default_library_id = libraries[0]["library_id"] if libraries else ""
+        return {"libraries": libraries, "default_library_id": default_library_id}
 
     def create_library(self, library_id: str, workspace_root: str = "", set_default: bool = True) -> dict[str, Any]:
         lib = str(library_id or "").strip()
         if not lib:
             raise ValueError("library_id_required")
-        result = _libreg_create_library(
-            library_id=lib,
-            workspace_root=str(workspace_root or "").strip(),
-            set_default=bool(set_default),
-        )
-        ws_path = str(result.get("workspace_path", "") or "").strip()
+        if str(workspace_root or "").strip():
+            ws = Path(str(workspace_root)).resolve()
+        else:
+            ws = (self._settings.workspaces_dir / lib).resolve()
+        ws.mkdir(parents=True, exist_ok=True)
+        result = {
+            "library_id": lib,
+            "workspace_path": str(ws),
+            "index_path": "",
+            "default_library_id": lib if set_default else "",
+        }
+        ws_path = str(ws)
         if ws_path:
             try:
                 from kn_graph.services.agent_workspace_guard import ensure_agent_workspace_minimal_config
@@ -957,10 +988,20 @@ class LiteratureService:
         lib = str(library_id or "").strip()
         if not lib:
             raise ValueError("library_id_required")
-        return _libreg_delete_library(
-            library_id=lib,
-            delete_workspace_data=bool(delete_workspace_data),
-        )
+        ws = (self._settings.workspaces_dir / lib).resolve()
+        deleted_workspace = False
+        if bool(delete_workspace_data) and ws.exists() and ws.is_dir():
+            shutil.rmtree(ws, ignore_errors=True)
+            deleted_workspace = not ws.exists()
+        return {
+            "library_id": lib,
+            "deleted": True,
+            "deleted_workspace": deleted_workspace,
+            "deleted_workspace_paths": [str(ws)] if deleted_workspace else [],
+            "workspace_path": str(ws),
+            "index_path": "",
+            "default_library_id": "",
+        }
 
     # ------------------------------------------------------------------
     # Core operations

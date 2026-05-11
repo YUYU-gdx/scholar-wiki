@@ -16,17 +16,11 @@ from kn_graph.services.pipeline_service import PipelineService
 from kn_graph.services import pipeline_runtime
 
 
-def _resolve_library_workspace(library_id: str, registry_path: str = "") -> Path:
-    from kn_graph.services.library_registry import ensure_registry, resolve_workspace_root
-
-    registry_path_arg = Path(registry_path) if registry_path else None
-    registry = ensure_registry(registry_path=registry_path_arg)
-    root = str(resolve_workspace_root(registry, library_id) or "").strip()
-    if not root:
+def _resolve_library_workspace(library_id: str, workspaces_dir: Path) -> Path:
+    target = (Path(workspaces_dir).resolve() / str(library_id or "").strip()).resolve()
+    if not target.exists() or not target.is_dir():
         raise RuntimeError(f"library_workspace_missing:{library_id}")
-    path = Path(root).resolve()
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return target
 
 
 def _save_upload(file: UploadFile, target: Path) -> tuple[str, int]:
@@ -84,11 +78,7 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             return JSONResponse(status_code=400, content={"error": "pdf_only"})
 
         try:
-            registry_path = str(getattr(pipeline_service._settings, "registry_path", "") or "")
-            try:
-                workspace_root = _resolve_library_workspace(lib, registry_path)
-            except TypeError:
-                workspace_root = _resolve_library_workspace(lib)
+            workspace_root = _resolve_library_workspace(lib, pipeline_service._settings.workspaces_dir)
         except Exception as exc:
             return JSONResponse(status_code=400, content={"error": "library_workspace_missing", "detail": str(exc)})
 

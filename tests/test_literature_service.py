@@ -29,6 +29,7 @@ class _FakeSettings:
     mineru_version: str = ""
     registry_path: str = ""
     indexes_dir: str = ""
+    workspaces_dir: Path = Path(".")
 
 
 class _FakeEmbeddingClient:
@@ -66,6 +67,10 @@ class _FakeChromaDBClient:
             {"id": object_id, "properties": dict(properties), "vector": list(vector)}
         )
 
+    def upsert_many(self, class_name: str, rows: list[tuple[str, dict[str, object], list[float]]]) -> None:
+        for object_id, properties, vector in rows:
+            self.upsert(class_name, object_id, properties, vector)
+
     def bm25_search(self, class_name: str, query: str, limit: int, library_id: str = "") -> list[dict[str, object]]:
         _ = class_name, query, limit, library_id
         return [
@@ -80,6 +85,44 @@ class _FakeChromaDBClient:
 
 
 class LiteratureServiceTest(unittest.TestCase):
+    def test_list_libraries_reads_workspaces_and_db_counts(self) -> None:
+        service = LiteratureService(
+            settings=_FakeSettings(),
+            embedding_client=_FakeEmbeddingClient(),
+            generator_client=_FakeGenerator(),
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            workspaces = root / "libraries" / "workspaces"
+            workspaces.mkdir(parents=True, exist_ok=True)
+
+            (workspaces / ".agents").mkdir(parents=True, exist_ok=True)
+            lib_a = workspaces / "smj"
+            lib_a.mkdir(parents=True, exist_ok=True)
+            lib_b = workspaces / "empty_lib"
+            lib_b.mkdir(parents=True, exist_ok=True)
+
+            import sqlite3
+
+            db_path = lib_a / "kn_gragh.db"
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.cursor()
+            cur.execute("create table papers (paper_id text primary key)")
+            cur.execute("insert into papers (paper_id) values ('p1')")
+            cur.execute("insert into papers (paper_id) values ('p2')")
+            conn.commit()
+            conn.close()
+
+            service._settings.workspaces_dir = workspaces  # type: ignore[assignment]
+
+            payload = service.list_libraries()
+            libraries = payload.get("libraries", [])
+            ids = sorted(str(x.get("library_id", "")) for x in libraries)
+            self.assertEqual(ids, ["empty_lib", "smj"])
+            by_id = {str(x.get("library_id", "")): x for x in libraries}
+            self.assertEqual(int(by_id["smj"].get("paper_count", -1)), 2)
+            self.assertEqual(int(by_id["empty_lib"].get("paper_count", -1)), 0)
+
     def test_segment_html_builds_sentence_paragraph_document_levels(self) -> None:
         html = "<html><body><p>Alpha. Beta!</p><p>第二段第一句。第二段第二句！</p></body></html>"
         segmented = segment_html(paper_id="p1", html=html, doi="10.1/x", title="t")
@@ -177,6 +220,7 @@ class LiteratureServiceTest(unittest.TestCase):
                 os.environ["LITERATURE_LIBRARY_REGISTRY_PATH"] = str(registry_path)
                 os.environ["LITERATURE_LIBRARY_INDEX_ROOT"] = str(index_root)
                 os.environ["LITERATURE_LIBRARY_WORKSPACES_ROOT"] = str(tmp / "workspaces")
+                service._settings.workspaces_dir = tmp / "workspaces"  # type: ignore[assignment]
 
                 doc_path = tmp / "source.txt"
                 doc_path.write_text("Alpha paragraph.", encoding="utf-8")
@@ -251,22 +295,16 @@ class LiteratureServiceTest(unittest.TestCase):
                 os.environ["LITERATURE_LIBRARY_REGISTRY_PATH"] = str(registry_path)
                 os.environ["LITERATURE_LIBRARY_INDEX_ROOT"] = str(index_root)
                 os.environ["LITERATURE_LIBRARY_WORKSPACES_ROOT"] = str(tmp / "workspaces")
-
-                def _fake_mineru(src: Path, out_dir: Path) -> dict[str, object]:
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    (out_dir / "result.html").write_text("<html><body>PDF Parsed</body></html>", encoding="utf-8")
-                    return {
-                        "html_text": "<html><body>PDF Parsed</body></html>",
-                        "source_kind": "html",
-                        "html_files": [str((out_dir / "result.html").resolve())],
-                        "md_files": [],
-                        "command": ["mineru"],
-                    }
-
-                service._run_mineru_cloud_to_dir = _fake_mineru  # type: ignore[method-assign]
+                service._settings.workspaces_dir = tmp / "workspaces"  # type: ignore[assignment]
 
                 pdf_path = tmp / "demo.pdf"
                 pdf_path.write_bytes(b"%PDF-1.4 fake")
+                preparsed_dir = tmp / "preparsed"
+                preparsed_dir.mkdir(parents=True, exist_ok=True)
+                preparsed_md = preparsed_dir / "parsed.md"
+                preparsed_md.write_text("# PDF Demo\n\nBody", encoding="utf-8")
+                preparsed_html = preparsed_dir / "parsed.html"
+                preparsed_html.write_text("<html><body>PDF Parsed</body></html>", encoding="utf-8")
                 manifest_path = tmp / "manifest.jsonl"
                 manifest_path.write_text(
                     json.dumps(
@@ -275,6 +313,9 @@ class LiteratureServiceTest(unittest.TestCase):
                             "doi": "",
                             "title": "PDF Demo",
                             "source_path": str(pdf_path),
+                            "preparsed_mineru_dir": str(preparsed_dir),
+                            "preparsed_main_md_path": str(preparsed_md),
+                            "preparsed_html_path": str(preparsed_html),
                         },
                         ensure_ascii=False,
                     )
@@ -303,41 +344,43 @@ class LiteratureServiceTest(unittest.TestCase):
             embedding_client=_FakeEmbeddingClient(),
             generator_client=_FakeGenerator(),
         )
-        # Patch the parse_single_pdf reference that literature_service holds.
-        try:
-            from kn_graph.services import literature_service as svc_mod
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            workspaces = tmp / "workspaces"
+            (workspaces / "lib_pdf").mkdir(parents=True, exist_ok=True)
+            service._settings.workspaces_dir = workspaces  # type: ignore[assignment]
 
-            def _fake_parse_single_pdf(pdf_path, run_dir, options=None, progress_cb=None, cancel_cb=None):
-                parse_dir = run_dir / "parse"
-                parse_dir.mkdir(parents=True, exist_ok=True)
-                md_path = parse_dir / "parsed.md"
-                md_path.write_text("# My Great Paper\n\nBody", encoding="utf-8")
-                html_path = parse_dir / "parsed.html"
-                html_path.write_text(
-                    "<html><body><pre># My Great Paper\n\nBody</pre></body></html>",
-                    encoding="utf-8",
+            pdf_path = tmp / "a.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4 test")
+            preparsed_dir = tmp / "preparsed"
+            preparsed_dir.mkdir(parents=True, exist_ok=True)
+            preparsed_md = preparsed_dir / "random.md"
+            preparsed_md.write_text("# My Great Paper\n\nBody", encoding="utf-8")
+            preparsed_html = preparsed_dir / "parsed.html"
+            preparsed_html.write_text("<html><body><pre># My Great Paper\n\nBody</pre></body></html>", encoding="utf-8")
+
+            manifest_path = tmp / "manifest.jsonl"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "paper_id": "paper_pdf",
+                        "title": "Fallback",
+                        "source_path": str(pdf_path),
+                        "preparsed_mineru_dir": str(preparsed_dir),
+                        "preparsed_main_md_path": str(preparsed_md),
+                        "preparsed_html_path": str(preparsed_html),
+                    },
+                    ensure_ascii=False,
                 )
-                return {
-                    "markdown_path": str(md_path),
-                    "html_path": str(html_path),
-                    "zip_path": "",
-                    "page_count": 1,
-                    "batch_id": "fake",
-                }
-
-            original_parse_single_pdf = svc_mod.parse_single_pdf
-            svc_mod.parse_single_pdf = _fake_parse_single_pdf
-
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                src_pdf = Path(tmp_dir) / "a.pdf"
-                src_pdf.write_bytes(b"%PDF-1.4 test")
-                out_dir = Path(tmp_dir) / "mineru_out"
-                result = service._run_mineru_cloud_to_dir(src_pdf, out_dir)
-                self.assertTrue(str(result["main_md_path"]).endswith("My Great Paper.md"))
-                self.assertTrue(Path(str(result["main_md_path"])).exists())
-        finally:
-            if original_parse_single_pdf is not None:
-                svc_mod.parse_single_pdf = original_parse_single_pdf
+                + "\n",
+                encoding="utf-8",
+            )
+            with patch.object(service, "_get_chroma", return_value=fake_chroma):
+                result = service.import_manifest(manifest_path, options={"library_id": "lib_pdf"})
+            mat = result["materialized_papers"][0]
+            main_md = Path(str(mat["mineru_main_md_path"]))
+            self.assertTrue(main_md.exists())
+            self.assertEqual(main_md.name, "My Great Paper.md")
 
     def test_chromadb_client_persist_and_search(self) -> None:
         """Verify that ChromaDBClient persists data and supports keyword + vector search."""

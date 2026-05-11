@@ -12,7 +12,6 @@ from kn_graph.services.agent_runner import AgentRunnerFactory
 from kn_graph.services.codex_library_config import load_or_init_library_codex_config, bootstrap_library_codex_config, save_library_codex_config as _save_cfg
 from kn_graph.providers.registry import ProviderRegistry  # noqa: E402
 from kn_graph.services.agent_runner import CodexRunner  # noqa: E402
-from kn_graph.services.library_registry import ensure_registry, resolve_workspace_root  # noqa: E402
 
 
 class ChatService:
@@ -70,13 +69,10 @@ class ChatService:
         target = str(library_id or "").strip()
         if not target:
             return ""
-        try:
-            registry = ensure_registry(
-                registry_path=self._settings.registry_path,
-            )
-            return str(resolve_workspace_root(registry, target) or "").strip()
-        except Exception:
+        ws = (self._settings.workspaces_dir / target).resolve()
+        if not ws.exists() or not ws.is_dir():
             return ""
+        return str(ws)
 
     def _resolve_library_codex_config(self, workspace_path: str, library_id: str) -> dict[str, Any]:
         try:
