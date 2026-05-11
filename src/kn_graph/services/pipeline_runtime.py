@@ -149,47 +149,6 @@ def _extract_agent_paper_metadata(agent_bundle: dict[str, Any]) -> dict[str, Any
     }
 
 
-def _citation_metadata_from_markdown(md_path: Path) -> dict[str, Any]:
-    if not md_path.exists() or not md_path.is_file():
-        return {}
-    text = md_path.read_text(encoding="utf-8", errors="ignore")
-    cite_line = ""
-    for line in text.splitlines():
-        if "How to cite this article:" in line:
-            cite_line = line.strip()
-            break
-    if not cite_line:
-        return {}
-
-    out: dict[str, Any] = {}
-    doi_match = re.search(r"(10\.\d{4,9}/[^\s]+)", cite_line)
-    if doi_match:
-        out["doi"] = doi_match.group(1).rstrip(").,;")
-
-    year_match = re.search(r"\((19|20)\d{2}\)", cite_line)
-    if year_match:
-        year_text = year_match.group(0)[1:-1]
-        out["publication_year"] = int(year_text)
-        out["publication_date"] = year_text
-
-    journal_match = re.search(r"\.\s([^.,\n]*Journal[^,\n]*),\s*\d", cite_line)
-    if journal_match:
-        out["journal"] = journal_match.group(1).strip()
-
-    # Authors are before "(YYYY)" in the cite line.
-    if year_match:
-        authors_text = cite_line.split(year_match.group(0), 1)[0]
-        authors_text = authors_text.replace("How to cite this article:", "").strip().strip(".")
-        # Parse author segments like "Surname, X." while preserving initials.
-        matches = re.findall(r"[^,]+,\s*(?:[A-Z](?:\.\s*)?)+(?:[A-Z](?:\.\s*)?)*", authors_text)
-        if not matches:
-            matches = [s.strip() for s in re.split(r"\s*&\s*", authors_text) if s.strip()]
-        authors_json = [{"name": m.strip().lstrip("& ").strip()} for m in matches if m.strip()]
-        if authors_json:
-            out["authors_json"] = authors_json
-    return out
-
-
 def _resolve_materialized_md_path(materialized: dict[str, Any]) -> str:
     if not isinstance(materialized, dict):
         return ""
@@ -827,26 +786,11 @@ def _run_finalize_after_import(
                         meta = {}
                 if not isinstance(meta, dict):
                     meta = {}
-                title = str(meta.get("title", "") or "").strip() or str(m.get("title", "") or str(m.get("paper_key", "")) or "").strip()
-                md_full = Path(_resolve_materialized_md_path(m))
-                cite_meta = _citation_metadata_from_markdown(md_full)
-                doi = str(m.get("doi", "") or cite_meta.get("doi", "") or "").strip()
-                authors_json = cite_meta.get("authors_json", [])
-                journal = str(cite_meta.get("journal", "") or "").strip()
-                publication_date = str(cite_meta.get("publication_date", "") or "").strip()
-                publication_year = cite_meta.get("publication_year")
                 cur.execute(
-                    """UPDATE papers SET doi = ?, title = ?, authors_json = ?, journal = ?, publication_date = ?, publication_year = ?,
-                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
+                    """UPDATE papers SET offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
                        source_html_path = ?, metadata_source = ?
                        WHERE paper_id = ?""",
                     (
-                        doi,
-                        title,
-                        json.dumps(authors_json, ensure_ascii=False),
-                        journal,
-                        publication_date,
-                        publication_year,
                         str(m.get("html_path", "") or ""),
                         str(m.get("source_pdf_path", "") or ""),
                         _resolve_materialized_md_path(m),
@@ -1034,27 +978,12 @@ def _run_finalize(
                         meta = {}
                 if not isinstance(meta, dict):
                     meta = {}
-                title = str(meta.get("title", "") or "").strip() or str(m.get("title", "") or str(m.get("paper_key", "")) or "").strip()
-                md_full = Path(_resolve_materialized_md_path(m))
-                cite_meta = _citation_metadata_from_markdown(md_full)
-                doi = str(m.get("doi", "") or cite_meta.get("doi", "") or "").strip()
-                authors_json = cite_meta.get("authors_json", [])
-                journal = str(cite_meta.get("journal", "") or "").strip()
-                publication_date = str(cite_meta.get("publication_date", "") or "").strip()
-                publication_year = cite_meta.get("publication_year")
                 # Use UPDATE to avoid clearing extraction fields (extractability etc.)
                 cur.execute(
-                    """UPDATE papers SET doi = ?, title = ?, authors_json = ?, journal = ?, publication_date = ?, publication_year = ?,
-                       offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
+                    """UPDATE papers SET offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
                        source_html_path = ?, metadata_source = ?
                        WHERE paper_id = ?""",
                     (
-                        doi,
-                        title,
-                        json.dumps(authors_json, ensure_ascii=False),
-                        journal,
-                        publication_date,
-                        publication_year,
                         str(m.get("html_path", "") or ""),
                         str(m.get("source_pdf_path", "") or ""),
                         _resolve_materialized_md_path(m),
