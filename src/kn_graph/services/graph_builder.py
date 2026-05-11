@@ -13,6 +13,13 @@ import re
 logger = logging.getLogger(__name__)
 
 
+def _resolve_display_effect_class(effect_form: object) -> str:
+    value = str(effect_form or "").strip().lower()
+    if value in {"positive", "negative", "nonlinear", "unclear"}:
+        return value
+    return "nonlinear"
+
+
 def _slug(text: str) -> str:
     t = re.sub(r"\s+", " ", str(text or "").strip().lower())
     t = re.sub(r"[^a-z0-9一-鿿]+", "-", t).strip("-")
@@ -251,7 +258,7 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
                 "verification": eff.get("verification", ""),
                 "evidence_text": eff.get("evidence_text", ""),
                 "evidence_snippet": eff.get("evidence_text", ""),
-                "display_effect_class": "nonlinear",
+                "display_effect_class": _resolve_display_effect_class(eff.get("effect_form", "")),
             }
         )
 

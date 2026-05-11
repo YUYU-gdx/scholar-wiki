@@ -201,17 +201,19 @@ class GraphService:
         out["target"] = target
 
         rel_type_std = str(out.get("relation_type_std", "") or out.get("relation_type", "") or "").strip()
+        effect_form = str(out.get("effect_form", "") or "").strip()
         out["relation_type_std"] = rel_type_std
         out["relation_type"] = str(out.get("relation_type", "") or rel_type_std).strip()
         out["relation_type_raw"] = str(out.get("relation_type_raw", "") or out.get("relation_type", "") or "").strip()
-        out["direction"] = str(out.get("effect_form", "") or "").strip()
-        out["relation_form"] = str(out.get("effect_form", "") or "").strip()
+        out["effect_form"] = effect_form
+        out["direction"] = effect_form
+        out["relation_form"] = effect_form
         out["evidence_section"] = str(out.get("evidence_text", "") or "").strip()
         out["evidence_snippet"] = str(out.get("evidence_text", "") or "").strip()
         out["evidence_anchor"] = str(out.get("evidence_anchor", "") or "").strip()
         out["verification"] = str(out.get("verification", "") or "").strip()
         out["hypothesis_label"] = str(out.get("theory_name", "") or "").strip()
-        out["display_effect_class"] = str(out.get("display_effect_class", "") or "").strip()
+        out["display_effect_class"] = str(out.get("display_effect_class", "") or effect_form).strip()
 
         pid_raw = str(out.get("paper_id_raw", "") or out.get("paper_id", "") or "").strip()
         out["paper_id_raw"] = pid_raw
@@ -901,20 +903,6 @@ class GraphService:
         files: dict[str, dict[str, Any]] = {}
         default_view = "none"
 
-        if source_pdf:
-            try:
-                p = Path(source_pdf)
-                if p.exists():
-                    files["pdf"] = {
-                        "path": source_pdf,
-                        "name": p.name,
-                        "size_bytes": p.stat().st_size,
-                    }
-                    if default_view == "none":
-                        default_view = "pdf"
-            except OSError:
-                pass
-
         if source_md:
             try:
                 p = Path(source_md)
@@ -952,6 +940,20 @@ class GraphService:
                     }
                     if default_view == "none":
                         default_view = "html"
+            except OSError:
+                pass
+
+        if source_pdf:
+            try:
+                p = Path(source_pdf)
+                if p.exists():
+                    files["pdf"] = {
+                        "path": source_pdf,
+                        "name": p.name,
+                        "size_bytes": p.stat().st_size,
+                    }
+                    if default_view == "none":
+                        default_view = "pdf"
             except OSError:
                 pass
 
