@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -11,6 +11,7 @@ import { api } from '../../api';
 import { readerNotesManager } from './ReaderNotesManager';
 import { ensureMarkdownPathForNotes, mergeNotesIntoMarkdown, setRecordedNotesMarkdownPath, upsertNoteInMarkdown } from './NoteMarkdownSync';
 import type { PaperFiles } from '../../types';
+import { isSelectionInside } from './selectionScope';
 
 interface PdfViewerProps {
   data: Uint8Array;
@@ -37,6 +38,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   const [selectionUI, setSelectionUI] = useState({ visible: false, x: 0, y: 0, text: '' });
   const [translationOpen, setTranslationOpen] = useState(false);
   const [translationText, setTranslationText] = useState('');
+  const selectionHostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -54,10 +56,17 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   }, [safePdfBytes]);
 
   useEffect(() => {
+    const host = selectionHostRef.current;
+    if (!host) return;
     const onUp = () => {
       const sel = window.getSelection();
+      if (!isSelectionInside(host, sel)) {
+        setSelectionUI((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+        return;
+      }
       const picked = String(sel?.toString() || '').trim();
       if (!picked || !sel || sel.rangeCount === 0) {
+        setSelectionUI((prev) => (prev.visible ? { ...prev, visible: false } : prev));
         return;
       }
       const range = sel.getRangeAt(0);
@@ -66,9 +75,9 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       const rect = range.getBoundingClientRect();
       setSelectionUI({ visible: true, x: Math.max(12, rect.left), y: Math.max(12, rect.bottom + 8), text: picked });
     };
-    document.addEventListener('mouseup', onUp);
+    host.addEventListener('mouseup', onUp);
     return () => {
-      document.removeEventListener('mouseup', onUp);
+      host.removeEventListener('mouseup', onUp);
     };
   }, []);
 
@@ -213,7 +222,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto flex justify-center p-4">
+      <div ref={selectionHostRef} className="flex-1 overflow-auto flex justify-center p-4">
         {pdfDocumentNode}
       </div>
       <SelectionActionPopover

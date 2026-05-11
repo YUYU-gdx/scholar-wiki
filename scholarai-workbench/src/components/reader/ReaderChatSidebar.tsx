@@ -1,7 +1,8 @@
-﻿import { useCallback, useEffect, useRef, useState } from 'react';
-import { Send, PanelRightClose, PanelRightOpen, BookOpen } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Send, PanelRightClose, PanelRightOpen, BookOpen, ChevronDown } from 'lucide-react';
 import { api } from '../../api';
 import type { ChatMessage } from '../../types';
+import { toTimelineRow } from './readerToolTrace';
 
 interface ReaderChatSidebarProps {
   paperId: string;
@@ -22,6 +23,7 @@ export default function ReaderChatSidebar({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [expandedToolItems, setExpandedToolItems] = useState<Record<string, boolean>>({});
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
 
@@ -36,6 +38,7 @@ export default function ReaderChatSidebar({
   const attachStream = useCallback((sid: string, messageId: string) => {
     if (streamRef.current) streamRef.current.close();
     const es = api.chat.streamEvents(sid, messageId);
+
     es.addEventListener('delta', (evt) => {
       try {
         const payload = JSON.parse(evt.data || '{}');
@@ -46,11 +49,53 @@ export default function ReaderChatSidebar({
         // ignore
       }
     });
+
+    es.addEventListener('tool_call', (evt) => {
+      try {
+        const payload = JSON.parse(evt.data || '{}');
+        setMessages((prev) => prev.map((m) => (
+          m.message_id === messageId
+            ? { ...m, tool_trace: [...(m.tool_trace || []), { ...payload, event: 'tool_call' }], status: 'running' }
+            : m
+        )));
+      } catch {
+        // ignore
+      }
+    });
+
+    const pushEvent = (evtName: string, evt: Event) => {
+      try {
+        const payload = JSON.parse((evt as MessageEvent).data || '{}');
+        setMessages((prev) => prev.map((m) => (
+          m.message_id === messageId
+            ? { ...m, tool_trace: [...(m.tool_trace || []), { ...payload, event: evtName }], status: 'running' }
+            : m
+        )));
+      } catch {
+        // ignore
+      }
+    };
+
+    es.addEventListener('agent_item_started', (evt) => pushEvent('agent_item_started', evt));
+    es.addEventListener('agent_item_completed', (evt) => pushEvent('agent_item_completed', evt));
+    es.addEventListener('agent_item_delta', (evt) => pushEvent('agent_item_delta', evt));
+    es.addEventListener('status', (evt) => pushEvent('status', evt));
+    es.addEventListener('citation', (evt) => pushEvent('citation', evt));
+
     es.addEventListener('completed', (evt) => {
       try {
         const payload = JSON.parse(evt.data || '{}');
         setMessages((prev) => prev.map((m) => (
-          m.message_id === messageId ? { ...m, content: payload.answer || m.content || '', status: 'completed' } : m
+          m.message_id === messageId
+            ? {
+                ...m,
+                content: payload.answer || m.content || '',
+                tool_trace: (m.tool_trace && m.tool_trace.length > 0)
+                  ? m.tool_trace
+                  : (Array.isArray(payload.tool_trace) ? payload.tool_trace : []),
+                status: 'completed',
+              }
+            : m
         )));
       } catch {
         // ignore
@@ -58,13 +103,22 @@ export default function ReaderChatSidebar({
       es.close();
       streamRef.current = null;
     });
-    es.addEventListener('failed', () => {
-      setMessages((prev) => prev.map((m) => (
-        m.message_id === messageId ? { ...m, status: 'failed', error_detail: 'stream_failed' } : m
-      )));
+
+    es.addEventListener('failed', (evt) => {
+      try {
+        const payload = JSON.parse((evt as MessageEvent).data || '{}');
+        setMessages((prev) => prev.map((m) => (
+          m.message_id === messageId ? { ...m, status: 'failed', error_detail: payload.error || 'stream_failed' } : m
+        )));
+      } catch {
+        setMessages((prev) => prev.map((m) => (
+          m.message_id === messageId ? { ...m, status: 'failed', error_detail: 'stream_failed' } : m
+        )));
+      }
       es.close();
       streamRef.current = null;
     });
+
     streamRef.current = es;
   }, []);
 
@@ -75,9 +129,9 @@ export default function ReaderChatSidebar({
     setSubmitting(true);
     try {
       const sid = await ensureSession();
-      const contextSuffix = `\n\n目前用户正在文献阅读器中进行对话，当前文献的绝对路径：${absolutePath || '未知路径'}`;
+      const contextSuffix = `\n\n当前用户正在文献阅读器中进行对话，当前文献的绝对路径：${absolutePath || '未知路径'}`;
       const finalContent = `${question}${contextSuffix}`;
-      const res = await api.chat.sendMessage(sid, finalContent, libraryId, 'agent', 'codex', 'codex-local', true);
+      const res = await api.chat.sendMessage(sid, finalContent, libraryId, 'agent', '', 'codex-local', true);
       const userMsg: ChatMessage = {
         message_id: res.user_message_id,
         session_id: sid,
@@ -91,6 +145,7 @@ export default function ReaderChatSidebar({
         role: 'assistant',
         content: '',
         status: 'running',
+        tool_trace: [],
       };
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       attachStream(sid, res.assistant_message_id);
@@ -112,10 +167,19 @@ export default function ReaderChatSidebar({
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
   }, [messages]);
 
+  const visibleMessages = messages.filter((m) => {
+    if (m.role !== 'assistant') return true;
+    const hasContent = String(m.content || '').trim().length > 0;
+    const hasTrace = Array.isArray(m.tool_trace) && m.tool_trace.length > 0;
+    const hasError = String(m.error_detail || '').trim().length > 0 || m.status === 'failed';
+    const isRunning = m.status === 'running';
+    return hasContent || hasTrace || hasError || isRunning;
+  });
+
   if (!isOpen) {
     return (
       <button
-        className="absolute right-4 top-28 px-2.5 py-1.5 text-[10px] font-mono bg-surface-container border border-outline-variant rounded-lg hover:bg-surface-container-low z-10 shadow-sm inline-flex items-center gap-1"
+        className="absolute right-4 top-64 px-2.5 py-1.5 text-[10px] font-mono bg-surface-container border border-outline-variant rounded-lg hover:bg-surface-container-low z-10 shadow-sm inline-flex items-center gap-1"
         onClick={onToggle}
       >
         <PanelRightOpen className="w-3 h-3" />
@@ -143,15 +207,56 @@ export default function ReaderChatSidebar({
       </div>
 
       <div ref={feedRef} className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-        {messages.map((m) => (
+        {visibleMessages.map((m) => (
           <div key={m.message_id} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
             <div className={`max-w-[92%] px-3 py-2 rounded-xl text-xs leading-relaxed whitespace-pre-wrap ${
               m.role === 'user'
                 ? 'bg-primary-container text-on-primary'
                 : 'bg-surface-container border border-outline-variant text-on-surface'
             }`}>
-              {m.role === 'assistant' && !m.content ? '正在思考...' : m.content}
-              {m.status === 'failed' && <div className="mt-2 text-error">消息流失败，请重试。</div>}
+              {m.role !== 'assistant' && m.content}
+              {m.role === 'assistant' && (!Array.isArray(m.tool_trace) || m.tool_trace.length === 0) && (
+                <>
+                  {!m.content ? 'Thinking...' : m.content}
+                </>
+              )}
+              {m.status === 'failed' && <div className="mt-2 text-error">消息流失败：{m.error_detail || 'stream_failed'}</div>}
+              {m.role === 'assistant' && Array.isArray(m.tool_trace) && m.tool_trace.length > 0 && (
+                <div className="space-y-2 mt-2">
+                  {m.tool_trace
+                    .map((t) => toTimelineRow((t && typeof t === 'object') ? (t as Record<string, unknown>) : {}))
+                    .filter((x): x is NonNullable<ReturnType<typeof toTimelineRow>> => !!x)
+                    .map((timeline, idx) => {
+                      const itemKey = `${m.message_id}-inline-${idx}`;
+                      const itemExpanded = !!expandedToolItems[itemKey];
+                      if (timeline.kind === 'delta_text') {
+                        return (
+                          <div key={itemKey} className="text-xs text-on-surface-variant whitespace-pre-wrap break-words px-1 py-0.5">
+                            {timeline.detail}
+                          </div>
+                        );
+                      }
+                      return (
+                        <div key={itemKey} className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-[10px] font-mono overflow-hidden">
+                          <button
+                            onClick={() => setExpandedToolItems((prev) => ({ ...prev, [itemKey]: !itemExpanded }))}
+                            className="w-full text-left p-2.5 flex items-center justify-between hover:bg-surface-container-low transition-colors"
+                          >
+                            <span className={`${timeline.state === 'failed' ? 'text-error' : timeline.state === 'running' ? 'text-amber-600' : 'text-secondary'} font-bold truncate`}>{timeline.title}</span>
+                            <ChevronDown className={`w-3.5 h-3.5 text-outline transition-transform ${itemExpanded ? 'rotate-180' : ''}`} />
+                          </button>
+                          {itemExpanded && (
+                            <div className="px-2.5 pb-2.5 space-y-2">
+                              <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30">
+                                <div className="text-[11px] text-on-surface-variant break-words whitespace-pre-wrap">{timeline.detail}</div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -186,3 +291,4 @@ export default function ReaderChatSidebar({
     </aside>
   );
 }
+

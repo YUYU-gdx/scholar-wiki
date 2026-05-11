@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, AlertCircle } from 'lucide-react';
+import { FileText, AlertCircle, StickyNote, Link2, Network } from 'lucide-react';
 import PdfViewer from './PdfViewer';
 import MarkdownEditor from './MarkdownEditor';
 import AnnotationSidebar from './AnnotationSidebar';
@@ -26,6 +26,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [entitiesOpen, setEntitiesOpen] = useState(false);
   const { graphData } = useApp();
+  const primaryPaperId = String(rawPaperId || paperId || '').trim();
 
   useEffect(() => {
     if (!paperId) return;
@@ -120,7 +121,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
 
       {(document.type === 'pdf' || document.type === 'markdown') && (
         <AnnotationSidebar
-          paperId={paperId}
+          paperId={primaryPaperId}
           libraryId={libraryId}
           markdownPath={String(document.markdown_path || '')}
           isOpen={sidebarOpen}
@@ -130,7 +131,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
 
       {(document.type === 'pdf' || document.type === 'markdown') && (
         <BacklinksPanel
-          paperId={paperId}
+          paperId={primaryPaperId}
           libraryId={libraryId}
           isOpen={backlinksOpen}
           onToggle={() => setBacklinksOpen(!backlinksOpen)}
@@ -139,7 +140,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
 
       {(document.type === 'pdf' || document.type === 'markdown') && (
         <RelatedEntities
-          paperId={paperId}
+          paperId={primaryPaperId}
           libraryId={libraryId}
           graphData={graphData}
           isOpen={entitiesOpen}
@@ -147,35 +148,46 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
         />
       )}
 
-      {!sidebarOpen && !backlinksOpen && !entitiesOpen && (document.type === 'pdf' || document.type === 'markdown') && (
-        <button
-          className="absolute right-4 top-16 px-2 py-1 text-[10px] font-mono bg-surface-container border border-outline-variant rounded hover:bg-surface-container-low z-10 shadow-sm"
-          onClick={() => setSidebarOpen(true)}
-        >
-          Notes
-        </button>
-      )}
-
-      {!sidebarOpen && !backlinksOpen && !entitiesOpen && (document.type === 'pdf' || document.type === 'markdown') && (
-        <button
-          className="absolute right-4 top-32 px-2 py-1 text-[10px] font-mono bg-surface-container border border-outline-variant rounded hover:bg-surface-container-low z-10 shadow-sm"
-          onClick={() => setBacklinksOpen(true)}
-        >
-          Links
-        </button>
-      )}
-
-      {!sidebarOpen && !backlinksOpen && !entitiesOpen && (document.type === 'pdf' || document.type === 'markdown') && (
-        <button
-          className="absolute right-4 top-48 px-2 py-1 text-[10px] font-mono bg-surface-container border border-outline-variant rounded hover:bg-surface-container-low z-10 shadow-sm"
-          onClick={() => setEntitiesOpen(true)}
-        >
-          Entities
-        </button>
+      {(document.type === 'pdf' || document.type === 'markdown') && (
+        <div className="absolute right-4 top-16 z-20 flex flex-col gap-2">
+          <button
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold shadow-sm transition-all ${
+              sidebarOpen
+                ? 'bg-secondary-container/20 border-secondary/40 text-secondary'
+                : 'bg-surface-container-lowest border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
+            }`}
+            onClick={() => setSidebarOpen((v) => !v)}
+          >
+            <StickyNote className="w-3.5 h-3.5" />
+            Notes
+          </button>
+          <button
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold shadow-sm transition-all ${
+              backlinksOpen
+                ? 'bg-secondary-container/20 border-secondary/40 text-secondary'
+                : 'bg-surface-container-lowest border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
+            }`}
+            onClick={() => setBacklinksOpen((v) => !v)}
+          >
+            <Link2 className="w-3.5 h-3.5" />
+            Links
+          </button>
+          <button
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold shadow-sm transition-all ${
+              entitiesOpen
+                ? 'bg-secondary-container/20 border-secondary/40 text-secondary'
+                : 'bg-surface-container-lowest border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
+            }`}
+            onClick={() => setEntitiesOpen((v) => !v)}
+          >
+            <Network className="w-3.5 h-3.5" />
+            Entities
+          </button>
+        </div>
       )}
 
       <ReaderChatSidebar
-        paperId={paperId}
+        paperId={primaryPaperId}
         libraryId={libraryId}
         absolutePath={String(document.absolute_path || '')}
         isOpen={chatOpen}

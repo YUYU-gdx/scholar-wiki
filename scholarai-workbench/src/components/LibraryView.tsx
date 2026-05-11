@@ -90,9 +90,10 @@ export default function LibraryView() {
     const paperMap = graphData?.paper_map || {};
     return Object.entries(paperMap).map(([scopedKey, detail]) => {
       const d = (detail || {}) as Record<string, unknown>;
-      const mappedPaperId = String(d.paper_id || scopedKey.split('::').at(-1) || scopedKey).trim();
-      const paperId = mappedPaperId.includes('::') ? String(mappedPaperId.split('::').at(-1) || mappedPaperId) : mappedPaperId;
       const rawPaperId = String(d.paper_id_raw || '').trim();
+      const mappedPaperId = String(d.paper_id || scopedKey.split('::').at(-1) || scopedKey).trim();
+      const fallbackPaperId = mappedPaperId.includes('::') ? String(mappedPaperId.split('::').at(-1) || mappedPaperId) : mappedPaperId;
+      const paperId = rawPaperId || fallbackPaperId;
       const libraryId = String(d.library_id || scopedKey.split('::')[0] || '');
       const paperVars = variables.filter((v) => {
         const src = String(v.latest_concept_source?.paper_id || '');

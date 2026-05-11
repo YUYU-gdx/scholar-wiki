@@ -20,8 +20,8 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
     const paper = graphData.paper_map?.[scopedKey] || graphData.paper_map?.[paperId];
     const variableNames = new Set<string>(
       (paper?.context_variables || []).concat(
-        (paper?.main_effects || []).flatMap((e: any) => [e.from, e.to])
-      )
+        (paper?.main_effects || []).flatMap((e: any) => [e.from, e.to]),
+      ),
     );
 
     for (const node of graphData.nodes) {
@@ -53,7 +53,7 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
           <p className="text-xs text-outline">No extracted entities</p>
         )}
 
-        {paperNodes.map(node => (
+        {paperNodes.map((node) => (
           <button
             key={node.id}
             className="flex items-center gap-1 w-full text-left text-xs px-1.5 py-0.5 rounded truncate hover:bg-surface-container-low text-on-surface-variant"
@@ -70,7 +70,7 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
           return (
             <div key={i} className="flex items-center gap-1 text-[10px] text-on-surface-variant px-1.5 py-0.5 truncate">
               <GitBranch className="w-3 h-3 shrink-0" />
-              {src} → {tgt}
+              {src} {'->'} {tgt}
             </div>
           );
         })}

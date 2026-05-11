@@ -14,16 +14,28 @@ export default function BacklinksPanel({ paperId, libraryId, isOpen, onToggle }:
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!isOpen || !paperId) return;
+    if (!isOpen || !paperId) {
+      setEntries([]);
+      setLoading(false);
+      return;
+    }
     const shell = window.desktopShell;
-    if (!shell || shell.runtime !== 'electron') return;
+    if (!shell || shell.runtime !== 'electron') {
+      setEntries([]);
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
     const pattern = `[[@${paperId}]]`;
     shell.grepWorkspace(pattern, libraryId).then((r: any) => {
       if (r?.ok) setEntries(r.results || []);
+      else setEntries([]);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => {
+      setEntries([]);
+      setLoading(false);
+    });
   }, [isOpen, paperId, libraryId]);
 
   if (!isOpen) return null;
@@ -56,3 +68,4 @@ export default function BacklinksPanel({ paperId, libraryId, isOpen, onToggle }:
     </div>
   );
 }
+

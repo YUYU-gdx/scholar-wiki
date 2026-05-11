@@ -27,6 +27,7 @@ import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { wikiLinkCompletionSource, wikiLinkPlugin, setWikiLinkNodeCache } from './WikiLink';
 import { convertScriptOnlyKatexToHtml } from './katexScriptAlignment';
 import { useApp } from '../../App';
+import { isSelectionInside } from './selectionScope';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -122,6 +123,7 @@ export default function MarkdownEditor({
 
   // CM6 refs
   const editorContainerRef = useRef<HTMLDivElement>(null);
+  const selectionHostRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const currentContentRef = useRef(content);
 
@@ -309,11 +311,18 @@ export default function MarkdownEditor({
       setSelectionUI({ visible: false, x: 0, y: 0, text: '', lineEnd: -1 });
       return;
     }
+    const host = selectionHostRef.current;
+    if (!host) return;
     const onUp = () => {
       const sel = window.getSelection();
+      if (!isSelectionInside(host, sel)) {
+        setSelectionUI((prev) => (prev.visible ? { ...prev, visible: false, lineEnd: -1 } : prev));
+        return;
+      }
       const raw = sel?.toString() || '';
       const picked = raw.trim();
       if (!picked || !sel || sel.rangeCount === 0) {
+        setSelectionUI((prev) => (prev.visible ? { ...prev, visible: false, lineEnd: -1 } : prev));
         return;
       }
       const range = sel.getRangeAt(0);
@@ -340,9 +349,9 @@ export default function MarkdownEditor({
         lineEnd,
       });
     };
-    document.addEventListener('mouseup', onUp);
+    host.addEventListener('mouseup', onUp);
     return () => {
-      document.removeEventListener('mouseup', onUp);
+      host.removeEventListener('mouseup', onUp);
     };
   }, [mode]);
 
@@ -606,7 +615,7 @@ export default function MarkdownEditor({
   }, [text]);
 
   return (
-    <div className="flex flex-col h-full bg-surface-container-low">
+    <div ref={selectionHostRef} className="flex flex-col h-full bg-surface-container-low">
       <div className="flex items-center justify-between px-4 py-2 border-b border-outline-variant bg-surface-container-lowest">
         <span className="text-xs font-mono text-on-surface-variant truncate max-w-[300px]">{fileName}</span>
         <div className="flex items-center gap-1 bg-surface-container rounded-lg p-0.5">
