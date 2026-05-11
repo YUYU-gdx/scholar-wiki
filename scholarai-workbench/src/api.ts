@@ -70,25 +70,23 @@ export const api = {
       if (libraryId) params.set('library_id', libraryId);
       return jsonFetch<NeighborhoodResponse>(`/graph/neighborhood?${params}`);
     },
-    semanticVariableSearch(query: string, topK: number, libraryIds: string[]): Promise<SemanticVariableSearchResponse> {
-      return jsonFetch<SemanticVariableSearchResponse>('/graph/semantic-variables/search', {
-        method: 'POST',
-        body: JSON.stringify({
-          query,
-          top_k: topK,
-          library_ids: libraryIds,
-        }),
-      });
+    async semanticVariableSearch(query: string, topK: number, libraryIds: string[]): Promise<SemanticVariableSearchResponse> {
+      const body = JSON.stringify({ query, top_k: topK, library_ids: libraryIds });
+      try {
+        return await jsonFetch<SemanticVariableSearchResponse>('/graph/semantic-variables/search', { method: 'POST', body });
+      } catch (err) {
+        if (String((err as Error)?.message || '') !== 'http_404') throw err;
+        return jsonFetch<SemanticVariableSearchResponse>('/v1/graph/semantic-variables/search', { method: 'POST', body });
+      }
     },
-    semanticVariableNeighbors(variableName: string, topK: number, libraryIds: string[]): Promise<SemanticVariableNeighborsResponse> {
-      return jsonFetch<SemanticVariableNeighborsResponse>('/graph/semantic-variables/neighbors', {
-        method: 'POST',
-        body: JSON.stringify({
-          variable_name: variableName,
-          top_k: topK,
-          library_ids: libraryIds,
-        }),
-      });
+    async semanticVariableNeighbors(variableName: string, topK: number, libraryIds: string[]): Promise<SemanticVariableNeighborsResponse> {
+      const body = JSON.stringify({ variable_name: variableName, top_k: topK, library_ids: libraryIds });
+      try {
+        return await jsonFetch<SemanticVariableNeighborsResponse>('/graph/semantic-variables/neighbors', { method: 'POST', body });
+      } catch (err) {
+        if (String((err as Error)?.message || '') !== 'http_404') throw err;
+        return jsonFetch<SemanticVariableNeighborsResponse>('/v1/graph/semantic-variables/neighbors', { method: 'POST', body });
+      }
     },
     paper(id: string, libraryId: string = ''): Promise<PaperDetail> {
       const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';

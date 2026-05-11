@@ -38,6 +38,7 @@
       <div id="graphWrap" class="graph-wrap"><div id="scene" class="scene"></div></div>
       <div class="legend">
         <div class="legend-title">关系颜色图例</div>
+        <div class="legend-row"><span class="muted">build: ARROW_DEBUG_20260511_01</span></div>
         <div class="legend-row"><span class="legend-dot" style="background:#53d39a"></span><span>正向关系（positive）</span></div>
         <div class="legend-row"><span class="legend-dot" style="background:#f07178"></span><span>负向关系（negative）</span></div>
         <div class="legend-row"><span class="legend-dot" style="background:#f6c95b"></span><span>其他/不确定/非线性/调节</span></div>
@@ -51,6 +52,7 @@
   <script>
     (() => {
       const params = new URLSearchParams(window.location.search || "");
+      const DEBUG_GRAPH = params.get("graph_debug") === "1" || window.localStorage.getItem("KN_GRAPH_DEBUG") === "1";
       const activeLibraryId = String(params.get("active_library_id") || params.get("library_id") || "supply_chain").trim() || "supply_chain";
       const initialLibraryIds = String(params.get("library_ids") || activeLibraryId).split(",").map(v => v.trim()).filter(Boolean);
       const selectedNodeIdParam = String(params.get("selected_node_id") || "").trim();
@@ -59,6 +61,82 @@
       const els = { detailScroll:document.getElementById("detailScroll"), tooltip:document.getElementById("tooltip"), fallback:document.getElementById("fallback"), scene:document.getElementById("scene"), graphWrap:document.getElementById("graphWrap") };
       const theme = { node:"#7bd8f6", pos:"#53d39a", neg:"#f07178", neu:"#f6c95b", mod:"#4f46e5", modHint:"#94a3b8" };
       const esc = t => String(t || "").replace(/[&<>]/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[ch]));
+      const debugLog = (...args) => { if(DEBUG_GRAPH) console.log("[graph-debug]", ...args); };
+      function summarizeLinks(links){
+        const arr=Array.isArray(links)?links:[];
+        const sample=arr.slice(0,5).map(l=>({
+          source_type: typeof l?.source,
+          target_type: typeof l?.target,
+          source: typeof l?.source === "object" ? l?.source?.id : l?.source,
+          target: typeof l?.target === "object" ? l?.target?.id : l?.target,
+          direction: l?.direction || "",
+          effect_form: l?.effect_form || "",
+          is_moderation: !!l?.is_moderation
+        }));
+        const missingSrc=arr.filter(l=>!String(typeof l?.source === "object" ? l?.source?.id : l?.source || "").trim()).length;
+        const missingTgt=arr.filter(l=>!String(typeof l?.target === "object" ? l?.target?.id : l?.target || "").trim()).length;
+        const missingDir=arr.filter(l=>!String(l?.direction||"").trim()).length;
+        return {total:arr.length,missingSrc,missingTgt,missingDir,sample};
+      }
+      function summarizeSceneObjects(graph){
+        const out={ total:0, line:0, points:0, sprite:0, mesh:0, linkLike:0, particleLike:0, arrowLike:0 };
+        if(!graph || typeof graph.scene!=="function") return out;
+        try{
+          const scene=graph.scene();
+          if(!scene || typeof scene.traverse!=="function") return out;
+          scene.traverse(obj=>{
+            out.total+=1;
+            const t=String(obj?.type||"");
+            const n=String(obj?.name||"").toLowerCase();
+            if(t==="Line" || t==="LineSegments" || t==="LineLoop") out.line+=1;
+            if(t==="Points") out.points+=1;
+            if(t==="Sprite") out.sprite+=1;
+            if(t==="Mesh") out.mesh+=1;
+            if(n.includes("link")) out.linkLike+=1;
+            if(n.includes("particle")) out.particleLike+=1;
+            if(n.includes("arrow")) out.arrowLike+=1;
+          });
+        }catch(err){
+          debugLog("scene:summary:error", String(err&&err.message||err||"unknown"));
+        }
+        return out;
+      }
+      function logParticleProbe(graph, links){
+        if(!DEBUG_GRAPH || !graph) return;
+        try{
+          const accessor = typeof graph.linkDirectionalParticles === "function" ? graph.linkDirectionalParticles() : null;
+          const sampled=(Array.isArray(links)?links:[]).slice(0,12).map((l,idx)=>{
+            let v=null;
+            try{ v = typeof accessor === "function" ? accessor(l) : accessor; }catch{ v = "err"; }
+            return {
+              idx,
+              source: typeof l?.source === "object" ? l?.source?.id : l?.source,
+              target: typeof l?.target === "object" ? l?.target?.id : l?.target,
+              is_moderation: !!l?.is_moderation,
+              particles: v
+            };
+          });
+          debugLog("particle:accessor:summary", { accessorType: typeof accessor, sampledCount: sampled.length });
+          sampled.forEach(row=>debugLog("particle:accessor:item", row));
+        }catch(err){
+          debugLog("particle:accessor:error", String(err&&err.message||err||"unknown"));
+        }
+        try{
+          const base=summarizeSceneObjects(graph);
+          const first=(Array.isArray(links)?links:[]).find(l=>!l?.is_moderation) || (Array.isArray(links)?links:[])[0];
+          if(first && typeof graph.emitParticle === "function"){
+            for(let i=0;i<6;i+=1) graph.emitParticle(first);
+            window.setTimeout(()=>{
+              const after=summarizeSceneObjects(graph);
+              debugLog("particle:emitProbe", { base, after, deltaTotal: (after.total||0)-(base.total||0), link: { source: typeof first?.source==="object"?first?.source?.id:first?.source, target: typeof first?.target==="object"?first?.target?.id:first?.target } });
+            }, 180);
+          }else{
+            debugLog("particle:emitProbe:skip", { hasEmit: typeof graph.emitParticle === "function", hasLink: !!first });
+          }
+        }catch(err){
+          debugLog("particle:emitProbe:error", String(err&&err.message||err||"unknown"));
+        }
+      }
       const nodeName = n => n?.label || n?.name || n?.id || "node";
       const edgeKey = l => { const s = typeof l.source === "object" ? l.source?.id : l.source; const t = typeof l.target === "object" ? l.target?.id : l.target; return `${s}=>${t}::${l.paper_id||""}::${l.direction||""}::${l.is_moderation?"m":"e"}`; };
       const showTip = (lines,x,y) => { if(!lines?.length){ els.tooltip.style.display="none"; return; } els.tooltip.innerHTML=lines.join("<br>"); els.tooltip.style.left=`${x+12}px`; els.tooltip.style.top=`${y+12}px`; els.tooltip.style.display="block"; };
@@ -80,21 +158,53 @@
       const paperFromEdge = l => { const pid = String(l.paper_id || ""); if(!pid) return null; return Object.values(state.paperMap).find(p => String(p.paper_id || "") === pid) || { paper_id: pid }; };
       const setEmpty = t => { els.detailScroll.innerHTML = `<section class="card"><h3>详情</h3><div class="muted">${esc(t)}</div></section>`; };
       const visibleNodesFrom = nodes => nodes.filter(x => String(x.type||"")==="variable");
-      const edgeColor = l => ((String(l.display_effect_class||l.direction||"").toLowerCase()==="negative") ? theme.neg : (String(l.display_effect_class||l.direction||"").toLowerCase()==="positive") ? theme.pos : theme.neu);
+      const edgeColor = () => "#ef4444";
       const nodeBaseColor = n => n&&n.__is_mod_anchor ? "rgba(0,0,0,0)" : theme.node;
       const nodeColor = n => (n && !n.__is_mod_anchor && state.selectedNodeId && String(n.id) === String(state.selectedNodeId)) ? "#f59e0b" : nodeBaseColor(n);
-      const linkBaseWidth = () => 1.1;
+      const linkBaseWidth = () => 2.8;
       const linkWidth = l => (state.selectedEdgeKey && edgeKey(l) === state.selectedEdgeKey) ? 3.2 : linkBaseWidth(l);
-      const linkOpacity = l => (state.selectedEdgeKey && edgeKey(l) !== state.selectedEdgeKey) ? 0.45 : 0.86;
-      const linkArrowLength = l => (state.selectedEdgeKey && edgeKey(l) === state.selectedEdgeKey) ? 7 : 4;
+      const linkOpacity = l => (state.selectedEdgeKey && edgeKey(l) !== state.selectedEdgeKey) ? 0.25 : 0.25;
+      const linkArrowLength = () => 22;
+      const linkArrowColor = () => "#111827";
+      function makeCustomArrow(link){
+        const T = window.THREE;
+        if(!T) return null;
+        if(link && link.is_moderation) return new T.Object3D();
+        const color = 0xff00ff;
+        const geo = new T.ConeGeometry(8, 22, 10);
+        const mat = new T.MeshBasicMaterial({ color, depthTest: false, depthWrite: false, transparent: true, opacity: 0.98 });
+        const cone = new T.Mesh(geo, mat);
+        cone.renderOrder = 9999;
+        cone.name = "custom-link-arrow";
+        return cone;
+      }
+      function placeCustomArrow(obj, pos){
+        const T = window.THREE;
+        if(!T || !obj || !pos || !pos.start || !pos.end) return false;
+        const sx=Number(pos.start.x)||0, sy=Number(pos.start.y)||0, sz=Number(pos.start.z)||0;
+        const ex=Number(pos.end.x)||0, ey=Number(pos.end.y)||0, ez=Number(pos.end.z)||0;
+        const dx=ex-sx, dy=ey-sy, dz=ez-sz;
+        const len=Math.hypot(dx,dy,dz);
+        if(!Number.isFinite(len) || len < 1e-6){ obj.visible=false; return true; }
+        obj.visible = true;
+        const ratio = 0.72;
+        obj.position.set(sx+dx*ratio, sy+dy*ratio, sz+dz*ratio);
+        const dir = new T.Vector3(dx/len, dy/len, dz/len);
+        obj.quaternion.setFromUnitVectors(new T.Vector3(0,1,0), dir);
+        return true;
+      }
       const findByName = (name,nodes) => { const norm = String(name||"").trim().toLowerCase(); if(!norm) return null; return nodes.find(n => [n.label,n.name,n.id].some(v => String(v||"").trim().toLowerCase()===norm)) || null; };
-      function applySelectionVisuals(){ if(!state.graph) return; state.graph.nodeColor(nodeColor).linkWidth(linkWidth).linkOpacity(linkOpacity).linkDirectionalArrowLength(linkArrowLength).linkDirectionalArrowColor(edgeColor); if(typeof state.graph.refresh==="function") state.graph.refresh(); }
-      function findGraphNodeById(id){
+      function applySelectionVisuals(){ if(!state.graph) return; state.graph.nodeColor(nodeColor).linkWidth(linkWidth).linkOpacity(linkOpacity).linkDirectionalArrowLength(0).linkDirectionalParticles(0); if(typeof state.graph.refresh==="function") state.graph.refresh(); }
+      function findGraphNodeById(id, libraryId){
         if(!state.graph||!id) return null;
+        const nid=String(id||"");
+        const lid=String(libraryId||"");
         try{
           const gd=state.graph.graphData();
           const nodes=Array.isArray(gd?.nodes)?gd.nodes:[];
-          return nodes.find(n=>String(n?.id||"")===String(id))||null;
+          const exact = nodes.find(n => String(n?.id||"")===nid && (!lid || String(n?.library_id||"")===lid));
+          if (exact) return exact;
+          return nodes.find(n=>String(n?.id||"")===nid)||null;
         }catch{ return null; }
       }
       function centerCameraToNode(node, duration){
@@ -112,26 +222,12 @@
         state.selectedNodeId=String(node.id||"");
         state.selectedNodeLibraryId=String(node.library_id||state.selectedNodeLibraryId||"");
         state.selectedEdgeKey="";
-        const graphNode=(
-          findNodeById(state.selectedNodeId, state.selectedNodeLibraryId)
-          && findGraphNodeById(state.selectedNodeId)
-        ) || findGraphNodeById(state.selectedNodeId) || node;
+        const graphNode=findGraphNodeById(state.selectedNodeId, state.selectedNodeLibraryId) || node;
         const seq=++state.focusSeq;
         const hasCoords=centerCameraToNode(graphNode, 900);
         if(!hasCoords){
           const retryId=state.selectedNodeId;
-          window.setTimeout(()=>{ const retry=findGraphNodeById(retryId); if(retry) focusNode(retry); }, 220);
-        }else{
-          // Two-stage refocus: initial lock + delayed recenter after force layout expands.
-          const targetId=state.selectedNodeId;
-          const targetLib=state.selectedNodeLibraryId;
-          [420, 980, 1600].forEach((delay, idx) => {
-            window.setTimeout(() => {
-              if(seq!==state.focusSeq) return;
-              const fresh=findNodeById(targetId, targetLib)||findGraphNodeById(targetId);
-              if(fresh) centerCameraToNode(fresh, idx===0 ? 420 : 520);
-            }, delay);
-          });
+          window.setTimeout(()=>{ const retry=findGraphNodeById(retryId, state.selectedNodeLibraryId); if(retry) focusNode(retry); }, 220);
         }
         applySelectionVisuals();
       }
@@ -171,6 +267,7 @@
       function mergePayloads(payloads,libraryIds){ const nodeById=new Map(),edgeByKey=new Map(),paperMap={},mods=[]; payloads.forEach((p,i)=>{ const lib=String((p.meta||{}).library_id||libraryIds[i]||activeLibraryId); (p.nodes||[]).forEach(n=>{ const row=Object.assign({},n,{library_id:n.library_id||lib}); const ex=nodeById.get(row.id); if(!ex) nodeById.set(row.id,row); else nodeById.set(row.id,Object.assign({},ex,row,{relation_degree:Math.max(Number(ex.relation_degree||0),Number(row.relation_degree||0)),paper_count:Math.max(Number(ex.paper_count||0),Number(row.paper_count||0))})); }); (p.edges||[]).forEach(e=>{ const s=typeof e.source==="object"?e.source?.id:e.source; const t=typeof e.target==="object"?e.target?.id:e.target; const k=`${s}=>${t}::${e.paper_id||""}::${e.direction||""}`; if(!edgeByKey.has(k)) edgeByKey.set(k,e); }); (p.moderation_links||[]).forEach(m=>mods.push(m)); Object.entries(p.paper_map||{}).forEach(([pid,v])=>{ paperMap[`${lib}::${pid}`]=Object.assign({},v,{paper_id:pid,library_id:lib}); }); }); return {nodes:[...nodeById.values()],edges:[...edgeByKey.values()],moderation_links:mods,paper_map:paperMap}; }
       function buildGraph(merged){
         state.allNodes=merged.nodes||[]; state.allLinks=merged.edges||[]; state.moderationLinks=merged.moderation_links||[]; state.paperMap=merged.paper_map||{}; state.visibleNodes=visibleNodesFrom(state.allNodes);
+        debugLog("buildGraph:input", { nodes: state.allNodes.length, links: summarizeLinks(state.allLinks), mods: state.moderationLinks.length });
         if (state.selectedNodeId) {
           const forced = state.allNodes.find(n => (
             String(n.id || "") === String(state.selectedNodeId) &&
@@ -181,6 +278,7 @@
           }
         }
         const visibleIds=new Set(state.visibleNodes.map(n=>n.id)); const baseLinks=state.allLinks.filter(l=>{ const s=typeof l.source==="object"?l.source?.id:l.source; const t=typeof l.target==="object"?l.target?.id:l.target; return visibleIds.has(s)&&visibleIds.has(t); });
+        debugLog("buildGraph:baseLinks", summarizeLinks(baseLinks));
         const augmented=augmentModeration(state.visibleNodes,baseLinks,state.moderationLinks); const graphNodes=augmented.nodes;
         const nodeIds = new Set(graphNodes.map(n => String(n.id)));
         state.visibleLinks=(augmented.links||[]).filter(l=>{
@@ -188,6 +286,7 @@
           const t=typeof l.target==="object"?l.target?.id:l.target;
           return nodeIds.has(String(s||"")) && nodeIds.has(String(t||""));
         });
+        debugLog("buildGraph:visibleLinks", summarizeLinks(state.visibleLinks));
         if(!state.visibleNodes.length){ if(state.graph&&typeof state.graph.graphData==="function") state.graph.graphData({nodes:[],links:[]}); els.fallback.classList.remove("hidden"); els.fallback.textContent="当前文献库组合下没有可展示的变量节点，请更换文献库。"; setEmpty("当前无可展示图谱数据。"); return; }
         if(typeof window.ForceGraph3D!=="function"){ els.fallback.classList.remove("hidden"); els.fallback.textContent="3D 引擎未加载。"; setEmpty("3D 引擎未加载。"); return; }
         els.fallback.classList.add("hidden"); els.scene.innerHTML="";
@@ -204,9 +303,11 @@
           .linkColor(edgeColor)
           .linkOpacity(linkOpacity)
           .linkWidth(linkWidth)
-          .linkDirectionalArrowLength(linkArrowLength)
-          .linkDirectionalArrowRelPos(()=>1)
-          .linkDirectionalArrowColor(edgeColor)
+          .linkDirectionalArrowLength(0)
+          .linkDirectionalParticles(0)
+          .linkThreeObjectExtend(true)
+          .linkThreeObject(link=>makeCustomArrow(link))
+          .linkPositionUpdate((obj,pos)=>placeCustomArrow(obj,pos))
           .onNodeHover(n=>{if(!n||n.__is_mod_anchor)return hideTip();showTip([`<b>${esc(nodeName(n))}</b>`,`关系数：<code>${relationEdgesFor(n.id).length}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);})
           .onLinkHover(l=>{if(!l)return hideTip();if(l.is_moderation){const ms=findNodeById(String(l.moderated_source||"")),mt=findNodeById(String(l.moderated_target||""));showTip([`<b>调节关系</b>`,`${esc(nodeName(l.source))} 调节 ${esc(nodeName(ms))} -> ${esc(nodeName(mt))}`,`论文：<code>${esc(l.paper_id||"-")}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);return;}const s=typeof l.source==="object"?l.source:findNodeById(String(l.source||""));const t=typeof l.target==="object"?l.target:findNodeById(String(l.target||""));showTip([`<b>关系</b>`,`${esc(nodeName(s))} -> ${esc(nodeName(t))}`,`方向：<code>${esc(l.direction||"-")}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);})
           .onNodeClick(n=>{if(!n||n.__is_mod_anchor)return;renderNodeDetails(n);focusNode(n);})
@@ -228,6 +329,28 @@
             }
           });
         state.graph=g; g.graphData({nodes:forceNodes,links:state.visibleLinks});
+        try{
+          const gd=g.graphData();
+          debugLog("graphData:afterSet", { nodes: Array.isArray(gd?.nodes)?gd.nodes.length:0, links: summarizeLinks(gd?.links||[]) });
+          debugLog("scene:afterSet", summarizeSceneObjects(g));
+        }catch(err){
+          debugLog("graphData:afterSet:error", String(err&&err.message||err||"unknown"));
+        }
+        window.setTimeout(()=>{
+          if(!state.graph) return;
+          try{
+            const gd=state.graph.graphData();
+            debugLog("graphData:after1s", { nodes: Array.isArray(gd?.nodes)?gd.nodes.length:0, links: summarizeLinks(gd?.links||[]) });
+            debugLog("scene:after1s", summarizeSceneObjects(state.graph));
+            logParticleProbe(state.graph, gd?.links||[]);
+          }catch(err){
+            debugLog("graphData:after1s:error", String(err&&err.message||err||"unknown"));
+          }
+        }, 1000);
+        window.setTimeout(()=>{
+          if(!state.graph) return;
+          debugLog("scene:after3s", summarizeSceneObjects(state.graph));
+        }, 3000);
         const syncGraphSize = () => {
           const rect = els.graphWrap.getBoundingClientRect();
           const w = Math.max(320, Math.floor(rect.width));
@@ -248,11 +371,11 @@
         const first=initialNode||state.visibleNodes[0];
         if(first){
           renderNodeDetails(first);
-          const graphFirst=findGraphNodeById(String(first.id||""))||first;
+          const graphFirst=findGraphNodeById(String(first.id||""), String(first.library_id||""))||first;
           focusNode(graphFirst);
         }
       }
-      async function loadAll(){ const ids=state.selectedLibraryIds.length?state.selectedLibraryIds:[activeLibraryId]; const payloads=await Promise.all(ids.map(async id=>{ const r=await fetch(`/graph/full?library_id=${encodeURIComponent(id)}`); if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })); buildGraph(mergePayloads(payloads,ids)); }
+      async function loadAll(){ const ids=state.selectedLibraryIds.length?state.selectedLibraryIds:[activeLibraryId]; debugLog("loadAll:ids", ids); const payloads=await Promise.all(ids.map(async id=>{ const r=await fetch(`/graph/full?library_id=${encodeURIComponent(id)}`); if(!r.ok) throw new Error(`HTTP ${r.status}`); const payload=await r.json(); debugLog("loadAll:payload", { library_id:id, nodes:Array.isArray(payload?.nodes)?payload.nodes.length:0, links:summarizeLinks(payload?.edges||[]), mods:Array.isArray(payload?.moderation_links)?payload.moderation_links.length:0 }); return payload; })); const merged=mergePayloads(payloads,ids); debugLog("loadAll:merged", { nodes:Array.isArray(merged?.nodes)?merged.nodes.length:0, links:summarizeLinks(merged?.edges||[]), mods:Array.isArray(merged?.moderation_links)?merged.moderation_links.length:0 }); buildGraph(merged); }
       function bind(){ window.addEventListener("pointermove",evt=>{window.__graphPointerX=evt.clientX;window.__graphPointerY=evt.clientY;if(els.tooltip.style.display==="block"){els.tooltip.style.left=`${evt.clientX+12}px`;els.tooltip.style.top=`${evt.clientY+12}px`;}}); window.addEventListener("message",evt=>{const d=evt&&evt.data&&typeof evt.data==="object"?evt.data:null;if(!d||d.type!=="KN_GRAPH_FOCUS_NODE")return;const p=(d.payload&&typeof d.payload==="object")?d.payload:{};const nodeId=String(p.nodeId||"").trim();const libraryId=String(p.libraryId||"").trim();if(!nodeId)return;const n=findNodeById(nodeId, libraryId);if(!n)return;renderNodeDetails(n);focusNode(n);}); } 
       bind(); loadAll().catch(err=>{ els.fallback.classList.remove("hidden"); els.fallback.textContent=`图谱加载失败: ${err&&err.message?err.message:"unknown"}`; setEmpty(`图谱数据无法加载：${esc(err&&err.message?err.message:"unknown")}`); });
     })();

@@ -101,6 +101,7 @@ export default function GraphView() {
   const doSearch = async () => {
     const q = query.trim();
     if (!q) return;
+    setExpanded(true);
     setSearching(true);
     setErrorText('');
     setNeighborsByKey({});
@@ -108,7 +109,6 @@ export default function GraphView() {
     try {
       const res = await api.graph.semanticVariableSearch(q, Math.max(3, Math.min(20, topK)), libraryIds);
       setSearchResult(res.matched_variables || []);
-      setExpanded(true);
     } catch (err) {
       setErrorText(String((err as Error)?.message || err));
       setSearchResult([]);
@@ -134,14 +134,8 @@ export default function GraphView() {
 
   return (
     <div className="flex-1 bg-surface-container-low relative">
-      <div className={`absolute top-3 left-4 right-4 lg:right-[30rem] z-30 rounded-2xl border border-secondary/20 bg-surface-container-lowest/95 backdrop-blur shadow-2xl shadow-black/10 transition-all ${expanded ? 'max-h-[64vh]' : 'max-h-12'} overflow-hidden`}>
-        <div className="h-12 px-3 flex items-center gap-2 border-b border-outline-variant/30 bg-linear-to-r from-secondary-container/20 to-surface-container-lowest">
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="px-2.5 py-1 rounded-lg border border-outline-variant text-xs font-mono hover:border-secondary bg-surface-container"
-          >
-            {expanded ? '收起检索' : '展开检索'}
-          </button>
+      <div className={`absolute top-3 left-4 right-4 lg:right-[30rem] z-30 rounded-2xl border border-secondary/20 bg-surface-container-lowest/95 backdrop-blur shadow-2xl shadow-black/10 transition-all ${expanded ? 'max-h-[64vh]' : 'max-h-12'} overflow-visible`}>
+        <div className="h-12 px-3 flex items-center gap-2 border-b border-outline-variant/30 bg-linear-to-r from-secondary-container/20 to-surface-container-lowest rounded-t-2xl">
           <div className="text-[11px] font-mono text-outline-variant hidden md:block">Variable Semantic Search</div>
           <input
             value={query}
@@ -166,8 +160,16 @@ export default function GraphView() {
             {searching ? '检索中...' : '检索'}
           </button>
         </div>
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="absolute left-1/2 -translate-x-1/2 bottom-0 translate-y-1/2 h-5 min-w-12 px-2 rounded-full border border-outline-variant bg-surface-container text-[10px] leading-none text-outline hover:border-secondary hover:text-secondary shadow"
+          title={expanded ? '收起检索' : '展开检索'}
+        >
+          {expanded ? '▴' : '▾'}
+        </button>
 
-        <div className="p-3 overflow-y-auto max-h-[calc(64vh-3rem)]">
+        {expanded && (
+        <div className="p-3 overflow-y-auto max-h-[calc(64vh-3rem)] overflow-x-hidden rounded-b-2xl">
           {!!errorText && <div className="mb-3 text-xs text-error bg-error-container/20 border border-error/30 rounded p-2">{errorText}</div>}
           {searchResult.length === 0 ? (
             <div className="text-sm text-on-surface-variant px-1 py-2">暂无检索结果。输入 query 后点击「检索」。</div>
@@ -243,6 +245,7 @@ export default function GraphView() {
             </div>
           )}
         </div>
+        )}
       </div>
       <iframe ref={iframeRef} title="Legacy Graph 3D" src={src} className="w-full h-full border-0" />
     </div>
