@@ -10,6 +10,7 @@ interface ReaderChatSidebarProps {
   absolutePath: string;
   isOpen: boolean;
   onToggle: () => void;
+  showClosedToggle?: boolean;
 }
 
 export default function ReaderChatSidebar({
@@ -18,6 +19,7 @@ export default function ReaderChatSidebar({
   absolutePath,
   isOpen,
   onToggle,
+  showClosedToggle = true,
 }: ReaderChatSidebarProps) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -176,7 +178,7 @@ export default function ReaderChatSidebar({
     return hasContent || hasTrace || hasError || isRunning;
   });
 
-  if (!isOpen) {
+  if (!isOpen && showClosedToggle) {
     return (
       <button
         className="absolute right-4 top-64 px-2.5 py-1.5 text-[10px] font-mono bg-surface-container border border-outline-variant rounded-lg hover:bg-surface-container-low z-10 shadow-sm inline-flex items-center gap-1"
@@ -187,6 +189,8 @@ export default function ReaderChatSidebar({
       </button>
     );
   }
+
+  if (!isOpen) return null;
 
   return (
     <aside className="w-[430px] border-l border-outline-variant bg-surface-container-lowest flex flex-col">
@@ -291,4 +295,3 @@ export default function ReaderChatSidebar({
     </aside>
   );
 }
-

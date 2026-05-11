@@ -38,6 +38,8 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   const [translationLoading, setTranslationLoading] = useState(false);
   const [translationText, setTranslationText] = useState('');
   const selectionHostRef = useRef<HTMLDivElement>(null);
+  const [pdfDocProxy, setPdfDocProxy] = useState<any>(null);
+  const pageTextCacheRef = useRef<Map<number, string>>(new Map());
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -47,9 +49,79 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   }, []);
 
   useEffect(() => {
+    const flash = (el: HTMLElement) => {
+      const prev = el.style.backgroundColor;
+      const prevTransition = el.style.transition;
+      el.style.transition = 'background-color 180ms ease';
+      el.style.backgroundColor = 'rgba(251, 191, 36, 0.28)';
+      window.setTimeout(() => {
+        el.style.backgroundColor = prev;
+        el.style.transition = prevTransition;
+      }, 1400);
+    };
+    const onJump = async (evt: Event) => {
+      const e = evt as CustomEvent<{ paperId?: string; query?: string }>;
+      if (String(e.detail?.paperId || '').trim() !== String(paperId || '').trim()) return;
+      const q = String(e.detail?.query || '').replace(/\s+/g, ' ').trim();
+      if (!q || !pdfDocProxy) return;
+      const candidates = (() => {
+        const out: string[] = [];
+        out.push(q);
+        const sentence = q.split(/[.;:!?。；：！？]/)[0]?.trim();
+        if (sentence && sentence.length >= 12) out.push(sentence);
+        const words = q.split(/\s+/).filter(Boolean);
+        if (words.length >= 8) out.push(words.slice(0, 8).join(' '));
+        if (words.length >= 5) out.push(words.slice(0, 5).join(' '));
+        return Array.from(new Set(out.map((x) => x.toLowerCase())));
+      })();
+      try {
+        const getPageText = async (p: number) => {
+          if (pageTextCacheRef.current.has(p)) return String(pageTextCacheRef.current.get(p) || '');
+          const page = await pdfDocProxy.getPage(p);
+          const tc = await page.getTextContent();
+          const joined = (tc.items || []).map((it: any) => String(it.str || '')).join(' ').replace(/\s+/g, ' ').toLowerCase();
+          pageTextCacheRef.current.set(p, joined);
+          return joined;
+        };
+        let targetPage = -1;
+        const currentText = await getPageText(currentPage);
+        if (candidates.some((c) => currentText.includes(c))) {
+          targetPage = currentPage;
+        }
+        for (let p = 1; targetPage < 0 && p <= Number(pdfDocProxy.numPages || 0); p += 1) {
+          const joined = await getPageText(p);
+          if (candidates.some((c) => joined.includes(c))) {
+            targetPage = p;
+            break;
+          }
+        }
+        if (targetPage < 0) return;
+        setCurrentPage(targetPage);
+        window.setTimeout(() => {
+          const host = selectionHostRef.current;
+          if (!host) return;
+          const spans = Array.from(host.querySelectorAll('.react-pdf__Page__textContent span')) as HTMLElement[];
+          const hit = spans.find((s) => {
+            const txt = String(s.textContent || '').replace(/\s+/g, ' ').toLowerCase();
+            return candidates.some((c) => txt.includes(c));
+          });
+          if (!hit) return;
+          hit.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          flash(hit);
+        }, 220);
+      } catch {
+        // silent no-op
+      }
+    };
+    window.addEventListener('reader-search-and-jump', onJump as EventListener);
+    return () => window.removeEventListener('reader-search-and-jump', onJump as EventListener);
+  }, [paperId, pdfDocProxy]);
+
+  useEffect(() => {
     const copy = Uint8Array.from(safePdfBytes);
     const blob = new Blob([copy], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
+    pageTextCacheRef.current.clear();
     setPdfUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [safePdfBytes]);
@@ -158,6 +230,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       key={pdfUrl || fileName}
       file={pdfUrl}
       onLoadSuccess={(pdf) => {
+        setPdfDocProxy(pdf as any);
         setPageCount(pdf.numPages);
         setCurrentPage(1);
         setError(null);

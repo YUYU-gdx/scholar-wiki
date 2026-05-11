@@ -83,28 +83,32 @@ export default function ReaderView() {
 
   useEffect(() => {
     if (!selectedPaperId) return;
-    const existing = tabs.find(t => t.paperId === selectedPaperId);
-    if (existing) {
-      setActiveTabId(existing.id);
+    const targetPaperId = String(selectedPaperId || '').trim();
+    const targetLibraryId = String(selectedPaperLibraryId || '').trim();
+    if (!targetPaperId || !targetLibraryId) {
       setSelectedPaperId(null);
       return;
     }
-    const newTab: TabDescriptor = {
-      id: crypto.randomUUID(),
-      paperId: selectedPaperId,
-      libraryId: selectedPaperLibraryId,
-      type: (selectedPaperPreferredType as TabDescriptor['type']) || 'markdown',
-      path: '',
-      title: selectedPaperId,
-    };
-    setTabs(prev => {
+    setTabs((prev) => {
+      const existing = prev.find((t) => t.paperId === targetPaperId && t.libraryId === targetLibraryId);
+      if (existing) {
+        setActiveTabId(existing.id);
+        return prev;
+      }
+      const newTab: TabDescriptor = {
+        id: crypto.randomUUID(),
+        paperId: targetPaperId,
+        libraryId: targetLibraryId,
+        type: (selectedPaperPreferredType as TabDescriptor['type']) || 'markdown',
+        path: '',
+        title: targetPaperId,
+      };
       const next = [...prev, newTab];
-      if (next.length > MAX_TABS) return next.slice(next.length - MAX_TABS);
-      return next;
+      setActiveTabId(newTab.id);
+      return next.length > MAX_TABS ? next.slice(next.length - MAX_TABS) : next;
     });
-    setActiveTabId(newTab.id);
     setSelectedPaperId(null);
-  }, [selectedPaperId]);
+  }, [selectedPaperId, selectedPaperLibraryId, selectedPaperPreferredType, setSelectedPaperId]);
 
   const closeTab = useCallback((tabId: string) => {
     setTabs(prev => {

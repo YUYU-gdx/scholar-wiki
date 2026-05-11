@@ -934,72 +934,118 @@ class LiteratureService:
         return ZhipuChatCompletionsClient(api_key=api_key, model=model)
 
     # ------------------------------------------------------------------
-    # Library CRUD (delegates to kn_graph.services.library_registry)
+    # Library CRUD (pure filesystem operations)
     # ------------------------------------------------------------------
 
     def list_libraries(self) -> dict[str, Any]:
-        libraries: list[dict[str, Any]] = []
-        for lib, ws in self._iter_workspace_libraries():
-            libraries.append(
-                {
+        workspaces_root = Path(self._settings.workspaces_dir).resolve()
+        indexes_root = Path(self._settings.indexes_dir).resolve()
+        libraries: dict[str, dict[str, Any]] = {}
+
+        if workspaces_root.exists() and workspaces_root.is_dir():
+            for item in sorted(workspaces_root.iterdir(), key=lambda p: p.name.lower()):
+                if not item.is_dir():
+                    continue
+                lib = str(item.name or "").strip()
+                if not lib or lib.startswith("."):
+                    continue
+                libraries[lib] = {
                     "library_id": lib,
-                    "paper_count": self._count_papers_in_workspace(ws),
+                    "paper_count": self._count_papers_in_workspace(item.resolve()),
                     "updated_at": "",
-                    "path": "",
-                    "workspace_path": str(ws),
+                    "path": str((indexes_root / f"{lib}.json").resolve()),
+                    "workspace_path": str(item.resolve()),
                 }
-            )
-        default_library_id = libraries[0]["library_id"] if libraries else ""
-        return {"libraries": libraries, "default_library_id": default_library_id}
+
+        if indexes_root.exists() and indexes_root.is_dir():
+            for fp in sorted(indexes_root.glob("*.json"), key=lambda p: p.name.lower()):
+                lib = str(fp.stem or "").strip()
+                if not lib:
+                    continue
+                paper_count = 0
+                updated_at = ""
+                try:
+                    payload = json.loads(fp.read_text(encoding="utf-8"))
+                    if isinstance(payload, dict):
+                        paper_count = max(0, int(payload.get("paper_count", 0) or 0))
+                        updated_at = str(payload.get("updated_at", "") or "").strip()
+                except Exception:
+                    pass
+                row = libraries.get(lib)
+                if row is None:
+                    ws = (workspaces_root / lib).resolve()
+                    libraries[lib] = {
+                        "library_id": lib,
+                        "paper_count": paper_count,
+                        "updated_at": updated_at,
+                        "path": str(fp.resolve()),
+                        "workspace_path": str(ws),
+                    }
+                else:
+                    if row.get("paper_count", 0) <= 0 and paper_count > 0:
+                        row["paper_count"] = paper_count
+                    if not str(row.get("updated_at", "") or "").strip() and updated_at:
+                        row["updated_at"] = updated_at
+                    row["path"] = str(fp.resolve())
+
+        rows = sorted(libraries.values(), key=lambda x: str(x.get("library_id", "")).lower())
+        default_library_id = rows[0]["library_id"] if rows else ""
+        return {"libraries": rows, "default_library_id": default_library_id}
 
     def create_library(self, library_id: str, workspace_root: str = "", set_default: bool = True) -> dict[str, Any]:
         lib = str(library_id or "").strip()
         if not lib:
             raise ValueError("library_id_required")
         if str(workspace_root or "").strip():
-            ws = Path(str(workspace_root)).resolve()
+            ws = Path(workspace_root).resolve()
         else:
-            ws = (self._settings.workspaces_dir / lib).resolve()
+            ws = (Path(self._settings.workspaces_dir).resolve() / lib).resolve()
         ws.mkdir(parents=True, exist_ok=True)
-        result = {
+
+        index_path = (Path(self._settings.indexes_dir).resolve() / f"{lib}.json").resolve()
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        if not index_path.exists():
+            payload = {
+                "library_id": lib,
+                "paper_count": 0,
+                "paper_ids": [],
+                "workspace_root": str(ws),
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            index_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {
             "library_id": lib,
             "workspace_path": str(ws),
-            "index_path": "",
+            "index_path": str(index_path),
             "default_library_id": lib if set_default else "",
         }
-        ws_path = str(ws)
-        if ws_path:
-            try:
-                from kn_graph.services.agent_workspace_guard import ensure_agent_workspace_minimal_config
-                ensure_agent_workspace_minimal_config(
-                    ws_path,
-                    "pipeline_library",
-                    library_id=lib,
-                )
-            except Exception:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "create_library: failed to sync workspace minimal agent config",
-                    exc_info=True,
-                )
-        return result
 
     def delete_library(self, library_id: str, delete_workspace_data: bool = True) -> dict[str, Any]:
         lib = str(library_id or "").strip()
         if not lib:
             raise ValueError("library_id_required")
-        ws = (self._settings.workspaces_dir / lib).resolve()
+        ws = (Path(self._settings.workspaces_dir).resolve() / lib).resolve()
+        index_path = (Path(self._settings.indexes_dir).resolve() / f"{lib}.json").resolve()
+
         deleted_workspace = False
+        deleted_workspace_paths: list[str] = []
         if bool(delete_workspace_data) and ws.exists() and ws.is_dir():
             shutil.rmtree(ws, ignore_errors=True)
-            deleted_workspace = not ws.exists()
+            if not ws.exists():
+                deleted_workspace = True
+                deleted_workspace_paths.append(str(ws))
+
+        if index_path.exists() and index_path.is_file():
+            index_path.unlink(missing_ok=True)
+
+        deleted = (not ws.exists()) or (not index_path.exists())
         return {
             "library_id": lib,
-            "deleted": True,
+            "deleted": bool(deleted),
             "deleted_workspace": deleted_workspace,
-            "deleted_workspace_paths": [str(ws)] if deleted_workspace else [],
+            "deleted_workspace_paths": deleted_workspace_paths,
             "workspace_path": str(ws),
-            "index_path": "",
+            "index_path": str(index_path),
             "default_library_id": "",
         }
 

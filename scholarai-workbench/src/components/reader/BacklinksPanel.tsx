@@ -5,11 +5,12 @@ import type { BacklinkEntry } from './types';
 interface BacklinksPanelProps {
   paperId: string;
   libraryId: string;
+  currentMarkdownPath?: string;
   isOpen: boolean;
   onToggle: () => void;
 }
 
-export default function BacklinksPanel({ paperId, libraryId, isOpen, onToggle }: BacklinksPanelProps) {
+export default function BacklinksPanel({ paperId, libraryId, currentMarkdownPath = '', isOpen, onToggle }: BacklinksPanelProps) {
   const [entries, setEntries] = useState<BacklinkEntry[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -27,16 +28,64 @@ export default function BacklinksPanel({ paperId, libraryId, isOpen, onToggle }:
     }
 
     setLoading(true);
-    const pattern = `[[@${paperId}]]`;
-    shell.grepWorkspace(pattern, libraryId).then((r: any) => {
-      if (r?.ok) setEntries(r.results || []);
-      else setEntries([]);
+    const mdPath = String(currentMarkdownPath || '').trim();
+    const mdName = mdPath.split(/[\\/]/).pop() || '';
+    const titleNoExt = mdName.replace(/\.md$/i, '');
+    const inboundPatterns = Array.from(new Set([
+      `[[@${paperId}]]`,
+      mdPath,
+      mdName,
+      `${titleNoExt}.md`,
+      `[[${titleNoExt}]]`,
+      `](${mdName})`,
+      `.md)`,
+    ].filter(Boolean)));
+
+    const outboundFromCurrent = async (): Promise<BacklinkEntry[]> => {
+      if (!mdPath) return [];
+      const txt = await shell.readLocalText(mdPath);
+      if (!txt?.ok || typeof txt.data !== 'string') return [];
+      const out: BacklinkEntry[] = [];
+      const lines = String(txt.data).split(/\r?\n/);
+      const mdLinkRe = /\[[^\]]+\]\(([^)]+\.md(?:#[^)]+)?)\)/gi;
+      lines.forEach((line, idx) => {
+        let m: RegExpExecArray | null;
+        while ((m = mdLinkRe.exec(line)) !== null) {
+          const target = String(m[1] || '').trim();
+          if (!target) continue;
+          out.push({
+            filePath: mdPath,
+            fileName: mdName || 'current.md',
+            lineNumber: idx + 1,
+            snippet: `outbound -> ${target}`,
+          });
+        }
+      });
+      return out;
+    };
+
+    Promise.all([
+      outboundFromCurrent(),
+      Promise.all(inboundPatterns.map((p) => shell.grepWorkspace(p, libraryId).catch(() => ({ ok: false, results: [] })))),
+    ]).then(([outbound, inboundBatch]) => {
+      const inbound: BacklinkEntry[] = [];
+      for (const row of inboundBatch) {
+        if (row?.ok && Array.isArray(row.results)) inbound.push(...row.results);
+      }
+      const normalizedCurrent = mdPath.toLowerCase();
+      const filteredInbound = inbound.filter((r) => String(r.filePath || '').toLowerCase() !== normalizedCurrent);
+      const dedupe = new Map<string, BacklinkEntry>();
+      for (const e of [...outbound, ...filteredInbound]) {
+        const k = `${e.filePath}::${e.lineNumber}::${e.snippet}`;
+        if (!dedupe.has(k)) dedupe.set(k, e);
+      }
+      setEntries(Array.from(dedupe.values()));
       setLoading(false);
     }).catch(() => {
       setEntries([]);
       setLoading(false);
     });
-  }, [isOpen, paperId, libraryId]);
+  }, [isOpen, paperId, libraryId, currentMarkdownPath]);
 
   if (!isOpen) return null;
 
@@ -68,4 +117,3 @@ export default function BacklinksPanel({ paperId, libraryId, isOpen, onToggle }:
     </div>
   );
 }
-

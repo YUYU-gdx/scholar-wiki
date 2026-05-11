@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, AlertCircle, StickyNote, Link2, Network } from 'lucide-react';
+import { FileText, AlertCircle, StickyNote, Link2, Network, MessageSquare } from 'lucide-react';
 import PdfViewer from './PdfViewer';
 import MarkdownEditor from './MarkdownEditor';
 import AnnotationSidebar from './AnnotationSidebar';
@@ -88,9 +88,15 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
     );
   }
 
+  const effectiveMarkdownPath = String(
+    document.type === 'markdown'
+      ? (document.absolute_path || '')
+      : (document.markdown_path || ''),
+  ).trim();
+
   return (
     <div className="flex-1 flex overflow-hidden relative">
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden md:pr-24">
         {document.type === 'pdf' && document.data instanceof Uint8Array && (
           <PdfViewer
             data={document.data}
@@ -123,7 +129,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
         <AnnotationSidebar
           paperId={primaryPaperId}
           libraryId={libraryId}
-          markdownPath={String(document.markdown_path || '')}
+          markdownPath={effectiveMarkdownPath}
           isOpen={sidebarOpen}
           onToggle={() => setSidebarOpen(!sidebarOpen)}
         />
@@ -133,6 +139,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
         <BacklinksPanel
           paperId={primaryPaperId}
           libraryId={libraryId}
+          currentMarkdownPath={effectiveMarkdownPath}
           isOpen={backlinksOpen}
           onToggle={() => setBacklinksOpen(!backlinksOpen)}
         />
@@ -149,39 +156,91 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
       )}
 
       {(document.type === 'pdf' || document.type === 'markdown') && (
-        <div className="absolute right-4 top-16 z-20 flex flex-col gap-2">
+        <div className="absolute right-3 top-16 z-20 hidden md:flex flex-col gap-2">
           <button
-            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold shadow-sm transition-all ${
+            className={`inline-flex items-center justify-center gap-2 w-11 h-11 rounded-xl border text-xs font-semibold shadow-sm transition-all group hover:w-[118px] hover:justify-start hover:px-3 ${
               sidebarOpen
                 ? 'bg-secondary-container/20 border-secondary/40 text-secondary'
-                : 'bg-surface-container-lowest border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
+                : 'bg-surface-container-lowest/90 backdrop-blur border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
+            }`}
+            onClick={() => setSidebarOpen((v) => !v)}
+            title="Notes"
+          >
+            <StickyNote className="w-3.5 h-3.5" />
+            <span className="hidden group-hover:inline">Notes</span>
+          </button>
+          <button
+            className={`inline-flex items-center justify-center gap-2 w-11 h-11 rounded-xl border text-xs font-semibold shadow-sm transition-all group hover:w-[118px] hover:justify-start hover:px-3 ${
+              backlinksOpen
+                ? 'bg-secondary-container/20 border-secondary/40 text-secondary'
+                : 'bg-surface-container-lowest/90 backdrop-blur border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
+            }`}
+            onClick={() => setBacklinksOpen((v) => !v)}
+            title="Links"
+          >
+            <Link2 className="w-3.5 h-3.5" />
+            <span className="hidden group-hover:inline">Links</span>
+          </button>
+          <button
+            className={`inline-flex items-center justify-center gap-2 w-11 h-11 rounded-xl border text-xs font-semibold shadow-sm transition-all group hover:w-[118px] hover:justify-start hover:px-3 ${
+              entitiesOpen
+                ? 'bg-secondary-container/20 border-secondary/40 text-secondary'
+                : 'bg-surface-container-lowest/90 backdrop-blur border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
+            }`}
+            onClick={() => setEntitiesOpen((v) => !v)}
+            title="Entities"
+          >
+            <Network className="w-3.5 h-3.5" />
+            <span className="hidden group-hover:inline">Entities</span>
+          </button>
+          <button
+            className={`inline-flex items-center justify-center gap-2 w-11 h-11 rounded-xl border text-xs font-semibold shadow-sm transition-all group hover:w-[118px] hover:justify-start hover:px-3 ${
+              chatOpen
+                ? 'bg-secondary-container/20 border-secondary/40 text-secondary'
+                : 'bg-surface-container-lowest/90 backdrop-blur border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
+            }`}
+            onClick={() => setChatOpen((v) => !v)}
+            title="Reader Chat"
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span className="hidden group-hover:inline">Reader Chat</span>
+          </button>
+        </div>
+      )}
+
+      {(document.type === 'pdf' || document.type === 'markdown') && (
+        <div className="absolute left-1/2 bottom-3 -translate-x-1/2 z-20 md:hidden flex items-center gap-1.5 rounded-2xl border border-outline-variant bg-surface-container-lowest/95 backdrop-blur px-2 py-1.5 shadow-lg">
+          <button
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
+              sidebarOpen ? 'bg-secondary-container/20 border-secondary/40 text-secondary' : 'border-outline-variant text-on-surface-variant'
             }`}
             onClick={() => setSidebarOpen((v) => !v)}
           >
-            <StickyNote className="w-3.5 h-3.5" />
-            Notes
+            <StickyNote className="w-3.5 h-3.5" /> Notes
           </button>
           <button
-            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold shadow-sm transition-all ${
-              backlinksOpen
-                ? 'bg-secondary-container/20 border-secondary/40 text-secondary'
-                : 'bg-surface-container-lowest border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
+              backlinksOpen ? 'bg-secondary-container/20 border-secondary/40 text-secondary' : 'border-outline-variant text-on-surface-variant'
             }`}
             onClick={() => setBacklinksOpen((v) => !v)}
           >
-            <Link2 className="w-3.5 h-3.5" />
-            Links
+            <Link2 className="w-3.5 h-3.5" /> Links
           </button>
           <button
-            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold shadow-sm transition-all ${
-              entitiesOpen
-                ? 'bg-secondary-container/20 border-secondary/40 text-secondary'
-                : 'bg-surface-container-lowest border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
+              entitiesOpen ? 'bg-secondary-container/20 border-secondary/40 text-secondary' : 'border-outline-variant text-on-surface-variant'
             }`}
             onClick={() => setEntitiesOpen((v) => !v)}
           >
-            <Network className="w-3.5 h-3.5" />
-            Entities
+            <Network className="w-3.5 h-3.5" /> Entities
+          </button>
+          <button
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
+              chatOpen ? 'bg-secondary-container/20 border-secondary/40 text-secondary' : 'border-outline-variant text-on-surface-variant'
+            }`}
+            onClick={() => setChatOpen((v) => !v)}
+          >
+            <MessageSquare className="w-3.5 h-3.5" /> Chat
           </button>
         </div>
       )}
@@ -192,6 +251,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
         absolutePath={String(document.absolute_path || '')}
         isOpen={chatOpen}
         onToggle={() => setChatOpen(!chatOpen)}
+        showClosedToggle={false}
       />
     </div>
   );

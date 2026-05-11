@@ -119,6 +119,7 @@ export default function MarkdownEditor({
   const [translationLoading, setTranslationLoading] = useState(false);
   const [translationText, setTranslationText] = useState('');
   const [noteRanges, setNoteRanges] = useState<Array<{ start: number; end: number; id: string; quote: string; note: string }>>([]);
+  const flashTimerRef = useRef<number | null>(null);
 
   // CM6 refs
   const editorContainerRef = useRef<HTMLDivElement>(null);
@@ -379,6 +380,73 @@ export default function MarkdownEditor({
     window.addEventListener('reader-note-md-deleted', onExternalDelete as EventListener);
     return () => window.removeEventListener('reader-note-md-deleted', onExternalDelete as EventListener);
   }, [paperId, text, absolutePath, onContentChange]);
+
+  useEffect(() => {
+    const onJump = (evt: Event) => {
+      const e = evt as CustomEvent<{ paperId?: string; query?: string }>;
+      if (String(e.detail?.paperId || '').trim() !== String(paperId || '').trim()) return;
+      const q = String(e.detail?.query || '').replace(/\s+/g, ' ').trim();
+      if (!q) return;
+      const candidates = (() => {
+        const out: string[] = [];
+        out.push(q);
+        const sentence = q.split(/[.;:!?。；：！？]/)[0]?.trim();
+        if (sentence && sentence.length >= 12) out.push(sentence);
+        const words = q.split(/\s+/).filter(Boolean);
+        if (words.length >= 8) out.push(words.slice(0, 8).join(' '));
+        if (words.length >= 5) out.push(words.slice(0, 5).join(' '));
+        return Array.from(new Set(out.map((x) => x.toLowerCase())));
+      })();
+
+      const tryRendered = () => {
+        const host = selectionHostRef.current;
+        if (!host) return false;
+        const contentRoot = host.querySelector('.reader-markdown') as HTMLElement | null;
+        if (!contentRoot) return false;
+        const nodes = Array.from(contentRoot.querySelectorAll('p,li,blockquote,td,th,h1,h2,h3,h4,h5,h6')) as HTMLElement[];
+        const hit = nodes.find((n) => {
+          const textNorm = String(n.textContent || '').replace(/\s+/g, ' ').toLowerCase();
+          return candidates.some((c) => textNorm.includes(c));
+        });
+        if (!hit) return false;
+        hit.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const prev = hit.style.backgroundColor;
+        const prevTransition = hit.style.transition;
+        hit.style.transition = 'background-color 180ms ease';
+        hit.style.backgroundColor = 'rgba(251, 191, 36, 0.28)';
+        if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
+        flashTimerRef.current = window.setTimeout(() => {
+          hit.style.backgroundColor = prev;
+          hit.style.transition = prevTransition;
+        }, 1400);
+        return true;
+      };
+
+      if (mode === 'read') {
+        tryRendered();
+        return;
+      }
+
+      const view = editorViewRef.current;
+      if (!view) {
+        tryRendered();
+        return;
+      }
+      const doc = view.state.doc.toString();
+      const docLower = doc.toLowerCase();
+      const idx = candidates.map((c) => docLower.indexOf(c)).find((i) => i >= 0) ?? -1;
+      if (idx < 0) {
+        tryRendered();
+        return;
+      }
+      view.dispatch({
+        selection: { anchor: idx, head: idx + q.length },
+        scrollIntoView: true,
+      });
+    };
+    window.addEventListener('reader-search-and-jump', onJump as EventListener);
+    return () => window.removeEventListener('reader-search-and-jump', onJump as EventListener);
+  }, [paperId, mode]);
 
   const handleTranslate = async () => {
     try {

@@ -87,31 +87,58 @@ export default function LibraryView() {
   const variables = useMemo(() => (graphData?.nodes || []).filter((n) => String(n.type || '') === 'variable'), [graphData]);
 
   const paperList = useMemo(() => {
+    const selected = new Set((selectedLibraryIds || []).map((x) => String(x || '').trim()).filter(Boolean));
     const paperMap = graphData?.paper_map || {};
-    return Object.entries(paperMap).map(([scopedKey, detail]) => {
+    const out: Array<{
+      scopedKey: string;
+      paperId: string;
+      rawPaperId: string;
+      libraryId: string;
+      title: string;
+      metaLine: string;
+      sourcePdfName: string;
+      variables: typeof variables;
+    }> = [];
+    const seen = new Set<string>();
+
+    for (const [mapKey, detail] of Object.entries(paperMap)) {
       const d = (detail || {}) as Record<string, unknown>;
-      const rawPaperId = String(d.paper_id_raw || '').trim();
-      const mappedPaperId = String(d.paper_id || scopedKey.split('::').at(-1) || scopedKey).trim();
-      const fallbackPaperId = mappedPaperId.includes('::') ? String(mappedPaperId.split('::').at(-1) || mappedPaperId) : mappedPaperId;
-      const paperId = rawPaperId || fallbackPaperId;
-      const libraryId = String(d.library_id || scopedKey.split('::')[0] || '');
+      const libraryId = String(d.library_id || mapKey.split('::')[0] || '').trim();
+      if (selected.size > 0 && !selected.has(libraryId)) continue;
+
+      const paperId = String(d.paper_id || '').trim();
+      if (!paperId) continue;
+      // paper_map may include duplicate aliases (e.g. DOI key); keep only canonical paper_id entry.
+      if (mapKey !== paperId && mapKey !== `${libraryId}::${paperId}`) continue;
+
+      const dedupeKey = `${libraryId}::${paperId}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
       const paperVars = variables.filter((v) => {
         const src = String(v.latest_concept_source?.paper_id || '');
         const dom = String(v.dominant_paper_id || '');
-        return src === paperId || dom === paperId || (!!rawPaperId && (src === rawPaperId || dom === rawPaperId));
+        return src === paperId || dom === paperId;
       });
-      return {
-        scopedKey,
+
+      out.push({
+        scopedKey: dedupeKey,
         paperId,
-        rawPaperId,
+        rawPaperId: paperId,
         libraryId,
         title: firstTitle(d, paperId),
         metaLine: metaLine(d),
         sourcePdfName: String(d.source_pdf_name || ''),
         variables: paperVars,
-      };
-    }).sort((a, b) => a.paperId.localeCompare(b.paperId));
-  }, [graphData, variables]);
+      });
+    }
+
+    return out.sort((a, b) => {
+      const libCmp = a.libraryId.localeCompare(b.libraryId);
+      if (libCmp !== 0) return libCmp;
+      return a.paperId.localeCompare(b.paperId);
+    });
+  }, [graphData, variables, selectedLibraryIds]);
 
   useEffect(() => {
     let cancelled = false;

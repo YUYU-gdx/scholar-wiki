@@ -26,12 +26,59 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
   const [readerNotes, setReaderNotes] = useState<ReaderNoteRecord[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editComment, setEditComment] = useState('');
+  const [parsedMarkdownNotes, setParsedMarkdownNotes] = useState<ReaderNoteRecord[]>([]);
 
   useEffect(() => {
     if (!paperId) return;
     annotationManager.getAllByPaper(paperId).then(setAnnotations).catch(() => setAnnotations([]));
     readerNotesManager.listByPaper(paperId).then(setReaderNotes).catch(() => setReaderNotes([]));
   }, [paperId]);
+
+  useEffect(() => {
+    const shell = window.desktopShell;
+    const path = String(markdownPath || '').trim();
+    if (!paperId || !path || !shell || shell.runtime !== 'electron') {
+      setParsedMarkdownNotes([]);
+      return;
+    }
+    shell.readLocalText(path).then((res: any) => {
+      if (!res?.ok || typeof res.data !== 'string') {
+        setParsedMarkdownNotes([]);
+        return;
+      }
+      const raw = String(res.data || '');
+      const blockRe = /> \[!NOTE\] Reader Note[\s\S]*?(?=\n> \[!NOTE\] Reader Note|\n## |\n# |\s*$)/g;
+      const matches = raw.match(blockRe) || [];
+      const parsed: ReaderNoteRecord[] = matches.map((b, idx) => {
+        const id = (b.match(/> Note ID:\s*(.+)/)?.[1] || `md-${idx + 1}`).trim();
+        const quote = (b.match(/> Quote:\s*\n>((?:.*\n?)*)\n>\n> Note:/)?.[1] || "")
+          .split("\n")
+          .map((ln) => ln.replace(/^>\s?/, ""))
+          .join("\n")
+          .trim();
+        const note = (b.match(/> Note:\s*\n>((?:.*\n?)*)\n>\n> Time:/)?.[1] || "")
+          .split("\n")
+          .map((ln) => ln.replace(/^>\s?/, ""))
+          .join("\n")
+          .trim();
+        const ts = (b.match(/> Time:\s*(.+)/)?.[1] || "").trim();
+        return {
+          id,
+          paper_id: paperId,
+          library_id: libraryId,
+          doc_type: 'markdown' as const,
+          selected_text: quote,
+          note_text: note,
+          md_anchor: { quote, prefix: "", suffix: "", hash: "" },
+          markdown_path_at_write: path,
+          page_index: 0,
+          created_at: ts || new Date(0).toISOString(),
+          updated_at: ts || new Date(0).toISOString(),
+        };
+      });
+      setParsedMarkdownNotes(parsed);
+    }).catch(() => setParsedMarkdownNotes([]));
+  }, [paperId, markdownPath, readerNotes.length]);
 
   useEffect(() => {
     const handler = (evt: Event) => {
@@ -100,7 +147,11 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
     const bTop = b.rects[0]?.y ?? 0;
     return aTop - bTop;
   });
-  const sortedReaderNotes = [...readerNotes].sort((a, b) => {
+  const mergedReaderNotes = [...readerNotes];
+  for (const pn of parsedMarkdownNotes) {
+    if (!mergedReaderNotes.some((x) => String(x.id) === String(pn.id))) mergedReaderNotes.push(pn);
+  }
+  const sortedReaderNotes = [...mergedReaderNotes].sort((a, b) => {
     if (a.page_index !== b.page_index) return a.page_index - b.page_index;
     return String(a.created_at).localeCompare(String(b.created_at));
   });
