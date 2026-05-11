@@ -9,7 +9,6 @@ import DOMPurify from 'dompurify';
 import 'katex/dist/katex.min.css';
 import type { ViewerMode } from './types';
 import SelectionActionPopover from './SelectionActionPopover';
-import TranslationModal from './TranslationModal';
 import { api } from '../../api';
 import Outline from './Outline';
 import { readerNotesManager } from './ReaderNotesManager';
@@ -116,8 +115,8 @@ export default function MarkdownEditor({
   const [mode, setMode] = useState<ViewerMode>(initialMode);
   const [text, setText] = useState(content);
   const [renderedHtml, setRenderedHtml] = useState('');
-  const [selectionUI, setSelectionUI] = useState({ visible: false, x: 0, y: 0, text: '', lineEnd: -1 });
-  const [translationOpen, setTranslationOpen] = useState(false);
+  const [selectionUI, setSelectionUI] = useState({ visible: false, x: 0, y: 0, text: '', lineStart: -1, lineEnd: -1 });
+  const [translationLoading, setTranslationLoading] = useState(false);
   const [translationText, setTranslationText] = useState('');
   const [noteRanges, setNoteRanges] = useState<Array<{ start: number; end: number; id: string; quote: string; note: string }>>([]);
 
@@ -308,7 +307,7 @@ export default function MarkdownEditor({
 
   useEffect(() => {
     if (mode !== 'read' && mode !== 'live-preview') {
-      setSelectionUI({ visible: false, x: 0, y: 0, text: '', lineEnd: -1 });
+      setSelectionUI({ visible: false, x: 0, y: 0, text: '', lineStart: -1, lineEnd: -1 });
       return;
     }
     const host = selectionHostRef.current;
@@ -316,13 +315,13 @@ export default function MarkdownEditor({
     const onUp = () => {
       const sel = window.getSelection();
       if (!isSelectionInside(host, sel)) {
-        setSelectionUI((prev) => (prev.visible ? { ...prev, visible: false, lineEnd: -1 } : prev));
+        setSelectionUI((prev) => (prev.visible ? { ...prev, visible: false, lineStart: -1, lineEnd: -1 } : prev));
         return;
       }
       const raw = sel?.toString() || '';
       const picked = raw.trim();
       if (!picked || !sel || sel.rangeCount === 0) {
-        setSelectionUI((prev) => (prev.visible ? { ...prev, visible: false, lineEnd: -1 } : prev));
+        setSelectionUI((prev) => (prev.visible ? { ...prev, visible: false, lineStart: -1, lineEnd: -1 } : prev));
         return;
       }
       const range = sel.getRangeAt(0);
@@ -338,16 +337,18 @@ export default function MarkdownEditor({
       if (lineEnd < 0) {
         lineEnd = anchorBlockEnd >= 0 ? anchorBlockEnd : Math.max(startLine, focusLineEnd);
       }
-      if (anchorBlockEnd >= 0) {
-        lineEnd = Math.min(lineEnd, anchorBlockEnd);
+      if (focusLineEnd >= 0) {
+        lineEnd = Math.max(lineEnd, focusLineEnd);
       }
       setSelectionUI({
         visible: true,
         x: Math.max(12, rect.left),
-        y: Math.max(12, rect.bottom + 8),
+        y: Math.max(12, rect.top - 220),
         text: picked,
+        lineStart: startLine,
         lineEnd,
       });
+      setTranslationText('');
     };
     host.addEventListener('mouseup', onUp);
     return () => {
@@ -381,13 +382,55 @@ export default function MarkdownEditor({
 
   const handleTranslate = async () => {
     try {
+      setTranslationLoading(true);
       const cfg = await api.chat.getTranslationProviderConfig();
-      const result = await api.chat.translate(selectionUI.text, cfg);
-      setTranslationText(result.translated_text || '');
-      setTranslationOpen(true);
+      const selected = String(selectionUI.text || '').trim();
+      const words = selected ? selected.split(/\s+/).filter(Boolean).length : 0;
+      if (words < 10) {
+        const result = await api.chat.translate(selected, cfg);
+        setTranslationText(result.translated_text || '');
+        return;
+      }
+      const lines = text.split('\n');
+      const start = Math.max(0, selectionUI.lineStart);
+      const end = Math.min(lines.length - 1, selectionUI.lineEnd);
+      if (start > end || start < 0 || end < 0) {
+        const result = await api.chat.translate(selected, cfg);
+        setTranslationText(result.translated_text || '');
+        return;
+      }
+      const translatedMap = new Map<number, string>();
+      for (let i = start; i <= end; i += 1) {
+        const paragraph = String(lines[i] || '');
+        if (!paragraph.trim()) continue;
+        const result = await api.chat.translate(paragraph, cfg);
+        translatedMap.set(i, String(result.translated_text || '').trim());
+      }
+      if (translatedMap.size <= 0) {
+        setTranslationText('');
+        return;
+      }
+      const next = [...lines];
+      const touched: string[] = [];
+      for (let i = end; i >= start; i -= 1) {
+        const translated = translatedMap.get(i);
+        if (!translated) continue;
+        next.splice(i + 1, 0, '', `Translation: ${translated}`, '');
+        touched.push(`paragraph ${i + 1}`);
+      }
+      const merged = next.join('\n');
+      setText(merged);
+      currentContentRef.current = merged;
+      onContentChange?.(merged);
+      if (window.desktopShell?.runtime === 'electron' && absolutePath) {
+        await window.desktopShell.writeLocalText(absolutePath, merged);
+      }
+      touched.reverse();
+      setTranslationText(`Inserted paragraph translations: ${touched.join(', ')}`);
     } catch (e) {
-      setTranslationText(`缈昏瘧澶辫触锛?{(e as Error).message}`);
-      setTranslationOpen(true);
+      setTranslationText(`Translation failed: ${(e as Error).message}`);
+    } finally {
+      setTranslationLoading(false);
     }
   };
 
@@ -443,7 +486,7 @@ export default function MarkdownEditor({
         }, 3000);
       }
       window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
-      setSelectionUI((p) => ({ ...p, visible: false, lineEnd: -1 }));
+      setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 }));
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[notes] markdown save failed', e);
@@ -700,9 +743,10 @@ export default function MarkdownEditor({
         selectedText={selectionUI.text}
         onTranslate={handleTranslate}
         onSaveNote={handleSaveNote}
-        onClose={() => { setSelectionUI((p) => ({ ...p, visible: false, lineEnd: -1 })); }}
+        translationText={translationText}
+        translationLoading={translationLoading}
+        onClose={() => { setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 })); }}
       />
-      <TranslationModal open={translationOpen} text={translationText} onClose={() => setTranslationOpen(false)} />
     </div>
   );
 }

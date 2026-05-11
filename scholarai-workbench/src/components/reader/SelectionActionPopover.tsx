@@ -8,6 +8,8 @@ interface SelectionActionPopoverProps {
   selectedText: string;
   onTranslate: () => Promise<void> | void;
   onSaveNote: (note: string) => Promise<void> | void;
+  translationText?: string;
+  translationLoading?: boolean;
   onClose: () => void;
 }
 
@@ -18,6 +20,8 @@ export default function SelectionActionPopover({
   selectedText,
   onTranslate,
   onSaveNote,
+  translationText = '',
+  translationLoading = false,
   onClose,
 }: SelectionActionPopoverProps) {
   const [note, setNote] = useState('');
@@ -66,6 +70,11 @@ export default function SelectionActionPopover({
           {saving ? '保存中...' : '保存笔记'}
         </button>
       </div>
+      {(translationLoading || translationText) && (
+        <div className="rounded border border-outline-variant bg-surface-container p-2 text-xs leading-relaxed whitespace-pre-wrap max-h-44 overflow-auto">
+          {translationLoading ? '翻译中...' : translationText}
+        </div>
+      )}
     </div>
   );
 }

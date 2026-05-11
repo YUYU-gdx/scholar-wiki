@@ -6,7 +6,6 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 import SelectionActionPopover from './SelectionActionPopover';
-import TranslationModal from './TranslationModal';
 import { api } from '../../api';
 import { readerNotesManager } from './ReaderNotesManager';
 import { ensureMarkdownPathForNotes, mergeNotesIntoMarkdown, setRecordedNotesMarkdownPath, upsertNoteInMarkdown } from './NoteMarkdownSync';
@@ -36,7 +35,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   const validHeader = useMemo(() => hasValidPdfHeader(safePdfBytes), [safePdfBytes]);
   const [pdfUrl, setPdfUrl] = useState<string>('');
   const [selectionUI, setSelectionUI] = useState({ visible: false, x: 0, y: 0, text: '' });
-  const [translationOpen, setTranslationOpen] = useState(false);
+  const [translationLoading, setTranslationLoading] = useState(false);
   const [translationText, setTranslationText] = useState('');
   const selectionHostRef = useRef<HTMLDivElement>(null);
 
@@ -73,7 +72,8 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       const containerEl = (range.commonAncestorContainer instanceof Element ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement);
       if (!containerEl?.closest('.react-pdf__Page')) return;
       const rect = range.getBoundingClientRect();
-      setSelectionUI({ visible: true, x: Math.max(12, rect.left), y: Math.max(12, rect.bottom + 8), text: picked });
+      setSelectionUI({ visible: true, x: Math.max(12, rect.left), y: Math.max(12, rect.top - 220), text: picked });
+      setTranslationText('');
     };
     host.addEventListener('mouseup', onUp);
     return () => {
@@ -109,13 +109,14 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
 
   const handleTranslate = async () => {
     try {
+      setTranslationLoading(true);
       const cfg = await api.chat.getTranslationProviderConfig();
       const result = await api.chat.translate(selectionUI.text, cfg);
       setTranslationText(result.translated_text || '');
-      setTranslationOpen(true);
     } catch (e) {
-      setTranslationText(`翻译失败：${(e as Error).message}`);
-      setTranslationOpen(true);
+      setTranslationText(`Translation failed: ${(e as Error).message}`);
+    } finally {
+      setTranslationLoading(false);
     }
   };
 
@@ -232,9 +233,10 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
         selectedText={selectionUI.text}
         onTranslate={handleTranslate}
         onSaveNote={handleSaveNote}
+        translationText={translationText}
+        translationLoading={translationLoading}
         onClose={() => { setSelectionUI((p) => ({ ...p, visible: false })); }}
       />
-      <TranslationModal open={translationOpen} text={translationText} onClose={() => setTranslationOpen(false)} />
     </div>
   );
 }
