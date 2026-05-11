@@ -6,11 +6,40 @@ import TabBar from './reader/TabBar';
 import type { TabDescriptor } from './reader/types';
 
 const MAX_TABS = 8;
+const READER_TABS_KEY = 'kn_graph_reader_tabs_v1';
+const READER_ACTIVE_TAB_KEY = 'kn_graph_reader_active_tab_v1';
 
 export default function ReaderView() {
   const [docPath, setDocPath] = useState('');
-  const [tabs, setTabs] = useState<TabDescriptor[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [tabs, setTabs] = useState<TabDescriptor[]>(() => {
+    try {
+      const raw = sessionStorage.getItem(READER_TABS_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((t) => t && typeof t === 'object')
+        .map((t) => ({
+          id: String(t.id || crypto.randomUUID()),
+          paperId: String(t.paperId || ''),
+          libraryId: String(t.libraryId || ''),
+          type: (t.type === 'pdf' || t.type === 'markdown' || t.type === 'html') ? t.type : 'markdown',
+          path: String(t.path || ''),
+          title: String(t.title || t.paperId || 'Document'),
+        }))
+        .filter((t) => t.paperId && t.libraryId);
+    } catch {
+      return [];
+    }
+  });
+  const [activeTabId, setActiveTabId] = useState<string | null>(() => {
+    try {
+      const v = sessionStorage.getItem(READER_ACTIVE_TAB_KEY);
+      return v || null;
+    } catch {
+      return null;
+    }
+  });
   const {
     selectedPaperId,
     selectedPaperLibraryId,
@@ -24,6 +53,33 @@ export default function ReaderView() {
     readerReturnView,
     setCurrentView,
   } = useApp();
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(READER_TABS_KEY, JSON.stringify(tabs));
+    } catch {
+      // ignore persistence errors
+    }
+  }, [tabs]);
+
+  useEffect(() => {
+    try {
+      if (activeTabId) sessionStorage.setItem(READER_ACTIVE_TAB_KEY, activeTabId);
+      else sessionStorage.removeItem(READER_ACTIVE_TAB_KEY);
+    } catch {
+      // ignore persistence errors
+    }
+  }, [activeTabId]);
+
+  useEffect(() => {
+    if (!tabs.length) {
+      if (activeTabId) setActiveTabId(null);
+      return;
+    }
+    if (!activeTabId || !tabs.some((t) => t.id === activeTabId)) {
+      setActiveTabId(tabs[tabs.length - 1].id);
+    }
+  }, [tabs, activeTabId]);
 
   useEffect(() => {
     if (!selectedPaperId) return;
@@ -69,16 +125,28 @@ export default function ReaderView() {
   const handleDocumentMeta = useCallback((meta: { absolutePath: string; fileName: string; type: 'pdf' | 'markdown' | 'html' | 'none' }) => {
     setDocPath(meta.absolutePath || '');
     if (activeTabId) {
-      setTabs(prev => prev.map(t =>
-        t.id === activeTabId
-          ? {
-              ...t,
-              path: meta.absolutePath || t.path,
-              title: meta.fileName || t.title,
-              type: meta.type === 'none' ? t.type : meta.type,
-            }
-          : t
-      ));
+      setTabs(prev => {
+        const active = prev.find((t) => t.id === activeTabId);
+        if (!active) return prev;
+        const normalizedPath = String(meta.absolutePath || '').trim().toLowerCase();
+        const duplicate = normalizedPath
+          ? prev.find((t) => t.id !== activeTabId && String(t.path || '').trim().toLowerCase() === normalizedPath)
+          : null;
+        if (duplicate) {
+          setActiveTabId(duplicate.id);
+          return prev.filter((t) => t.id !== activeTabId);
+        }
+        return prev.map(t =>
+          t.id === activeTabId
+            ? {
+                ...t,
+                path: meta.absolutePath || t.path,
+                title: meta.fileName || t.title,
+                type: meta.type === 'none' ? t.type : meta.type,
+              }
+            : t
+        );
+      });
     }
   }, [activeTabId]);
 
