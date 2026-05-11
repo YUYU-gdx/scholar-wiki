@@ -211,6 +211,17 @@ def _sync_variable_concept_index(
         return {}, str(exc)
 
 
+def _delete_paper_bundle_by_id(conn: Any, paper_id: str) -> None:
+    pid = str(paper_id or "").strip()
+    if not pid:
+        return
+    cur = conn.cursor()
+    cur.execute("DELETE FROM interaction_inputs WHERE interaction_id IN (SELECT id FROM interactions WHERE paper_id = ?)", (pid,))
+    for table in ("paper_domains", "variable_aliases", "variable_definitions", "direct_effects", "moderations", "interactions"):
+        cur.execute(f"DELETE FROM {table} WHERE paper_id = ?", (pid,))
+    cur.execute("DELETE FROM papers WHERE paper_id = ?", (pid,))
+
+
 def _stage_update(store: JobStore, job_id: str, stage: str, progress: int, event: str, **extra: Any) -> None:
     existing = store.get_job(job_id) or {}
     if _norm_status(existing.get("status")) in TERMINAL_JOB_STATUSES and event != "cancelled":
@@ -799,6 +810,9 @@ def _run_finalize_after_import(
                         pid,
                     ),
                 )
+            provisional_paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
+            if provisional_paper_id and mat_paper_key and provisional_paper_id != mat_paper_key:
+                _delete_paper_bundle_by_id(conn, provisional_paper_id)
             conn.commit()
             conn.close()
             _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
