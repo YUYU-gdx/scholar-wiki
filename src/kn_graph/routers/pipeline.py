@@ -297,6 +297,24 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
         return result
 
+    @router.post("/jobs/batch")
+    async def batch_jobs(action: str = Form(...), job_ids: str = Form(...)):
+        try:
+            parsed = json.loads(job_ids)
+        except json.JSONDecodeError:
+            return JSONResponse(status_code=400, content={"error": "invalid_job_ids_json"})
+        if not isinstance(parsed, list):
+            return JSONResponse(status_code=400, content={"error": "job_ids_must_be_array"})
+        result = pipeline_service.batch_operate_jobs(action=action, job_ids=[str(x or "") for x in parsed])
+        if isinstance(result, dict) and result.get("error") == "invalid_action":
+            return JSONResponse(status_code=400, content=result)
+        if isinstance(result, dict) and result.get("error") == "job_ids_required":
+            return JSONResponse(status_code=400, content=result)
+        failure_count = int(result.get("failure_count", 0) or 0) if isinstance(result, dict) else 0
+        if failure_count > 0:
+            return JSONResponse(status_code=207, content=result)
+        return result
+
     @router.get("/jobs/{job_id}/events")
     async def stream_job_events(job_id: str):
         async def event_generator():

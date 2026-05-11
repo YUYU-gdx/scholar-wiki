@@ -6,7 +6,7 @@ import AnnotationSidebar from './AnnotationSidebar';
 import ReaderChatSidebar from './ReaderChatSidebar';
 import BacklinksPanel from './BacklinksPanel';
 import RelatedEntities from './RelatedEntities';
-import { useApp } from '../../App';
+import { useApp } from '../../app-context';
 import { resolveAndLoadDocument, type ResolvedDocument } from './DocumentResolver';
 
 interface ViewerHostProps {
@@ -25,7 +25,8 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
   const [chatOpen, setChatOpen] = useState(false);
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [entitiesOpen, setEntitiesOpen] = useState(false);
-  const { graphData } = useApp();
+  const app = useApp();
+  const graphData = app?.graphData ?? null;
   const primaryPaperId = String(rawPaperId || paperId || '').trim();
 
   useEffect(() => {
@@ -119,7 +120,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
         {document.type === 'html' && typeof document.data === 'string' && (
           <div className="flex-1 overflow-auto p-6 bg-surface-container-lowest">
             <div className="max-w-[800px] mx-auto p-4 border border-outline-variant rounded-xl bg-surface-container-low text-sm text-on-surface-variant">
-              HTML 阅读器已临时封存。请优先使用 PDF 或 Markdown。
+              HTML 闃呰鍣ㄥ凡涓存椂灏佸瓨銆傝浼樺厛浣跨敤 PDF 鎴?Markdown銆?
             </div>
           </div>
         )}
@@ -256,3 +257,4 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
     </div>
   );
 }
+

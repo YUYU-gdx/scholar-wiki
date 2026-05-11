@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, createContext, useContext, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Library,
   Share2,
@@ -21,47 +21,7 @@ import PipelineView from './components/PipelineView';
 import SettingsView from './components/SettingsView';
 import { api } from './api';
 import type { View, GraphFull, ChatSession, LiteratureLibrary, PipelineJob, GraphNode, GraphEdge } from './types';
-
-type AppContextType = {
-  currentView: View;
-  setCurrentView: (v: View) => void;
-  graphData: GraphFull | null;
-  setGraphData: React.Dispatch<React.SetStateAction<GraphFull | null>>;
-  selectedNodeId: string | null;
-  selectedNodeLibraryId: string;
-  setSelectedNodeId: (id: string | null) => void;
-  setSelectedNodeLibraryId: (id: string) => void;
-  selectedPaperId: string | null;
-  selectedPaperLibraryId: string;
-  setSelectedPaperId: (id: string | null) => void;
-  setSelectedPaperLibraryId: (id: string) => void;
-  selectedPaperPreferredType: 'pdf' | 'markdown' | 'html' | null;
-  setSelectedPaperPreferredType: (type: 'pdf' | 'markdown' | 'html' | null) => void;
-  selectedPaperRawId: string | null;
-  setSelectedPaperRawId: (id: string | null) => void;
-  readerReturnView: 'library' | 'graph';
-  setReaderReturnView: (v: 'library' | 'graph') => void;
-  sessions: ChatSession[];
-  setSessions: React.Dispatch<React.SetStateAction<ChatSession[]>>;
-  activeSessionId: string | null;
-  setActiveSessionId: (id: string | null) => void;
-  libraries: LiteratureLibrary[];
-  activeLibraryId: string;
-  setActiveLibraryId: (id: string) => void;
-  selectedLibraryIds: string[];
-  setSelectedLibraryIds: React.Dispatch<React.SetStateAction<string[]>>;
-  pipelineJobs: PipelineJob[];
-  setPipelineJobs: React.Dispatch<React.SetStateAction<PipelineJob[]>>;
-  graphLoading: boolean;
-  paperFileCache: Record<string, { pdf: boolean; markdown: boolean; html: boolean; loaded: boolean }>;
-  setPaperFileCache: React.Dispatch<React.SetStateAction<Record<string, { pdf: boolean; markdown: boolean; html: boolean; loaded: boolean }>>>;
-};
-
-export const AppContext = createContext<AppContextType>(null!);
-
-export function useApp() {
-  return useContext(AppContext);
-}
+import { AppContext, type AppContextType } from './app-context';
 
 function mergeGraphPayloads(payloads: GraphFull[]): GraphFull {
   const nodeById = new Map<string, GraphNode>();
@@ -526,3 +486,4 @@ export default function App() {
     </AppContext.Provider>
   );
 }
+

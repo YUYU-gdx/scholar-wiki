@@ -1,6 +1,6 @@
-﻿import { FileText, ExternalLink, Library, Layers, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { FileText, ExternalLink, Library, Layers, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { useApp } from '../App';
+import { useApp } from '../app-context';
 import { api } from '../api';
 
 const MODE_KEY = 'kn_graph_library_mode';
@@ -520,3 +520,4 @@ export default function LibraryView() {
     </div>
   );
 }
+

@@ -15,7 +15,7 @@ from kn_graph.services.pipeline_service import PipelineService, _SQLiteJobStore
 class _FakePipelineService:
     def __init__(self) -> None:
         self.created_jobs: list[dict] = []
-        self._settings = type("S", (), {"pipeline_executor": "celery"})()
+        self._settings = type("S", (), {"pipeline_executor": "celery", "workspaces_dir": Path(".")})()
 
     def health(self):
         return {"status": "ok", "executor": "inline"}
@@ -39,6 +39,23 @@ class _FakePipelineService:
     def retry_job(self, _job_id: str):
         return None
 
+    def batch_operate_jobs(self, action: str, job_ids: list[str]):
+        results: list[dict] = []
+        success_count = 0
+        for jid in job_ids:
+            if jid == "missing":
+                results.append({"action": action, "job_id": jid, "error": "job_not_found"})
+            else:
+                success_count += 1
+                results.append({"action": action, "job_id": jid, "status": "ok"})
+        return {
+            "action": action,
+            "total": len(job_ids),
+            "success_count": success_count,
+            "failure_count": len(job_ids) - success_count,
+            "results": results,
+        }
+
 
 class TestPipelineRouterRegressions(unittest.TestCase):
     def test_retry_missing_job_returns_404_instead_of_500(self) -> None:
@@ -58,7 +75,7 @@ class TestPipelineRouterRegressions(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             original = pipeline_router._resolve_library_workspace
-            pipeline_router._resolve_library_workspace = lambda _library_id: Path(tmp)
+            pipeline_router._resolve_library_workspace = lambda _library_id, _workspaces_dir: Path(tmp)
             try:
                 resp = client.post(
                     "/v1/pipeline/parse-extract/batch",
@@ -76,6 +93,36 @@ class TestPipelineRouterRegressions(unittest.TestCase):
         accepted = payload.get("accepted") or []
         self.assertEqual(len(accepted), 2)
         self.assertTrue(all(isinstance(item, dict) and item.get("job_id") for item in accepted))
+
+    def test_batch_job_operation_returns_200_when_all_success(self) -> None:
+        app = FastAPI()
+        app.include_router(pipeline_router.create_router(_FakePipelineService()))
+        client = TestClient(app)
+
+        resp = client.post(
+            "/v1/jobs/batch",
+            data={"action": "cancel", "job_ids": '["job_1","job_2"]'},
+        )
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload.get("action"), "cancel")
+        self.assertEqual(payload.get("success_count"), 2)
+        self.assertEqual(payload.get("failure_count"), 0)
+
+    def test_batch_job_operation_returns_207_on_partial_failure(self) -> None:
+        app = FastAPI()
+        app.include_router(pipeline_router.create_router(_FakePipelineService()))
+        client = TestClient(app)
+
+        resp = client.post(
+            "/v1/jobs/batch",
+            data={"action": "delete", "job_ids": '["job_1","missing"]'},
+        )
+        self.assertEqual(resp.status_code, 207)
+        payload = resp.json()
+        self.assertEqual(payload.get("action"), "delete")
+        self.assertEqual(payload.get("success_count"), 1)
+        self.assertEqual(payload.get("failure_count"), 1)
 
 
 class TestPipelineServiceRegressions(unittest.TestCase):

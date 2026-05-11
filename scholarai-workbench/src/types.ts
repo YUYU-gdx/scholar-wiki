@@ -292,12 +292,69 @@ export interface PipelineJobList {
   page_size: number;
 }
 
+export interface SemanticVariableMatch {
+  id: string;
+  score: number;
+  library_id: string;
+  paper_id: string;
+  variable_name: string;
+  canonical_var_id: string;
+  concept_text: string;
+  node_id: string;
+}
+
+export interface SemanticVariableSearchResponse {
+  ok: boolean;
+  query: string;
+  top_k: number;
+  library_ids: string[];
+  matched_variables: SemanticVariableMatch[];
+}
+
+export interface SemanticNeighborVariable {
+  node_id: string;
+  variable_name: string;
+  concept_text: string;
+  library_id: string;
+}
+
+export interface SemanticNeighborResultItem {
+  library_id: string;
+  matched: SemanticNeighborVariable | null;
+  cause_variables: SemanticNeighborVariable[];
+  effect_variables: SemanticNeighborVariable[];
+}
+
+export interface SemanticVariableNeighborsResponse {
+  ok: boolean;
+  variable_name: string;
+  top_k: number;
+  library_ids: string[];
+  results: SemanticNeighborResultItem[];
+}
+
 export interface PipelineBatchSubmitResponse {
   library_id: string;
   accepted_count: number;
   rejected_count: number;
   accepted: PipelineJob[];
   rejected: Array<{ file_name?: string; error?: string }>;
+}
+
+export interface PipelineBatchActionItem {
+  action: 'cancel' | 'retry' | 'delete';
+  job_id: string;
+  status?: string;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export interface PipelineBatchActionResponse {
+  action: 'cancel' | 'retry' | 'delete';
+  total: number;
+  success_count: number;
+  failure_count: number;
+  results: PipelineBatchActionItem[];
 }
 
 export interface PipelineAgentEvent {

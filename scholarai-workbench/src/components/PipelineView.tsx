@@ -1,6 +1,6 @@
-﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CloudUpload, FileText, RefreshCw, XCircle, Info, Terminal, Trash2, ChevronDown } from 'lucide-react';
-import { useApp } from '../App';
+import { useApp } from '../app-context';
 import { api } from '../api';
 import type { PipelineAgentEvent, PipelineJob } from '../types';
 
@@ -152,6 +152,7 @@ export default function PipelineView() {
   const [liveJobLogs, setLiveJobLogs] = useState<JobLogRow[]>([]);
   const [expandedLogItems, setExpandedLogItems] = useState<Record<string, boolean>>({});
   const [liveLogConnected, setLiveLogConnected] = useState(false);
+  const [selectedJobIds, setSelectedJobIds] = useState<Set<string>>(new Set());
   const agentLogSseRef = useRef<EventSource | null>(null);
   const autoReconnectedRef = useRef(false);
   const completedDispatchedRef = useRef<Set<string>>(new Set());
@@ -178,6 +179,17 @@ export default function PipelineView() {
   }, [page, statusFilter, stageFilter, activeLibraryId, setPipelineJobs]);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  useEffect(() => {
+    setSelectedJobIds((prev) => {
+      const visible = new Set(pipelineJobs.map((j) => j.job_id));
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (visible.has(id)) next.add(id);
+      });
+      return next;
+    });
+  }, [pipelineJobs]);
 
   useEffect(() => {
     const hasActive = pipelineJobs.some((j) => j.status === 'queued' || j.status === 'running');
@@ -372,6 +384,63 @@ export default function PipelineView() {
     } catch { /* ignore */ }
   };
 
+  const visibleJobs = useMemo(() => pipelineJobs, [pipelineJobs]);
+  const selectedJobs = useMemo(
+    () => visibleJobs.filter((j) => selectedJobIds.has(j.job_id)),
+    [visibleJobs, selectedJobIds],
+  );
+  const allVisibleSelected = visibleJobs.length > 0 && visibleJobs.every((j) => selectedJobIds.has(j.job_id));
+
+  const toggleSelectAllVisible = () => {
+    setSelectedJobIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        visibleJobs.forEach((j) => next.delete(j.job_id));
+      } else {
+        visibleJobs.forEach((j) => next.add(j.job_id));
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectJob = (jobId: string, checked: boolean) => {
+    setSelectedJobIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(jobId);
+      else next.delete(jobId);
+      return next;
+    });
+  };
+
+  const batchOperate = async (action: 'cancel' | 'retry' | 'delete') => {
+    if (!selectedJobs.length) return;
+    const labelMap: Record<'cancel' | 'retry' | 'delete', string> = {
+      cancel: '取消',
+      retry: '重试',
+      delete: '删除',
+    };
+    if (!confirm(`确认${labelMap[action]}已选中的 ${selectedJobs.length} 个任务？`)) return;
+    try {
+      const res = await api.pipeline.batchOperateJobs(action, selectedJobs.map((j) => j.job_id));
+      if (action === 'retry') {
+        const results = Array.isArray(res.results) ? res.results : [];
+        for (const item of results) {
+          if (item && typeof item === 'object' && item.retry_mode === 'recreate' && typeof item.job_id === 'string') {
+            // no-op: backend recreate path does not return new job id here
+          }
+        }
+      }
+      const failed = Number(res.failure_count || 0);
+      if (failed > 0) {
+        window.alert(`批量${labelMap[action]}完成：成功 ${res.success_count}，失败 ${failed}`);
+      }
+      setSelectedJobIds(new Set());
+      await fetchJobs();
+    } catch (err) {
+      window.alert(`批量${labelMap[action]}失败: ${String((err as Error)?.message || err)}`);
+    }
+  };
+
   const statusBadge = (status: string) => {
     const classes: Record<string, string> = {
       queued: 'bg-surface-container text-on-surface-variant animate-pulse',
@@ -382,8 +451,6 @@ export default function PipelineView() {
     };
     return classes[status] || classes.queued;
   };
-
-  const visibleJobs = useMemo(() => pipelineJobs, [pipelineJobs]);
 
   return (
     <div className="flex-1 flex flex-col overflow-y-auto px-8 py-8 bg-surface-container-low/30 relative">
@@ -444,6 +511,28 @@ export default function PipelineView() {
 
       <div className="flex items-center gap-3 mb-4">
         <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono flex-1">Pipeline Jobs</h3>
+        <span className="text-[11px] text-on-surface-variant font-mono">Selected: {selectedJobs.length}</span>
+        <button
+          onClick={() => batchOperate('cancel')}
+          disabled={selectedJobs.length === 0}
+          className="bg-surface-container border border-outline-variant rounded-lg px-3 py-1.5 text-xs text-on-surface disabled:opacity-50"
+        >
+          Batch Cancel
+        </button>
+        <button
+          onClick={() => batchOperate('retry')}
+          disabled={selectedJobs.length === 0}
+          className="bg-surface-container border border-outline-variant rounded-lg px-3 py-1.5 text-xs text-on-surface disabled:opacity-50"
+        >
+          Batch Retry
+        </button>
+        <button
+          onClick={() => batchOperate('delete')}
+          disabled={selectedJobs.length === 0}
+          className="bg-surface-container border border-outline-variant rounded-lg px-3 py-1.5 text-xs text-on-surface disabled:opacity-50"
+        >
+          Batch Delete
+        </button>
         <select
           value={statusFilter}
           onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
@@ -465,6 +554,9 @@ export default function PipelineView() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-surface-container-low/10 text-[10px] font-mono font-black text-outline uppercase tracking-widest border-b border-outline-variant/10">
+                <th className="px-4 py-4 w-[44px] text-center">
+                  <input type="checkbox" checked={allVisibleSelected} onChange={() => toggleSelectAllVisible()} />
+                </th>
                 <th className="px-6 py-4 w-[130px]">Job ID</th>
                 <th className="px-6 py-4">Filename</th>
                 <th className="px-6 py-4 w-[140px]">Stage</th>
@@ -475,13 +567,20 @@ export default function PipelineView() {
             <tbody className="divide-y divide-outline-variant/10">
               {visibleJobs.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-on-surface-variant text-sm">
+                  <td colSpan={6} className="px-6 py-12 text-center text-on-surface-variant text-sm">
                     No pipeline jobs found.
                   </td>
                 </tr>
               )}
               {visibleJobs.map((job) => (
                 <tr key={job.job_id} className="hover:bg-surface-container-low/10 transition-colors group">
+                  <td className="px-4 py-4 text-center">
+                    <input
+                      type="checkbox"
+                      checked={selectedJobIds.has(job.job_id)}
+                      onChange={(e) => toggleSelectJob(job.job_id, e.target.checked)}
+                    />
+                  </td>
                   <td className="px-6 py-4 font-mono text-[11px] font-bold text-on-surface-variant">{job.job_id?.slice(0, 12)}...</td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
@@ -588,3 +687,4 @@ export default function PipelineView() {
     </div>
   );
 }
+

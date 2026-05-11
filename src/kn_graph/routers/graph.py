@@ -2,11 +2,165 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
+from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, Query
 from fastapi.responses import JSONResponse, Response
 
 from kn_graph.services.graph_service import GraphService
+from kn_graph.services.variable_concept_index import VariableConceptIndexService
+
+
+_TOKEN_RE = re.compile(r"[0-9a-zA-Z\u4e00-\u9fff]+")
+
+
+def _norm(text: str) -> str:
+    return "_".join(_TOKEN_RE.findall(str(text or "").lower()))
+
+
+def _pick_concept_from_variable_detail(payload: dict[str, Any]) -> str:
+    groups = payload.get("paper_groups", []) if isinstance(payload, dict) else []
+    if not isinstance(groups, list):
+        return ""
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        concepts = group.get("concepts", [])
+        if not isinstance(concepts, list):
+            continue
+        for item in concepts:
+            if not isinstance(item, dict):
+                continue
+            txt = str(item.get("definition", "") or "").strip()
+            if txt:
+                return txt
+    return ""
+
+
+def _resolve_node_id_by_variable_name(
+    graph_service: GraphService,
+    *,
+    library_id: str,
+    variable_name: str,
+) -> str:
+    result = graph_service.search(
+        query=variable_name,
+        mode="variable",
+        limit=20,
+        keyword_weight=0.4,
+        vector_weight=0.6,
+        vector_backend="hash",
+        library_id=library_id,
+    )
+    rows = result.get("results", []) if isinstance(result, dict) else []
+    if not isinstance(rows, list):
+        return ""
+    needle = _norm(variable_name)
+    first_id = ""
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        nid = str(row.get("id", "") or row.get("node_id", "") or "").strip()
+        if not nid:
+            continue
+        if not first_id:
+            first_id = nid
+        title = str(row.get("title", "") or row.get("name", "") or "").strip()
+        if _norm(title) == needle or _norm(nid.split("::")[-1]) == needle:
+            return nid
+    return first_id
+
+
+def _library_workspace_path(graph_service: GraphService, library_id: str) -> Path:
+    return (graph_service._settings.workspaces_dir / library_id).resolve()
+
+
+def _collect_neighbor_variables(
+    graph_service: GraphService,
+    *,
+    library_id: str,
+    variable_name: str,
+    top_k: int,
+) -> dict[str, Any]:
+    node_id = _resolve_node_id_by_variable_name(
+        graph_service,
+        library_id=library_id,
+        variable_name=variable_name,
+    )
+    if not node_id:
+        return {"matched": None, "cause_variables": [], "effect_variables": []}
+    neighborhood = graph_service.get_neighborhood(
+        node_id=node_id,
+        hops=1,
+        limit_nodes=120,
+        limit_edges=240,
+        library_id=library_id,
+    )
+    if not isinstance(neighborhood, dict):
+        return {"matched": None, "cause_variables": [], "effect_variables": []}
+    nodes = neighborhood.get("nodes", [])
+    edges = neighborhood.get("edges", [])
+    if not isinstance(nodes, list):
+        nodes = []
+    if not isinstance(edges, list):
+        edges = []
+    node_map: dict[str, dict[str, Any]] = {}
+    for item in nodes:
+        if not isinstance(item, dict):
+            continue
+        nid = str(item.get("id", "") or "").strip()
+        if nid:
+            node_map[nid] = item
+
+    matched_detail = graph_service.get_variable(node_id, library_id=library_id)
+    matched = {
+        "node_id": node_id,
+        "variable_name": str(node_map.get(node_id, {}).get("label", "") or node_map.get(node_id, {}).get("name", "") or node_id),
+        "concept_text": _pick_concept_from_variable_detail(matched_detail or {}),
+        "library_id": library_id,
+    }
+
+    cause_ids: list[str] = []
+    effect_ids: list[str] = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        src = str(edge.get("source", "") or edge.get("source_node_id", "") or "").strip()
+        tgt = str(edge.get("target", "") or edge.get("target_node_id", "") or "").strip()
+        if src == node_id and tgt and tgt in node_map:
+            effect_ids.append(tgt)
+        elif tgt == node_id and src and src in node_map:
+            cause_ids.append(src)
+
+    def _to_min_rows(ids: list[str]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for nid in ids:
+            if nid in seen:
+                continue
+            seen.add(nid)
+            n = node_map.get(nid, {})
+            if str(n.get("type", "") or "").strip() not in {"variable", ""}:
+                continue
+            detail = graph_service.get_variable(nid, library_id=library_id)
+            out.append(
+                {
+                    "node_id": nid,
+                    "variable_name": str(n.get("label", "") or n.get("name", "") or nid),
+                    "concept_text": _pick_concept_from_variable_detail(detail or {}),
+                    "library_id": library_id,
+                }
+            )
+            if len(out) >= top_k:
+                break
+        return out
+
+    return {
+        "matched": matched,
+        "cause_variables": _to_min_rows(cause_ids),
+        "effect_variables": _to_min_rows(effect_ids),
+    }
 
 
 def create_router(graph_service: GraphService) -> APIRouter:
@@ -66,6 +220,95 @@ def create_router(graph_service: GraphService) -> APIRouter:
     @router.post("/reload")
     async def graph_reload(library_id: str = Query(default="")):
         return graph_service.reload(library_id=library_id)
+
+    @router.post("/semantic-variables/search")
+    async def semantic_variable_search(
+        payload: dict[str, Any] = Body(default={}),
+    ):
+        query = str(payload.get("query", "") or "").strip()
+        if not query:
+            return JSONResponse(status_code=400, content={"error": "query_required"})
+        raw_top_k = int(payload.get("top_k", 5) or 5)
+        top_k = min(20, max(3, raw_top_k))
+        raw_libs = payload.get("library_ids", [])
+        library_ids = [str(x or "").strip() for x in (raw_libs if isinstance(raw_libs, list) else []) if str(x or "").strip()]
+        if not library_ids:
+            return JSONResponse(status_code=400, content={"error": "library_ids_required"})
+
+        matched_variables: list[dict[str, Any]] = []
+        for lib in library_ids:
+            workspace = _library_workspace_path(graph_service, lib)
+            service = VariableConceptIndexService(workspace_path=str(workspace))
+            try:
+                hits = service.query(library_id=lib, query=query, top_k=top_k)
+            except Exception as exc:
+                return JSONResponse(status_code=500, content={"error": "semantic_search_failed", "library_id": lib, "detail": str(exc)})
+            for hit in hits:
+                variable_name = str(hit.get("variable_name", "") or "").strip()
+                node_id = _resolve_node_id_by_variable_name(
+                    graph_service,
+                    library_id=lib,
+                    variable_name=variable_name,
+                ) if variable_name else ""
+                matched_variables.append(
+                    {
+                        "id": str(hit.get("id", "") or ""),
+                        "score": float(hit.get("score", 0.0) or 0.0),
+                        "library_id": str(hit.get("library_id", "") or lib),
+                        "paper_id": str(hit.get("paper_id", "") or ""),
+                        "variable_name": variable_name,
+                        "canonical_var_id": str(hit.get("canonical_var_id", "") or ""),
+                        "concept_text": str(hit.get("concept_text", "") or ""),
+                        "node_id": node_id,
+                    }
+                )
+
+        matched_variables.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
+        return {
+            "ok": True,
+            "query": query,
+            "top_k": top_k,
+            "library_ids": library_ids,
+            "matched_variables": matched_variables[: max(top_k * max(1, len(library_ids)), top_k)],
+        }
+
+    @router.post("/semantic-variables/neighbors")
+    async def semantic_variable_neighbors(
+        payload: dict[str, Any] = Body(default={}),
+    ):
+        variable_name = str(payload.get("variable_name", "") or "").strip()
+        if not variable_name:
+            return JSONResponse(status_code=400, content={"error": "variable_name_required"})
+        raw_top_k = int(payload.get("top_k", 5) or 5)
+        top_k = min(20, max(3, raw_top_k))
+        raw_libs = payload.get("library_ids", [])
+        library_ids = [str(x or "").strip() for x in (raw_libs if isinstance(raw_libs, list) else []) if str(x or "").strip()]
+        if not library_ids:
+            return JSONResponse(status_code=400, content={"error": "library_ids_required"})
+
+        rows: list[dict[str, Any]] = []
+        for lib in library_ids:
+            try:
+                rows.append(
+                    {
+                        "library_id": lib,
+                        **_collect_neighbor_variables(
+                            graph_service,
+                            library_id=lib,
+                            variable_name=variable_name,
+                            top_k=top_k,
+                        ),
+                    }
+                )
+            except Exception as exc:
+                return JSONResponse(status_code=500, content={"error": "neighbor_search_failed", "library_id": lib, "detail": str(exc)})
+        return {
+            "ok": True,
+            "variable_name": variable_name,
+            "top_k": top_k,
+            "library_ids": library_ids,
+            "results": rows,
+        }
 
     return router
 

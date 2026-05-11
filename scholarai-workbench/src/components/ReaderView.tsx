@@ -1,6 +1,6 @@
 import { BookOpen, FileText, ArrowLeft } from 'lucide-react';
 import { useState, useCallback, useEffect } from 'react';
-import { useApp } from '../App';
+import { useApp } from '../app-context';
 import ViewerHost from './reader/ViewerHost';
 import TabBar from './reader/TabBar';
 import type { TabDescriptor } from './reader/types';
@@ -240,3 +240,4 @@ export default function ReaderView() {
     </div>
   );
 }
+

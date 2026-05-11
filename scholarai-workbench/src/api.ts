@@ -3,6 +3,8 @@ import type {
   GraphFull,
   NeighborhoodResponse,
   SearchResponse,
+  SemanticVariableNeighborsResponse,
+  SemanticVariableSearchResponse,
   PaperDetail,
   VariableDetail,
   ChatSession,
@@ -11,6 +13,7 @@ import type {
   PipelineJob,
   PipelineJobList,
   PipelineBatchSubmitResponse,
+  PipelineBatchActionResponse,
   LibrariesResponse,
   LiteratureSearchResponse,
   LiteratureAnswerResponse,
@@ -66,6 +69,26 @@ export const api = {
       const params = new URLSearchParams({ node_id: nodeId, hops: String(hops), limit_nodes: String(limitNodes), limit_edges: String(limitEdges) });
       if (libraryId) params.set('library_id', libraryId);
       return jsonFetch<NeighborhoodResponse>(`/graph/neighborhood?${params}`);
+    },
+    semanticVariableSearch(query: string, topK: number, libraryIds: string[]): Promise<SemanticVariableSearchResponse> {
+      return jsonFetch<SemanticVariableSearchResponse>('/graph/semantic-variables/search', {
+        method: 'POST',
+        body: JSON.stringify({
+          query,
+          top_k: topK,
+          library_ids: libraryIds,
+        }),
+      });
+    },
+    semanticVariableNeighbors(variableName: string, topK: number, libraryIds: string[]): Promise<SemanticVariableNeighborsResponse> {
+      return jsonFetch<SemanticVariableNeighborsResponse>('/graph/semantic-variables/neighbors', {
+        method: 'POST',
+        body: JSON.stringify({
+          variable_name: variableName,
+          top_k: topK,
+          library_ids: libraryIds,
+        }),
+      });
     },
     paper(id: string, libraryId: string = ''): Promise<PaperDetail> {
       const params = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : '';
@@ -257,6 +280,16 @@ export const api = {
     },
     deleteJob(jobId: string): Promise<Record<string, unknown>> {
       return jsonFetch(`/v1/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+    },
+    batchOperateJobs(action: 'cancel' | 'retry' | 'delete', jobIds: string[]): Promise<PipelineBatchActionResponse> {
+      const formData = new FormData();
+      formData.append('action', action);
+      formData.append('job_ids', JSON.stringify(jobIds));
+      return fetch(`${API_BASE}/v1/jobs/batch`, { method: 'POST', body: formData }).then(async (resp) => {
+        const payload = await resp.json();
+        if (!resp.ok && resp.status !== 207) throw new Error(payload.error || `http_${resp.status}`);
+        return payload as PipelineBatchActionResponse;
+      });
     },
     streamJobEvents(jobId: string): EventSource {
       return new EventSource(`${API_BASE}/v1/jobs/${encodeURIComponent(jobId)}/events`);

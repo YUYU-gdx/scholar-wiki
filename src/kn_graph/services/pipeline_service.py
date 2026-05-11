@@ -1016,6 +1016,52 @@ class PipelineService:
             return {"error": "job_not_retryable", "job_id": job_id, "status": str(row.get("status", "") or "")}
         return None
 
+    def batch_operate_jobs(self, action: str, job_ids: list[str]) -> dict[str, Any]:
+        op = str(action or "").strip().lower()
+        cleaned_ids: list[str] = []
+        seen: set[str] = set()
+        for raw in job_ids:
+            jid = str(raw or "").strip()
+            if not jid or jid in seen:
+                continue
+            seen.add(jid)
+            cleaned_ids.append(jid)
+        if op not in {"cancel", "retry", "delete"}:
+            return {"error": "invalid_action", "action": op}
+        if not cleaned_ids:
+            return {"error": "job_ids_required"}
+
+        results: list[dict[str, Any]] = []
+        ok_count = 0
+        for job_id in cleaned_ids:
+            if op == "cancel":
+                item = self.cancel_job(job_id)
+                ok = "error" not in item
+            elif op == "retry":
+                item = self.retry_job(job_id)
+                ok = item is None or (isinstance(item, dict) and "error" not in item)
+                if item is None:
+                    item = {"job_id": job_id, "retry_mode": "recreate"}
+            else:
+                item = self.delete_job(job_id)
+                ok = item is not None and "error" not in item
+                if item is None:
+                    item = {"error": "job_not_found", "job_id": job_id}
+            if not isinstance(item, dict):
+                item = {"job_id": job_id}
+            item["action"] = op
+            results.append(item)
+            if ok:
+                ok_count += 1
+
+        return {
+            "action": op,
+            "total": len(cleaned_ids),
+            "success_count": ok_count,
+            "failure_count": len(cleaned_ids) - ok_count,
+            "results": results,
+        }
+
     def resolve_retry_source_pdf(self, row: dict[str, Any]) -> Path | None:
         result_obj = row.get("result")
         if isinstance(result_obj, dict):

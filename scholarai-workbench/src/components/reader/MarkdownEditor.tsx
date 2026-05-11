@@ -25,7 +25,7 @@ import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } 
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { wikiLinkCompletionSource, wikiLinkPlugin, setWikiLinkNodeCache } from './WikiLink';
 import { convertScriptOnlyKatexToHtml } from './katexScriptAlignment';
-import { useApp } from '../../App';
+import { useApp } from '../../app-context';
 import { isSelectionInside } from './selectionScope';
 
 interface MarkdownEditorProps {
@@ -605,7 +605,8 @@ export default function MarkdownEditor({
     }
   }, []);
 
-  const { graphData } = useApp();
+  const app = useApp();
+  const graphData = app?.graphData ?? null;
   useEffect(() => {
     if (graphData?.nodes) {
       setWikiLinkNodeCache(graphData.nodes.map((n) => ({ id: n.id, label: n.label || n.name || n.id })));
