@@ -1,35 +1,109 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>3D知识图谱</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,16..72,400;0,16..72,500;1,16..72,400&display=swap" rel="stylesheet" />
   <style>
-    :root { --line:#c6c6cd; --ink:#111827; --muted:#4b5563; --accent:#006a61; --shadow:0 8px 24px rgba(15,23,42,.14); }
+    :root {
+      --bg-root: #f2f6f1;
+      --surface: #ffffff;
+      --glass-bg: rgba(255,255,255,0.62);
+      --glass-border: rgba(0,0,0,0.06);
+      --ink: #1b1b1d;
+      --muted: #565e64;
+      --line: #c8cdc6;
+      --accent: #006a61;
+      --pos: #73b09f;
+      --neg: #d49f9b;
+      --nonl: #bfa878;
+      --uncl: #b0ada4;
+      --mod: #9d98bf;
+      --focus: #f59e0b;
+      --shadow-sm: 0 1px 3px rgba(15,23,42,0.04);
+      --shadow: 0 4px 20px rgba(15,23,42,0.06);
+      --radius: 14px;
+    }
     * { box-sizing: border-box; }
-    html, body { margin:0; width:100%; height:100%; overflow:hidden; font-family:"Inter","PingFang SC","Microsoft YaHei",sans-serif; background:#e8eef7; color:var(--ink); }
-    .layout { width:100%; height:100%; display:grid; grid-template-columns:minmax(0,1fr) minmax(360px,460px); }
-    .stage { position:relative; min-width:0; min-height:0; overflow:hidden; border-right:1px solid rgba(198,198,205,.45); background:#e8eef7; }
-    .graph-wrap { position:absolute; inset:82px 12px 12px 12px; z-index:8; border-radius:18px; overflow:hidden; outline:1px solid rgba(100,116,139,.35); background:radial-gradient(circle at 18% 16%,rgba(15,118,110,.15),transparent 36%),radial-gradient(circle at 84% 14%,rgba(56,189,248,.12),transparent 36%),linear-gradient(180deg,#e3ebf7,#dbe6f5); }
-    .scene { position:absolute; inset:0; background:#dbe6f5; }
-    .scene canvas { background:#dbe6f5 !important; }
-    .tooltip { position:absolute; z-index:30; display:none; max-width:min(380px,78vw); padding:10px 12px; border-radius:12px; border:1px solid var(--line); background:rgba(255,255,255,.98); color:#111827; font-size:12px; line-height:1.5; pointer-events:none; box-shadow:var(--shadow); }
-    .legend { position:absolute; left:16px; bottom:16px; z-index:22; border:1px solid rgba(198,198,205,.75); border-radius:12px; background:rgba(255,255,255,.95); box-shadow:var(--shadow); padding:8px 10px; min-width:200px; }
-    .legend-title { font-size:11px; color:#334155; margin-bottom:6px; font-weight:600; }
-    .legend-row { display:flex; align-items:center; gap:8px; font-size:11px; color:#475569; margin:4px 0; }
-    .legend-dot { width:10px; height:10px; border-radius:999px; border:1px solid rgba(15,23,42,.12); }
-    .fallback { position:absolute; inset:95px 14px 14px 14px; z-index:25; display:grid; place-items:center; border-radius:16px; border:1px dashed rgba(148,163,184,.4); background:rgba(255,255,255,.9); color:#334155; text-align:center; padding:20px; }
-    .side { min-width:0; min-height:0; padding:12px; background:linear-gradient(180deg,rgba(246,243,245,.94),rgba(240,237,239,.92)); overflow:hidden; }
-    .side-scroll { height:100%; overflow:auto; display:grid; gap:10px; padding-right:4px; }
-    .card { border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:0 2px 10px rgba(15,23,42,.06); padding:12px; height:auto; max-height:none; overflow:visible; }
-    .card h3 { margin:0 0 8px 0; font-size:14px; color:#111827; }
-    .text { color:#111827; font-size:13px; line-height:1.58; word-break:break-word; }
-    .muted { color:#4b5563; font-size:12px; line-height:1.5; }
-    .link-btn { border:1px solid var(--line); background:#fff; border-radius:8px; padding:6px 8px; cursor:pointer; font-size:12px; color:#0f172a; text-align:left; }
+    html, body { margin:0; width:100%; height:100%; overflow:hidden; font-family:"Inter","PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg-root); color:var(--ink); }
+    .layout { width:100%; height:100%; display:grid; grid-template-columns:minmax(0,1fr) minmax(340px,440px); }
+    .stage { position:relative; min-width:0; min-height:0; overflow:hidden; border-right:1px solid var(--line); background:var(--bg-root); }
+    .graph-wrap {
+      position:absolute; inset:68px 10px 10px 10px; z-index:8; border-radius:var(--radius);
+      overflow:hidden; outline:1px solid var(--glass-border);
+      background:
+        radial-gradient(ellipse at 22% 18%, rgba(0,106,97,0.08), transparent 40%),
+        radial-gradient(ellipse at 78% 22%, rgba(134,242,228,0.10), transparent 40%),
+        linear-gradient(175deg, #eaf2e8, #e2eee0);
+    }
+    .scene { position:absolute; inset:0; }
+    .scene canvas { background:transparent !important; }
+    .tooltip {
+      position:absolute; z-index:30; display:none; max-width:min(360px,76vw);
+      padding:10px 14px; border-radius:10px;
+      border:1px solid var(--glass-border);
+      background:var(--glass-bg); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+      color:var(--ink); font-size:12px; line-height:1.5; pointer-events:none;
+      box-shadow:var(--shadow);
+    }
+    .legend {
+      position:absolute; left:14px; bottom:14px; z-index:22;
+      border:1px solid var(--glass-border); border-radius:10px;
+      background:var(--glass-bg); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+      box-shadow:var(--shadow-sm); padding:8px 12px; min-width:190px;
+    }
+    .legend-title { font-size:11px; color:var(--muted); margin-bottom:5px; font-weight:600; letter-spacing:0.02em; }
+    .legend-row { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--ink); margin:3px 0; }
+    .legend-dot { width:8px; height:8px; border-radius:999px; flex-shrink:0; }
+    .fallback {
+      position:absolute; inset:80px 14px 14px 14px; z-index:25;
+      display:grid; place-items:center; border-radius:var(--radius);
+      border:1px dashed rgba(0,0,0,0.08); background:rgba(255,255,255,0.85);
+      color:var(--muted); text-align:center; padding:20px;
+      backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    }
+    .side {
+      min-width:0; min-height:0;
+      background:linear-gradient(175deg, rgba(248,250,247,0.96), rgba(243,247,242,0.94));
+      backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+      overflow:hidden; display:flex; flex-direction:column;
+    }
+    .side-scroll { flex:1; overflow:auto; display:grid; gap:8px; padding:12px 14px; align-content:start; }
+    .side-scroll::-webkit-scrollbar { width:5px; }
+    .side-scroll::-webkit-scrollbar-track { background:transparent; }
+    .side-scroll::-webkit-scrollbar-thumb { background:rgba(0,0,0,0.08); border-radius:10px; }
+    .card {
+      border:1px solid var(--glass-border); border-radius:10px;
+      background:var(--surface); box-shadow:var(--shadow-sm);
+      padding:12px 14px;
+    }
+    .card h3 { margin:0 0 6px 0; font-family:"Newsreader","PingFang SC","Microsoft YaHei",ui-serif,serif; font-size:15px; font-weight:500; color:var(--accent); letter-spacing:0.01em; }
+    .text { color:var(--ink); font-size:13px; line-height:1.6; word-break:break-word; }
+    .muted { color:var(--muted); font-size:12px; line-height:1.5; }
+    .link-btn {
+      border:1px solid var(--line); background:var(--surface); border-radius:8px;
+      padding:6px 10px; cursor:pointer; font-size:12px; color:var(--ink); text-align:left;
+      font-family:inherit; transition:border-color 0.15s, color 0.15s;
+    }
     .link-btn:hover { border-color:var(--accent); color:var(--accent); }
-    .rel-item { display:grid; gap:6px; padding:8px; border:1px solid #d8dbe0; border-radius:10px; margin-bottom:8px; }
+    .rel-item { display:grid; gap:5px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; margin-bottom:6px; background:rgba(0,0,0,0.01); }
+    .badge {
+      display:inline-block; padding:1px 7px; border-radius:5px; font-size:10px; font-weight:500;
+      letter-spacing:0.02em; vertical-align:middle;
+    }
+    .badge-pos { background:rgba(115,176,159,0.14); color:#4d826f; }
+    .badge-neg { background:rgba(212,159,155,0.14); color:#9d6562; }
+    .badge-nonl { background:rgba(191,168,120,0.14); color:#8a743e; }
+    .badge-uncl { background:rgba(176,173,164,0.16); color:#6e6b63; }
+    .badge-mod { background:rgba(157,152,191,0.14); color:#6d6896; }
     .hidden { display:none !important; }
-    @media (max-width:1120px) { html,body{overflow:auto} .layout{grid-template-columns:1fr;min-height:100vh} .stage{min-height:72vh;border-right:0;border-bottom:1px solid rgba(198,198,205,.45)} .topbar{grid-template-columns:1fr} }
+    @media (max-width:1120px) {
+      html,body{overflow:auto} .layout{grid-template-columns:1fr;min-height:100vh}
+      .stage{min-height:70vh;border-right:0;border-bottom:1px solid var(--line)}
+    }
   </style>
 </head>
 <body>
@@ -38,346 +112,497 @@
       <div id="graphWrap" class="graph-wrap"><div id="scene" class="scene"></div></div>
       <div class="legend">
         <div class="legend-title">关系颜色图例</div>
-        <div class="legend-row"><span class="muted">build: ARROW_DEBUG_20260511_01</span></div>
-        <div class="legend-row"><span class="legend-dot" style="background:#53d39a"></span><span>正向关系（positive）</span></div>
-        <div class="legend-row"><span class="legend-dot" style="background:#f07178"></span><span>负向关系（negative）</span></div>
-        <div class="legend-row"><span class="legend-dot" style="background:#f6c95b"></span><span>其他/不确定/非线性/调节</span></div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--pos)"></span><span>正向 positive</span></div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--neg)"></span><span>负向 negative</span></div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--nonl)"></span><span>非线性 nonlinear</span></div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--uncl)"></span><span>不明确 unclear</span></div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--mod)"></span><span>调节 moderation</span></div>
       </div>
       <div id="tooltip" class="tooltip"></div>
       <div id="fallback" class="fallback hidden">图谱加载中...</div>
     </main>
     <aside class="side"><div id="detailScroll" class="side-scroll"><section class="card"><h3>详情</h3><div class="muted">点击节点或关系后展示详细信息。</div></section></div></aside>
   </div>
+
   <script src="https://unpkg.com/3d-force-graph@1.77.0/dist/3d-force-graph.min.js"></script>
   <script>
     (() => {
-      const params = new URLSearchParams(window.location.search || "");
-      const DEBUG_GRAPH = params.get("graph_debug") === "1" || window.localStorage.getItem("KN_GRAPH_DEBUG") === "1";
-      const activeLibraryId = String(params.get("active_library_id") || params.get("library_id") || "supply_chain").trim() || "supply_chain";
-      const initialLibraryIds = String(params.get("library_ids") || activeLibraryId).split(",").map(v => v.trim()).filter(Boolean);
-      const selectedNodeIdParam = String(params.get("selected_node_id") || "").trim();
-      const selectedNodeLibraryIdParam = String(params.get("selected_node_library_id") || "").trim();
-      const state = { graph:null, pointerDown:false, allNodes:[], allLinks:[], moderationLinks:[], visibleNodes:[], visibleLinks:[], paperMap:{}, selectedLibraryIds:[...new Set(initialLibraryIds)], expandedRelations:false, selectedNodeId:selectedNodeIdParam, selectedNodeLibraryId:selectedNodeLibraryIdParam, selectedEdgeKey:"", focusSeq:0 };
-      const els = { detailScroll:document.getElementById("detailScroll"), tooltip:document.getElementById("tooltip"), fallback:document.getElementById("fallback"), scene:document.getElementById("scene"), graphWrap:document.getElementById("graphWrap") };
-      const theme = { node:"#7bd8f6", pos:"#53d39a", neg:"#f07178", neu:"#f6c95b", mod:"#4f46e5", modHint:"#94a3b8" };
-      const esc = t => String(t || "").replace(/[&<>]/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[ch]));
-      const debugLog = (...args) => { if(DEBUG_GRAPH) console.log("[graph-debug]", ...args); };
-      function summarizeLinks(links){
-        const arr=Array.isArray(links)?links:[];
-        const sample=arr.slice(0,5).map(l=>({
-          source_type: typeof l?.source,
-          target_type: typeof l?.target,
-          source: typeof l?.source === "object" ? l?.source?.id : l?.source,
-          target: typeof l?.target === "object" ? l?.target?.id : l?.target,
-          direction: l?.direction || "",
-          effect_form: l?.effect_form || "",
-          is_moderation: !!l?.is_moderation
-        }));
-        const missingSrc=arr.filter(l=>!String(typeof l?.source === "object" ? l?.source?.id : l?.source || "").trim()).length;
-        const missingTgt=arr.filter(l=>!String(typeof l?.target === "object" ? l?.target?.id : l?.target || "").trim()).length;
-        const missingDir=arr.filter(l=>!String(l?.direction||"").trim()).length;
-        return {total:arr.length,missingSrc,missingTgt,missingDir,sample};
-      }
-      function summarizeSceneObjects(graph){
-        const out={ total:0, line:0, points:0, sprite:0, mesh:0, linkLike:0, particleLike:0, arrowLike:0 };
-        if(!graph || typeof graph.scene!=="function") return out;
-        try{
-          const scene=graph.scene();
-          if(!scene || typeof scene.traverse!=="function") return out;
-          scene.traverse(obj=>{
-            out.total+=1;
-            const t=String(obj?.type||"");
-            const n=String(obj?.name||"").toLowerCase();
-            if(t==="Line" || t==="LineSegments" || t==="LineLoop") out.line+=1;
-            if(t==="Points") out.points+=1;
-            if(t==="Sprite") out.sprite+=1;
-            if(t==="Mesh") out.mesh+=1;
-            if(n.includes("link")) out.linkLike+=1;
-            if(n.includes("particle")) out.particleLike+=1;
-            if(n.includes("arrow")) out.arrowLike+=1;
-          });
-        }catch(err){
-          debugLog("scene:summary:error", String(err&&err.message||err||"unknown"));
+    const params = new URLSearchParams(window.location.search || "");
+    const DEBUG_GRAPH = params.get("graph_debug") === "1" || window.localStorage.getItem("KN_GRAPH_DEBUG") === "1";
+    const activeLibraryId = String(params.get("active_library_id") || params.get("library_id") || "supply_chain").trim() || "supply_chain";
+    const initialLibraryIds = String(params.get("library_ids") || activeLibraryId).split(",").map(v => v.trim()).filter(Boolean);
+    const selectedNodeIdParam = String(params.get("selected_node_id") || "").trim();
+    const selectedNodeLibraryIdParam = String(params.get("selected_node_library_id") || "").trim();
+
+    const state = {
+      graph:null, pointerDown:false,
+      allNodes:[], allLinks:[], moderationLinks:[], visibleNodes:[], visibleLinks:[], paperMap:{},
+      selectedLibraryIds:[...new Set(initialLibraryIds)], expandedRelations:false,
+      selectedNodeId:selectedNodeIdParam, selectedNodeLibraryId:selectedNodeLibraryIdParam,
+      selectedEdgeKey:"", focusSeq:0
+    };
+
+    const els = {
+      detailScroll:document.getElementById("detailScroll"), tooltip:document.getElementById("tooltip"),
+      fallback:document.getElementById("fallback"), scene:document.getElementById("scene"),
+      graphWrap:document.getElementById("graphWrap")
+    };
+
+    const T = {
+      node:"#5cbfb0", pos:"#73b09f", neg:"#d49f9b", nonl:"#bfa878", uncl:"#b0ada4", mod:"#9d98bf", focus:"#f59e0b"
+    };
+
+    const esc = t => String(t || "").replace(/[&<>]/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[ch]));
+    const debugLog = (...args) => { if (DEBUG_GRAPH) console.log("[graph-debug]", ...args); };
+
+    function summarizeLinks(links) {
+      const arr = Array.isArray(links) ? links : [];
+      const sample = arr.slice(0,5).map(l => ({
+        source_type: typeof l?.source,
+        target_type: typeof l?.target,
+        source: typeof l?.source === "object" ? l?.source?.id : l?.source,
+        target: typeof l?.target === "object" ? l?.target?.id : l?.target,
+        direction: l?.direction || "",
+        effect_form: l?.effect_form || "",
+        is_moderation: !!l?.is_moderation
+      }));
+      const missingSrc = arr.filter(l => !String(typeof l?.source === "object" ? l?.source?.id : l?.source || "").trim()).length;
+      const missingTgt = arr.filter(l => !String(typeof l?.target === "object" ? l?.target?.id : l?.target || "").trim()).length;
+      const missingDir = arr.filter(l => !String(l?.direction||"").trim()).length;
+      return {total:arr.length, missingSrc, missingTgt, missingDir, sample};
+    }
+
+    const nodeName = n => n?.label || n?.name || n?.id || "node";
+    const edgeKey = l => { const s = typeof l.source === "object" ? l.source?.id : l.source; const t = typeof l.target === "object" ? l.target?.id : l.target; return `${s}=>${t}::${l.paper_id||""}::${l.direction||""}::${l.is_moderation?"m":"e"}`; };
+    const showTip = (lines,x,y) => { if(!lines?.length){ els.tooltip.style.display="none"; return; } els.tooltip.innerHTML=lines.join("<br>"); els.tooltip.style.left=`${x+12}px`; els.tooltip.style.top=`${y+12}px`; els.tooltip.style.display="block"; };
+    const hideTip = () => { els.tooltip.style.display = "none"; };
+    const nodeConcept = n => String(n?.latest_concept || "").trim() || "暂无概念定义";
+    const nodeTheories = n => Array.isArray(n?.latest_theories) ? n.latest_theories.filter(Boolean).slice(0,6) : [];
+    const openReader = (paperId, libraryId) => window.parent.postMessage({ type:"KN_GRAPH_OPEN_READER", payload:{ paperId, libraryId: libraryId || activeLibraryId } }, "*");
+    const findByName = (name,nodes) => { const norm = String(name||"").trim().toLowerCase(); if(!norm) return null; return nodes.find(n => [n.label,n.name,n.id].some(v => String(v||"").trim().toLowerCase()===norm)) || null; };
+    const visibleNodesFrom = nodes => nodes.filter(x => String(x.type||"")==="variable");
+    const setEmpty = t => { els.detailScroll.innerHTML = `<section class="card"><h3>详情</h3><div class="muted">${esc(t)}</div></section>`; };
+
+    const findNodeById = (id, libraryId) => {
+      const nid = String(id || "").trim(), lid = String(libraryId || "").trim();
+      if (!nid) return null;
+      const inVisible = state.visibleNodes.find(n => String(n.id) === nid && (!lid || String(n.library_id || "") === lid));
+      if (inVisible) return inVisible;
+      const inAll = state.allNodes.find(n => String(n.id) === nid && (!lid || String(n.library_id || "") === lid));
+      if (inAll) return inAll;
+      return state.visibleNodes.find(n => String(n.id) === nid) || state.allNodes.find(n => String(n.id) === nid) || null;
+    };
+
+    const relationEdgesFor = id => state.visibleLinks.filter(l => { const s = typeof l.source === "object" ? l.source?.id : l.source; const t = typeof l.target === "object" ? l.target?.id : l.target; return s === id || t === id; });
+    const paperFromEdge = l => { const pid = String(l.paper_id || ""); if(!pid) return null; return Object.values(state.paperMap).find(p => String(p.paper_id || "") === pid) || { paper_id: pid }; };
+
+    const linkColorByDirection = l => {
+      if (l.is_moderation) return T.mod;
+      const cls = String(l.display_effect_class || l.direction || '').toLowerCase();
+      if (cls === 'positive') return T.pos;
+      if (cls === 'negative') return T.neg;
+      if (cls === 'unclear') return T.uncl;
+      return T.nonl;
+    };
+
+    const nodeBaseColor = n => n && n.__is_mod_anchor ? 'rgba(0,0,0,0)' : T.node;
+    const nodeColor = n => (n && !n.__is_mod_anchor && state.selectedNodeId && String(n.id) === String(state.selectedNodeId)) ? T.focus : nodeBaseColor(n);
+
+    const linkWidthFn = l => (state.selectedEdgeKey && edgeKey(l) === state.selectedEdgeKey) ? 3.8 : 2.6;
+    const linkOpacityFn = l => (state.selectedEdgeKey && edgeKey(l) !== state.selectedEdgeKey) ? 0.55 : 0.9;
+
+    // 3d-force-graph creates arrow cone materials with NaN opacity (library bug).
+    // Traverse the scene after init/refresh to fix this and polish node materials.
+    function fixArrowOpacity() {
+      if (!state.graph || typeof state.graph.scene !== 'function') return;
+      const scene = state.graph.scene();
+      if (!scene || typeof scene.traverse !== 'function') return;
+      scene.traverse(child => {
+        if (!child.isMesh || !child.geometry || !child.material) return;
+        if (child.geometry.type === 'ConeGeometry') {
+          child.material.opacity = 1;
+          child.material.transparent = false;
+          child.material.depthWrite = true;
+          child.material.needsUpdate = true;
         }
-        return out;
-      }
-      function logParticleProbe(graph, links){
-        if(!DEBUG_GRAPH || !graph) return;
-        try{
-          const accessor = typeof graph.linkDirectionalParticles === "function" ? graph.linkDirectionalParticles() : null;
-          const sampled=(Array.isArray(links)?links:[]).slice(0,12).map((l,idx)=>{
-            let v=null;
-            try{ v = typeof accessor === "function" ? accessor(l) : accessor; }catch{ v = "err"; }
-            return {
-              idx,
-              source: typeof l?.source === "object" ? l?.source?.id : l?.source,
-              target: typeof l?.target === "object" ? l?.target?.id : l?.target,
-              is_moderation: !!l?.is_moderation,
-              particles: v
-            };
-          });
-          debugLog("particle:accessor:summary", { accessorType: typeof accessor, sampledCount: sampled.length });
-          sampled.forEach(row=>debugLog("particle:accessor:item", row));
-        }catch(err){
-          debugLog("particle:accessor:error", String(err&&err.message||err||"unknown"));
+        if (child.geometry.type === 'SphereGeometry' && !child.__matPolished) {
+          if (child.material.shininess !== undefined) child.material.shininess = 80;
+          if (child.material.specular !== undefined) child.material.specular = new THREE.Color(0x444444);
+          child.__matPolished = true;
         }
-        try{
-          const base=summarizeSceneObjects(graph);
-          const first=(Array.isArray(links)?links:[]).find(l=>!l?.is_moderation) || (Array.isArray(links)?links:[])[0];
-          if(first && typeof graph.emitParticle === "function"){
-            for(let i=0;i<6;i+=1) graph.emitParticle(first);
-            window.setTimeout(()=>{
-              const after=summarizeSceneObjects(graph);
-              debugLog("particle:emitProbe", { base, after, deltaTotal: (after.total||0)-(base.total||0), link: { source: typeof first?.source==="object"?first?.source?.id:first?.source, target: typeof first?.target==="object"?first?.target?.id:first?.target } });
-            }, 180);
-          }else{
-            debugLog("particle:emitProbe:skip", { hasEmit: typeof graph.emitParticle === "function", hasLink: !!first });
-          }
-        }catch(err){
-          debugLog("particle:emitProbe:error", String(err&&err.message||err||"unknown"));
-        }
+      });
+    }
+
+    function applySelectionVisuals() {
+      if (!state.graph) return;
+      state.graph
+        .nodeColor(nodeColor)
+        .linkWidth(linkWidthFn)
+        .linkOpacity(linkOpacityFn)
+        .linkDirectionalArrowLength(l => (state.selectedEdgeKey && edgeKey(l) === state.selectedEdgeKey) ? 16 : 12)
+        .linkDirectionalArrowRelPos(0.985)
+        .linkDirectionalArrowColor("#ef4444")
+        .linkDirectionalArrowResolution(12)
+        .linkDirectionalParticles(0);
+      if (typeof state.graph.refresh === "function") { state.graph.refresh(); window.setTimeout(() => fixArrowOpacity(), 100); }
+    }
+
+    function findGraphNodeById(id, libraryId) {
+      if (!state.graph || !id) return null;
+      const nid = String(id || ""), lid = String(libraryId || "");
+      try {
+        const gd = state.graph.graphData();
+        const nodes = Array.isArray(gd?.nodes) ? gd.nodes : [];
+        const exact = nodes.find(n => String(n?.id||"")===nid && (!lid || String(n?.library_id||"")===lid));
+        if (exact) return exact;
+        return nodes.find(n => String(n?.id||"")===nid) || null;
+      } catch { return null; }
+    }
+
+    function centerCameraToNode(node, duration) {
+      if (!node || !state.graph) return false;
+      const x = Number(node.x), y = Number(node.y), z = Number(node.z);
+      if (!(Number.isFinite(x)&&Number.isFinite(y)&&Number.isFinite(z))) return false;
+      const distance = 180;
+      const denom = Math.hypot(x,y,z) || 1;
+      const distRatio = 1 + distance/denom;
+      state.graph.cameraPosition({x:x*distRatio,y:y*distRatio,z:z*distRatio}, {x,y,z}, Number(duration)||900);
+      return true;
+    }
+
+    function focusNode(node) {
+      if (!node || !state.graph) return;
+      state.selectedNodeId = String(node.id||"");
+      state.selectedNodeLibraryId = String(node.library_id||state.selectedNodeLibraryId||"");
+      state.selectedEdgeKey = "";
+      const graphNode = findGraphNodeById(state.selectedNodeId, state.selectedNodeLibraryId) || node;
+      ++state.focusSeq;
+      const hasCoords = centerCameraToNode(graphNode, 1200);
+      if (!hasCoords) {
+        const retryId = state.selectedNodeId;
+        window.setTimeout(() => { const retry = findGraphNodeById(retryId, state.selectedNodeLibraryId); if (retry) focusNode(retry); }, 220);
       }
-      const nodeName = n => n?.label || n?.name || n?.id || "node";
-      const edgeKey = l => { const s = typeof l.source === "object" ? l.source?.id : l.source; const t = typeof l.target === "object" ? l.target?.id : l.target; return `${s}=>${t}::${l.paper_id||""}::${l.direction||""}::${l.is_moderation?"m":"e"}`; };
-      const showTip = (lines,x,y) => { if(!lines?.length){ els.tooltip.style.display="none"; return; } els.tooltip.innerHTML=lines.join("<br>"); els.tooltip.style.left=`${x+12}px`; els.tooltip.style.top=`${y+12}px`; els.tooltip.style.display="block"; };
-      const hideTip = () => { els.tooltip.style.display = "none"; };
-      const nodeConcept = n => String(n?.latest_concept || "").trim() || "暂无概念定义";
-      const nodeTheories = n => Array.isArray(n?.latest_theories) ? n.latest_theories.filter(Boolean).slice(0,6) : [];
-      const openReader = (paperId, libraryId) => window.parent.postMessage({ type:"KN_GRAPH_OPEN_READER", payload:{ paperId, libraryId: libraryId || activeLibraryId } }, "*");
-      const findNodeById = (id, libraryId) => {
-        const nid = String(id || "").trim();
-        const lid = String(libraryId || "").trim();
-        if (!nid) return null;
-        const inVisible = state.visibleNodes.find(n => String(n.id) === nid && (!lid || String(n.library_id || "") === lid));
-        if (inVisible) return inVisible;
-        const inAll = state.allNodes.find(n => String(n.id) === nid && (!lid || String(n.library_id || "") === lid));
-        if (inAll) return inAll;
-        return state.visibleNodes.find(n => String(n.id) === nid) || state.allNodes.find(n => String(n.id) === nid) || null;
+      applySelectionVisuals();
+    }
+
+    function focusLink(link) {
+      if (!link || !state.graph) return;
+      state.selectedEdgeKey = edgeKey(link);
+      state.selectedNodeId = "";
+      const s = typeof link.source==="object"?link.source:findGraphNodeById(String(link.source||""))||findNodeById(String(link.source||""));
+      const t = typeof link.target==="object"?link.target:findGraphNodeById(String(link.target||""))||findNodeById(String(link.target||""));
+      const sx = Number(s?.x), sy = Number(s?.y), sz = Number(s?.z);
+      const tx = Number(t?.x), ty = Number(t?.y), tz = Number(t?.z);
+      if ([sx,sy,sz,tx,ty,tz].every(Number.isFinite)) {
+        const cx = (sx+tx)/2, cy = (sy+ty)/2, cz = (sz+tz)/2;
+        const distance = 220;
+        const denom = Math.hypot(cx,cy,cz) || 1;
+        const distRatio = 1 + distance/denom;
+        state.graph.cameraPosition({x:cx*distRatio,y:cy*distRatio,z:cz*distRatio}, {x:cx,y:cy,z:cz}, 1100);
+      }
+      applySelectionVisuals();
+    }
+
+    function augmentModeration(nodes, links, mods) {
+      const nodeById = new Map(nodes.map(n => [n.id, n]));
+      const outN = [...nodes], outL = [...links];
+      const visibleIds = new Set(nodes.map(n => n.id));
+      (Array.isArray(mods)?mods:[]).forEach((m, i) => {
+        const r = (m && typeof m.moderated_relation === "object") ? m.moderated_relation : {};
+        let mid = String(m.moderator_node_id || m.moderator_id || "").trim(),
+            sid = String(r.source_node_id || r.source_id || r.source || m.source_node_id || "").trim(),
+            tid = String(r.target_node_id || r.target_id || r.target || m.target_node_id || "").trim();
+        if (!mid) { const g = findByName(m.moderator_var||m.moderator_name||m.moderator, nodes); mid = g ? String(g.id) : ""; }
+        if (!sid) { const g = findByName(r.source_var||r.source_name||m.source_var, nodes); sid = g ? String(g.id) : ""; }
+        if (!tid) { const g = findByName(r.target_var||r.target_name||m.target_var, nodes); tid = g ? String(g.id) : ""; }
+        if (!mid || !sid || !tid || !visibleIds.has(mid) || !visibleIds.has(sid) || !visibleIds.has(tid)) return;
+        const s = nodeById.get(sid), t = nodeById.get(tid);
+        if (!s || !t) return;
+        const aid = `mod_anchor::${mid}::${sid}::${tid}::${i}`;
+        outN.push({id:aid, label:"", type:"mod_anchor", __is_mod_anchor:true, moderated_source:sid, moderated_target:tid,
+          x:(Number(s.x)+Number(t.x))/2||0, y:(Number(s.y)+Number(t.y))/2||0, z:(Number(s.z)+Number(t.z))/2||0});
+        outL.push({source:mid, target:aid, is_moderation:true, direction:"moderation", relation_form:"moderation",
+          relation_type_std:"moderation", display_effect_class:"moderation",
+          paper_id:m.paper_id||m.paper_id_raw||"", doi:m.doi||"", verification:m.verification||"",
+          evidence_anchor:m.evidence_anchor||"", evidence_snippet:m.evidence_snippet||"",
+          hypothesis_label:m.hypothesis_label||"", moderated_source:sid, moderated_target:tid});
+      });
+      return {nodes:outN, links:outL};
+    }
+
+    function renderNodeDetails(node) {
+      const rels = relationEdgesFor(node.id), show = state.expandedRelations ? rels : rels.slice(0,3);
+      const srcInfo = node.latest_concept_source || {}, srcPid = String(srcInfo.paper_id||"");
+      const srcPaper = srcPid ? Object.values(state.paperMap).find(p => String(p.paper_id||"")===srcPid) : null;
+
+      const directionBadge = l => {
+        if (l.is_moderation) return '<span class="badge badge-mod">调节</span>';
+        const cls = String(l.display_effect_class || l.direction || '').toLowerCase();
+        if (cls === 'positive') return '<span class="badge badge-pos">正向</span>';
+        if (cls === 'negative') return '<span class="badge badge-neg">负向</span>';
+        if (cls === 'unclear') return '<span class="badge badge-uncl">不明确</span>';
+        return '<span class="badge badge-nonl">非线性</span>';
       };
-      const relationEdgesFor = id => state.visibleLinks.filter(l => { const s = typeof l.source === "object" ? l.source?.id : l.source; const t = typeof l.target === "object" ? l.target?.id : l.target; return s === id || t === id; });
-      const paperFromEdge = l => { const pid = String(l.paper_id || ""); if(!pid) return null; return Object.values(state.paperMap).find(p => String(p.paper_id || "") === pid) || { paper_id: pid }; };
-      const setEmpty = t => { els.detailScroll.innerHTML = `<section class="card"><h3>详情</h3><div class="muted">${esc(t)}</div></section>`; };
-      const visibleNodesFrom = nodes => nodes.filter(x => String(x.type||"")==="variable");
-      const edgeColor = () => "#ef4444";
-      const nodeBaseColor = n => n&&n.__is_mod_anchor ? "rgba(0,0,0,0)" : theme.node;
-      const nodeColor = n => (n && !n.__is_mod_anchor && state.selectedNodeId && String(n.id) === String(state.selectedNodeId)) ? "#f59e0b" : nodeBaseColor(n);
-      const linkBaseWidth = () => 2.8;
-      const linkWidth = l => (state.selectedEdgeKey && edgeKey(l) === state.selectedEdgeKey) ? 3.2 : linkBaseWidth(l);
-      const linkOpacity = l => (state.selectedEdgeKey && edgeKey(l) !== state.selectedEdgeKey) ? 0.25 : 0.25;
-      const linkArrowLength = () => 22;
-      const linkArrowColor = () => "#111827";
-      function makeCustomArrow(link){
-        const T = window.THREE;
-        if(!T) return null;
-        if(link && link.is_moderation) return new T.Object3D();
-        const color = 0xff00ff;
-        const geo = new T.ConeGeometry(8, 22, 10);
-        const mat = new T.MeshBasicMaterial({ color, depthTest: false, depthWrite: false, transparent: true, opacity: 0.98 });
-        const cone = new T.Mesh(geo, mat);
-        cone.renderOrder = 9999;
-        cone.name = "custom-link-arrow";
-        return cone;
-      }
-      function placeCustomArrow(obj, pos){
-        const T = window.THREE;
-        if(!T || !obj || !pos || !pos.start || !pos.end) return false;
-        const sx=Number(pos.start.x)||0, sy=Number(pos.start.y)||0, sz=Number(pos.start.z)||0;
-        const ex=Number(pos.end.x)||0, ey=Number(pos.end.y)||0, ez=Number(pos.end.z)||0;
-        const dx=ex-sx, dy=ey-sy, dz=ez-sz;
-        const len=Math.hypot(dx,dy,dz);
-        if(!Number.isFinite(len) || len < 1e-6){ obj.visible=false; return true; }
-        obj.visible = true;
-        const ratio = 0.72;
-        obj.position.set(sx+dx*ratio, sy+dy*ratio, sz+dz*ratio);
-        const dir = new T.Vector3(dx/len, dy/len, dz/len);
-        obj.quaternion.setFromUnitVectors(new T.Vector3(0,1,0), dir);
-        return true;
-      }
-      const findByName = (name,nodes) => { const norm = String(name||"").trim().toLowerCase(); if(!norm) return null; return nodes.find(n => [n.label,n.name,n.id].some(v => String(v||"").trim().toLowerCase()===norm)) || null; };
-      function applySelectionVisuals(){ if(!state.graph) return; state.graph.nodeColor(nodeColor).linkWidth(linkWidth).linkOpacity(linkOpacity).linkDirectionalArrowLength(0).linkDirectionalParticles(0); if(typeof state.graph.refresh==="function") state.graph.refresh(); }
-      function findGraphNodeById(id, libraryId){
-        if(!state.graph||!id) return null;
-        const nid=String(id||"");
-        const lid=String(libraryId||"");
-        try{
-          const gd=state.graph.graphData();
-          const nodes=Array.isArray(gd?.nodes)?gd.nodes:[];
-          const exact = nodes.find(n => String(n?.id||"")===nid && (!lid || String(n?.library_id||"")===lid));
-          if (exact) return exact;
-          return nodes.find(n=>String(n?.id||"")===nid)||null;
-        }catch{ return null; }
-      }
-      function centerCameraToNode(node, duration){
-        if(!node||!state.graph) return false;
-        const x=Number(node.x), y=Number(node.y), z=Number(node.z);
-        if(!(Number.isFinite(x)&&Number.isFinite(y)&&Number.isFinite(z))) return false;
-        const distance=180;
-        const denom=Math.hypot(x,y,z)||1;
-        const distRatio=1+distance/denom;
-        state.graph.cameraPosition({x:x*distRatio,y:y*distRatio,z:z*distRatio},{x,y,z},Number(duration)||900);
-        return true;
-      }
-      function focusNode(node){
-        if(!node||!state.graph) return;
-        state.selectedNodeId=String(node.id||"");
-        state.selectedNodeLibraryId=String(node.library_id||state.selectedNodeLibraryId||"");
-        state.selectedEdgeKey="";
-        const graphNode=findGraphNodeById(state.selectedNodeId, state.selectedNodeLibraryId) || node;
-        const seq=++state.focusSeq;
-        const hasCoords=centerCameraToNode(graphNode, 900);
-        if(!hasCoords){
-          const retryId=state.selectedNodeId;
-          window.setTimeout(()=>{ const retry=findGraphNodeById(retryId, state.selectedNodeLibraryId); if(retry) focusNode(retry); }, 220);
+
+      const rows = show.map(l => {
+        if (l.is_moderation) {
+          const ms = findNodeById(String(l.moderated_source||"")), mt = findNodeById(String(l.moderated_target||""));
+          return `<div class="rel-item"><div class="text">${directionBadge(l)} ${esc(nodeName(l.source))} 调节 ${esc(nodeName(ms))} → ${esc(nodeName(mt))}</div><button class="link-btn" data-edge="${esc(edgeKey(l))}">关系详情</button></div>`;
         }
-        applySelectionVisuals();
-      }
-      function focusLink(link){
-        if(!link||!state.graph) return;
-        state.selectedEdgeKey=edgeKey(link);
-        const s=typeof link.source==="object"?link.source:findGraphNodeById(String(link.source||""))||findNodeById(String(link.source||""));
-        const t=typeof link.target==="object"?link.target:findGraphNodeById(String(link.target||""))||findNodeById(String(link.target||""));
-        const sx=Number(s?.x), sy=Number(s?.y), sz=Number(s?.z);
-        const tx=Number(t?.x), ty=Number(t?.y), tz=Number(t?.z);
-        if([sx,sy,sz,tx,ty,tz].every(Number.isFinite)){
-          const cx=(sx+tx)/2, cy=(sy+ty)/2, cz=(sz+tz)/2;
-          const distance=220;
-          const denom=Math.hypot(cx,cy,cz)||1;
-          const distRatio=1+distance/denom;
-          state.graph.cameraPosition({x:cx*distRatio,y:cy*distRatio,z:cz*distRatio},{x:cx,y:cy,z:cz},900);
-        }
-        applySelectionVisuals();
-      }
-      function augmentModeration(nodes,links,mods){ const nodeById=new Map(nodes.map(n=>[n.id,n])); const outN=[...nodes]; const outL=[...links]; const visibleIds=new Set(nodes.map(n=>n.id)); (Array.isArray(mods)?mods:[]).forEach((m,i)=>{ const r=(m&&typeof m.moderated_relation==="object")?m.moderated_relation:{}; let mid=String(m.moderator_node_id||m.moderator_id||"").trim(), sid=String(r.source_node_id||r.source_id||r.source||m.source_node_id||"").trim(), tid=String(r.target_node_id||r.target_id||r.target||m.target_node_id||"").trim(); if(!mid){ const g=findByName(m.moderator_var||m.moderator_name||m.moderator,nodes); mid=g?String(g.id):""; } if(!sid){ const g=findByName(r.source_var||r.source_name||m.source_var,nodes); sid=g?String(g.id):""; } if(!tid){ const g=findByName(r.target_var||r.target_name||m.target_var,nodes); tid=g?String(g.id):""; } if(!mid||!sid||!tid||!visibleIds.has(mid)||!visibleIds.has(sid)||!visibleIds.has(tid)) return; const s=nodeById.get(sid), t=nodeById.get(tid); if(!s||!t) return; const aid=`mod_anchor::${mid}::${sid}::${tid}::${i}`; outN.push({id:aid,label:"",type:"mod_anchor",__is_mod_anchor:true,moderated_source:sid,moderated_target:tid,x:(Number(s.x)+Number(t.x))/2||0,y:(Number(s.y)+Number(t.y))/2||0,z:(Number(s.z)+Number(t.z))/2||0}); outL.push({source:mid,target:aid,is_moderation:true,direction:"moderation",relation_form:"moderation",relation_type_std:"moderation",display_effect_class:"moderation",paper_id:m.paper_id||m.paper_id_raw||"",doi:m.doi||"",verification:m.verification||"",evidence_anchor:m.evidence_anchor||"",evidence_snippet:m.evidence_snippet||"",hypothesis_label:m.hypothesis_label||"",moderated_source:sid,moderated_target:tid}); }); return {nodes:outN,links:outL}; }
-      function renderNodeDetails(node){
-        const rels=relationEdgesFor(node.id), show=state.expandedRelations?rels:rels.slice(0,3), srcInfo=node.latest_concept_source||{}, srcPid=String(srcInfo.paper_id||""), srcPaper=srcPid?Object.values(state.paperMap).find(p=>String(p.paper_id||"")===srcPid):null;
-        const rows=show.map(l=>{ if(l.is_moderation){ const s=findNodeById(String(l.moderated_source||"")), t=findNodeById(String(l.moderated_target||"")); return `<div class="rel-item"><div class="text">调节：${esc(nodeName(l.source))} 调节 ${esc(nodeName(s))} -> ${esc(nodeName(t))}</div><button class="link-btn" data-edge="${esc(edgeKey(l))}">查看关系详情</button></div>`; } const s=typeof l.source==="object"?l.source:findNodeById(String(l.source||"")); const t=typeof l.target==="object"?l.target:findNodeById(String(l.target||"")); return `<div class="rel-item"><div class="text">${esc(nodeName(s))} -> ${esc(nodeName(t))}</div><button class="link-btn" data-edge="${esc(edgeKey(l))}">查看关系详情</button></div>`; }).join("");
-        els.detailScroll.innerHTML=`<section class="card"><h3>变量名称</h3><div class="text">${esc(nodeName(node))}</div></section><section class="card"><h3>变量概念</h3><div class="text">${esc(nodeConcept(node))}</div></section><section class="card"><h3>来源论文</h3>${srcPid?`<button class="link-btn" id="openSourcePaper">${esc(String(srcPaper?.title||srcPid))}</button>`:'<div class="muted">暂无来源论文</div>'}</section><section class="card"><h3>相关关系</h3>${rels.length?rows:'<div class="muted">暂无相关关系</div>'}${rels.length>3?`<button class="link-btn" id="toggleRelations">${state.expandedRelations?"收起":"展开更多"}</button>`:""}</section>`;
-        const open=document.getElementById("openSourcePaper"); if(open&&srcPid) open.addEventListener("click",()=>openReader(srcPid,String(srcPaper?.library_id||activeLibraryId)));
-        const toggle=document.getElementById("toggleRelations"); if(toggle) toggle.addEventListener("click",()=>{ state.expandedRelations=!state.expandedRelations; renderNodeDetails(node); });
-        els.detailScroll.querySelectorAll("[data-edge]").forEach(el=>el.addEventListener("click",()=>{ const link=state.visibleLinks.find(l=>edgeKey(l)===String(el.getAttribute("data-edge")||"")); if(link){ renderLinkDetails(link); focusLink(link); } }));
-      }
-      function renderLinkDetails(link){
-        const s=typeof link.source==="object"?link.source:findNodeById(String(link.source||"")); const t=typeof link.target==="object"?link.target:findNodeById(String(link.target||"")); const paper=paperFromEdge(link);
-        const title=link.is_moderation?`${esc(nodeName(s))} 调节 ${esc(nodeName(findNodeById(String(link.moderated_source||""))))} -> ${esc(nodeName(findNodeById(String(link.moderated_target||""))))}`:`${esc(nodeName(s))} -> ${esc(nodeName(t))}`;
-        const theories=[...new Set(nodeTheories(s).concat(nodeTheories(t)).filter(Boolean))];
-        els.detailScroll.innerHTML=`<section class="card"><h3>关系详情</h3><div class="text">${title}</div><div class="muted">方向：${esc(link.direction||"-")}</div><div class="muted">验证：${esc(link.verification||"-")}</div><div class="muted">证据：${esc(link.evidence_snippet||link.evidence_anchor||"-")}</div></section><section class="card"><h3>相关理论</h3><div class="text">${esc(theories.join("；")||"暂无理论")}</div></section><section class="card"><h3>相关变量及概念</h3><div class="rel-item"><button class="link-btn" data-node-id="${esc(String(s?.id||""))}">${esc(nodeName(s))}</button><div class="muted">${esc(nodeConcept(s))}</div></div><div class="rel-item"><button class="link-btn" data-node-id="${esc(String(t?.id||""))}">${esc(nodeName(t))}</button><div class="muted">${esc(nodeConcept(t))}</div></div></section><section class="card"><h3>来源论文</h3>${paper?.paper_id?`<button class="link-btn" id="openEdgePaper">${esc(String(paper.title||paper.paper_id))}</button>`:'<div class="muted">暂无来源论文</div>'}</section>`;
-        els.detailScroll.querySelectorAll("[data-node-id]").forEach(el=>el.addEventListener("click",()=>{ const n=findNodeById(String(el.getAttribute("data-node-id")||"")); if(n){ renderNodeDetails(n); focusNode(n); } }));
-        const open=document.getElementById("openEdgePaper"); if(open&&paper?.paper_id) open.addEventListener("click",()=>openReader(String(paper.paper_id),String(paper.library_id||activeLibraryId)));
-      }
-      function mergePayloads(payloads,libraryIds){ const nodeById=new Map(),edgeByKey=new Map(),paperMap={},mods=[]; payloads.forEach((p,i)=>{ const lib=String((p.meta||{}).library_id||libraryIds[i]||activeLibraryId); (p.nodes||[]).forEach(n=>{ const row=Object.assign({},n,{library_id:n.library_id||lib}); const ex=nodeById.get(row.id); if(!ex) nodeById.set(row.id,row); else nodeById.set(row.id,Object.assign({},ex,row,{relation_degree:Math.max(Number(ex.relation_degree||0),Number(row.relation_degree||0)),paper_count:Math.max(Number(ex.paper_count||0),Number(row.paper_count||0))})); }); (p.edges||[]).forEach(e=>{ const s=typeof e.source==="object"?e.source?.id:e.source; const t=typeof e.target==="object"?e.target?.id:e.target; const k=`${s}=>${t}::${e.paper_id||""}::${e.direction||""}`; if(!edgeByKey.has(k)) edgeByKey.set(k,e); }); (p.moderation_links||[]).forEach(m=>mods.push(m)); Object.entries(p.paper_map||{}).forEach(([pid,v])=>{ paperMap[`${lib}::${pid}`]=Object.assign({},v,{paper_id:pid,library_id:lib}); }); }); return {nodes:[...nodeById.values()],edges:[...edgeByKey.values()],moderation_links:mods,paper_map:paperMap}; }
-      function buildGraph(merged){
-        state.allNodes=merged.nodes||[]; state.allLinks=merged.edges||[]; state.moderationLinks=merged.moderation_links||[]; state.paperMap=merged.paper_map||{}; state.visibleNodes=visibleNodesFrom(state.allNodes);
-        debugLog("buildGraph:input", { nodes: state.allNodes.length, links: summarizeLinks(state.allLinks), mods: state.moderationLinks.length });
-        if (state.selectedNodeId) {
-          const forced = state.allNodes.find(n => (
-            String(n.id || "") === String(state.selectedNodeId) &&
-            (!state.selectedNodeLibraryId || String(n.library_id || "") === String(state.selectedNodeLibraryId))
-          ));
-          if (forced && !state.visibleNodes.some(n => String(n.id || "") === String(forced.id || "") && String(n.library_id || "") === String(forced.library_id || ""))) {
-            state.visibleNodes = state.visibleNodes.concat([forced]);
-          }
-        }
-        const visibleIds=new Set(state.visibleNodes.map(n=>n.id)); const baseLinks=state.allLinks.filter(l=>{ const s=typeof l.source==="object"?l.source?.id:l.source; const t=typeof l.target==="object"?l.target?.id:l.target; return visibleIds.has(s)&&visibleIds.has(t); });
-        debugLog("buildGraph:baseLinks", summarizeLinks(baseLinks));
-        const augmented=augmentModeration(state.visibleNodes,baseLinks,state.moderationLinks); const graphNodes=augmented.nodes;
-        const nodeIds = new Set(graphNodes.map(n => String(n.id)));
-        state.visibleLinks=(augmented.links||[]).filter(l=>{
-          const s=typeof l.source==="object"?l.source?.id:l.source;
-          const t=typeof l.target==="object"?l.target?.id:l.target;
-          return nodeIds.has(String(s||"")) && nodeIds.has(String(t||""));
+        const s = typeof l.source==="object"?l.source:findNodeById(String(l.source||""));
+        const t = typeof l.target==="object"?l.target:findNodeById(String(l.target||""));
+        return `<div class="rel-item"><div class="text">${directionBadge(l)} ${esc(nodeName(s))} → ${esc(nodeName(t))}</div><button class="link-btn" data-edge="${esc(edgeKey(l))}">关系详情</button></div>`;
+      }).join("");
+
+      els.detailScroll.innerHTML =
+        `<section class="card"><h3>变量名称</h3><div class="text">${esc(nodeName(node))}</div></section>` +
+        `<section class="card"><h3>变量概念</h3><div class="text">${esc(nodeConcept(node))}</div></section>` +
+        `<section class="card"><h3>来源论文</h3>${srcPid?`<button class="link-btn" id="openSourcePaper">${esc(String(srcPaper?.title||srcPid))}</button>`:'<div class="muted">暂无来源论文</div>'}</section>` +
+        `<section class="card"><h3>相关关系</h3>${rels.length?rows:'<div class="muted">暂无相关关系</div>'}${rels.length>3?`<button class="link-btn" id="toggleRelations">${state.expandedRelations?"收起":"展开更多"}</button>`:""}</section>`;
+
+      const open = document.getElementById("openSourcePaper");
+      if (open && srcPid) open.addEventListener("click", () => openReader(srcPid, String(srcPaper?.library_id||activeLibraryId)));
+      const toggle = document.getElementById("toggleRelations");
+      if (toggle) toggle.addEventListener("click", () => { state.expandedRelations = !state.expandedRelations; renderNodeDetails(node); });
+      els.detailScroll.querySelectorAll("[data-edge]").forEach(el => el.addEventListener("click", () => {
+        const link = state.visibleLinks.find(l => edgeKey(l) === String(el.getAttribute("data-edge")||""));
+        if (link) { renderLinkDetails(link); focusLink(link); }
+      }));
+    }
+
+    function renderLinkDetails(link) {
+      const s = typeof link.source==="object"?link.source:findNodeById(String(link.source||""));
+      const t = typeof link.target==="object"?link.target:findNodeById(String(link.target||""));
+      const paper = paperFromEdge(link);
+      const cls = String(link.display_effect_class || link.direction || '-');
+      const title = link.is_moderation
+        ? `${esc(nodeName(s))} 调节 ${esc(nodeName(findNodeById(String(link.moderated_source||""))))} → ${esc(nodeName(findNodeById(String(link.moderated_target||""))))}`
+        : `${esc(nodeName(s))} → ${esc(nodeName(t))}`;
+      const theories = [...new Set(nodeTheories(s).concat(nodeTheories(t)).filter(Boolean))];
+
+      els.detailScroll.innerHTML =
+        `<section class="card"><h3>关系详情</h3><div class="text">${title}</div><div class="muted">方向：${esc(cls)}</div><div class="muted">验证：${esc(link.verification||"-")}</div><div class="muted">证据：${esc(link.evidence_snippet||link.evidence_anchor||"-")}</div></section>` +
+        `<section class="card"><h3>相关理论</h3><div class="text">${esc(theories.join("；")||"暂无理论")}</div></section>` +
+        `<section class="card"><h3>相关变量及概念</h3><div class="rel-item"><button class="link-btn" data-node-id="${esc(String(s?.id||""))}">${esc(nodeName(s))}</button><div class="muted">${esc(nodeConcept(s))}</div></div><div class="rel-item"><button class="link-btn" data-node-id="${esc(String(t?.id||""))}">${esc(nodeName(t))}</button><div class="muted">${esc(nodeConcept(t))}</div></div></section>` +
+        `<section class="card"><h3>来源论文</h3>${paper?.paper_id?`<button class="link-btn" id="openEdgePaper">${esc(String(paper.title||paper.paper_id))}</button>`:'<div class="muted">暂无来源论文</div>'}</section>`;
+
+      els.detailScroll.querySelectorAll("[data-node-id]").forEach(el => el.addEventListener("click", () => {
+        const n = findNodeById(String(el.getAttribute("data-node-id")||""));
+        if (n) { renderNodeDetails(n); focusNode(n); }
+      }));
+      const open = document.getElementById("openEdgePaper");
+      if (open && paper?.paper_id) open.addEventListener("click", () => openReader(String(paper.paper_id), String(paper.library_id||activeLibraryId)));
+    }
+
+    function mergePayloads(payloads, libraryIds) {
+      const nodeById = new Map(), edgeByKey = new Map(), paperMap = {}, mods = [];
+      payloads.forEach((p, i) => {
+        const lib = String((p.meta||{}).library_id || libraryIds[i] || activeLibraryId);
+        (p.nodes||[]).forEach(n => {
+          const row = Object.assign({}, n, {library_id: n.library_id||lib});
+          const ex = nodeById.get(row.id);
+          if (!ex) nodeById.set(row.id, row);
+          else nodeById.set(row.id, Object.assign({}, ex, row, {
+            relation_degree: Math.max(Number(ex.relation_degree||0), Number(row.relation_degree||0)),
+            paper_count: Math.max(Number(ex.paper_count||0), Number(row.paper_count||0))
+          }));
         });
-        debugLog("buildGraph:visibleLinks", summarizeLinks(state.visibleLinks));
-        if(!state.visibleNodes.length){ if(state.graph&&typeof state.graph.graphData==="function") state.graph.graphData({nodes:[],links:[]}); els.fallback.classList.remove("hidden"); els.fallback.textContent="当前文献库组合下没有可展示的变量节点，请更换文献库。"; setEmpty("当前无可展示图谱数据。"); return; }
-        if(typeof window.ForceGraph3D!=="function"){ els.fallback.classList.remove("hidden"); els.fallback.textContent="3D 引擎未加载。"; setEmpty("3D 引擎未加载。"); return; }
-        els.fallback.classList.add("hidden"); els.scene.innerHTML="";
-        const forceNodes=graphNodes.map(n=>{const c=Object.assign({},n);delete c.x;delete c.y;delete c.z;delete c.fx;delete c.fy;delete c.fz;return c;});
-        const simNodeById = new Map(forceNodes.map(n => [String(n.id||""), n]));
-        const g=window.ForceGraph3D({rendererConfig:{alpha:false,antialias:true}})(els.scene)
-          .backgroundColor("#dbe6f5")
-          .showNavInfo(false)
-          .nodeVal(n=>n&&n.__is_mod_anchor?1.1:4.5)
-          // Hide moderation anchors from rendering completely to avoid depth-buffer occlusion.
-          .nodeVisibility(n=>!(n&&n.__is_mod_anchor))
-          .nodeColor(nodeColor)
-          .nodeRelSize(5)
-          .linkColor(edgeColor)
-          .linkOpacity(linkOpacity)
-          .linkWidth(linkWidth)
-          .linkDirectionalArrowLength(0)
-          .linkDirectionalParticles(0)
-          .linkThreeObjectExtend(true)
-          .linkThreeObject(link=>makeCustomArrow(link))
-          .linkPositionUpdate((obj,pos)=>placeCustomArrow(obj,pos))
-          .onNodeHover(n=>{if(!n||n.__is_mod_anchor)return hideTip();showTip([`<b>${esc(nodeName(n))}</b>`,`关系数：<code>${relationEdgesFor(n.id).length}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);})
-          .onLinkHover(l=>{if(!l)return hideTip();if(l.is_moderation){const ms=findNodeById(String(l.moderated_source||"")),mt=findNodeById(String(l.moderated_target||""));showTip([`<b>调节关系</b>`,`${esc(nodeName(l.source))} 调节 ${esc(nodeName(ms))} -> ${esc(nodeName(mt))}`,`论文：<code>${esc(l.paper_id||"-")}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);return;}const s=typeof l.source==="object"?l.source:findNodeById(String(l.source||""));const t=typeof l.target==="object"?l.target:findNodeById(String(l.target||""));showTip([`<b>关系</b>`,`${esc(nodeName(s))} -> ${esc(nodeName(t))}`,`方向：<code>${esc(l.direction||"-")}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);})
-          .onNodeClick(n=>{if(!n||n.__is_mod_anchor)return;renderNodeDetails(n);focusNode(n);})
-          .onLinkClick(l=>{if(!l)return;renderLinkDetails(l);focusLink(l);})
-          .onEngineTick(()=>{
-            // Keep moderation anchors exactly at the midpoint of moderated source/target.
-            for(const n of forceNodes){
-              if(!n || !n.__is_mod_anchor) continue;
-              const sid=String(n.moderated_source||"");
-              const tid=String(n.moderated_target||"");
-              const s=simNodeById.get(sid), t=simNodeById.get(tid);
-              if(!s||!t) continue;
-              const x=((Number(s.x)||0)+(Number(t.x)||0))/2;
-              const y=((Number(s.y)||0)+(Number(t.y)||0))/2;
-              const z=((Number(s.z)||0)+(Number(t.z)||0))/2;
-              n.x=x; n.y=y; n.z=z;
-              n.fx=x; n.fy=y; n.fz=z;
-              n.vx=0; n.vy=0; n.vz=0;
-            }
-          });
-        state.graph=g; g.graphData({nodes:forceNodes,links:state.visibleLinks});
-        try{
-          const gd=g.graphData();
-          debugLog("graphData:afterSet", { nodes: Array.isArray(gd?.nodes)?gd.nodes.length:0, links: summarizeLinks(gd?.links||[]) });
-          debugLog("scene:afterSet", summarizeSceneObjects(g));
-        }catch(err){
-          debugLog("graphData:afterSet:error", String(err&&err.message||err||"unknown"));
-        }
-        window.setTimeout(()=>{
-          if(!state.graph) return;
-          try{
-            const gd=state.graph.graphData();
-            debugLog("graphData:after1s", { nodes: Array.isArray(gd?.nodes)?gd.nodes.length:0, links: summarizeLinks(gd?.links||[]) });
-            debugLog("scene:after1s", summarizeSceneObjects(state.graph));
-            logParticleProbe(state.graph, gd?.links||[]);
-          }catch(err){
-            debugLog("graphData:after1s:error", String(err&&err.message||err||"unknown"));
-          }
-        }, 1000);
-        window.setTimeout(()=>{
-          if(!state.graph) return;
-          debugLog("scene:after3s", summarizeSceneObjects(state.graph));
-        }, 3000);
-        const syncGraphSize = () => {
-          const rect = els.graphWrap.getBoundingClientRect();
-          const w = Math.max(320, Math.floor(rect.width));
-          const h = Math.max(280, Math.floor(rect.height));
-          if (typeof g.width === "function") g.width(w);
-          if (typeof g.height === "function") g.height(h);
-          const r = typeof g.renderer === "function" ? g.renderer() : null;
-          if (r && typeof r.setSize === "function") r.setSize(w, h, false);
-        };
-        syncGraphSize();
-        window.addEventListener("resize", syncGraphSize);
-        const initialNode = state.selectedNodeId
-          ? (
-            state.visibleNodes.find(n => String(n.id) === state.selectedNodeId && (!state.selectedNodeLibraryId || String(n.library_id||"") === state.selectedNodeLibraryId))
-            || state.visibleNodes.find(n => String(n.id) === state.selectedNodeId)
-          )
-          : null;
-        const first=initialNode||state.visibleNodes[0];
-        if(first){
-          renderNodeDetails(first);
-          const graphFirst=findGraphNodeById(String(first.id||""), String(first.library_id||""))||first;
-          focusNode(graphFirst);
+        (p.edges||[]).forEach(e => {
+          const s = typeof e.source==="object"?e.source?.id:e.source;
+          const t = typeof e.target==="object"?e.target?.id:e.target;
+          const k = `${s}=>${t}::${e.paper_id||""}::${e.direction||""}`;
+          if (!edgeByKey.has(k)) edgeByKey.set(k, e);
+        });
+        (p.moderation_links||[]).forEach(m => mods.push(m));
+        Object.entries(p.paper_map||{}).forEach(([pid, v]) => {
+          paperMap[`${lib}::${pid}`] = Object.assign({}, v, {paper_id:pid, library_id:lib});
+        });
+      });
+      return {nodes:[...nodeById.values()], edges:[...edgeByKey.values()], moderation_links:mods, paper_map:paperMap};
+    }
+
+    function buildGraph(merged) {
+      state.allNodes = merged.nodes || [];
+      state.allLinks = merged.edges || [];
+      state.moderationLinks = merged.moderation_links || [];
+      state.paperMap = merged.paper_map || {};
+      state.visibleNodes = visibleNodesFrom(state.allNodes);
+      debugLog("buildGraph:input", { nodes: state.allNodes.length, links: summarizeLinks(state.allLinks), mods: state.moderationLinks.length });
+
+      if (state.selectedNodeId) {
+        const forced = state.allNodes.find(n =>
+          String(n.id || "") === String(state.selectedNodeId) &&
+          (!state.selectedNodeLibraryId || String(n.library_id || "") === String(state.selectedNodeLibraryId))
+        );
+        if (forced && !state.visibleNodes.some(n => String(n.id||"")===String(forced.id||"") && String(n.library_id||"")===String(forced.library_id||""))) {
+          state.visibleNodes = state.visibleNodes.concat([forced]);
         }
       }
-      async function loadAll(){ const ids=state.selectedLibraryIds.length?state.selectedLibraryIds:[activeLibraryId]; debugLog("loadAll:ids", ids); const payloads=await Promise.all(ids.map(async id=>{ const r=await fetch(`/graph/full?library_id=${encodeURIComponent(id)}`); if(!r.ok) throw new Error(`HTTP ${r.status}`); const payload=await r.json(); debugLog("loadAll:payload", { library_id:id, nodes:Array.isArray(payload?.nodes)?payload.nodes.length:0, links:summarizeLinks(payload?.edges||[]), mods:Array.isArray(payload?.moderation_links)?payload.moderation_links.length:0 }); return payload; })); const merged=mergePayloads(payloads,ids); debugLog("loadAll:merged", { nodes:Array.isArray(merged?.nodes)?merged.nodes.length:0, links:summarizeLinks(merged?.edges||[]), mods:Array.isArray(merged?.moderation_links)?merged.moderation_links.length:0 }); buildGraph(merged); }
-      function bind(){ window.addEventListener("pointermove",evt=>{window.__graphPointerX=evt.clientX;window.__graphPointerY=evt.clientY;if(els.tooltip.style.display==="block"){els.tooltip.style.left=`${evt.clientX+12}px`;els.tooltip.style.top=`${evt.clientY+12}px`;}}); window.addEventListener("message",evt=>{const d=evt&&evt.data&&typeof evt.data==="object"?evt.data:null;if(!d||d.type!=="KN_GRAPH_FOCUS_NODE")return;const p=(d.payload&&typeof d.payload==="object")?d.payload:{};const nodeId=String(p.nodeId||"").trim();const libraryId=String(p.libraryId||"").trim();if(!nodeId)return;const n=findNodeById(nodeId, libraryId);if(!n)return;renderNodeDetails(n);focusNode(n);}); } 
-      bind(); loadAll().catch(err=>{ els.fallback.classList.remove("hidden"); els.fallback.textContent=`图谱加载失败: ${err&&err.message?err.message:"unknown"}`; setEmpty(`图谱数据无法加载：${esc(err&&err.message?err.message:"unknown")}`); });
+
+      const visibleIds = new Set(state.visibleNodes.map(n => n.id));
+      const baseLinks = state.allLinks.filter(l => { const s = typeof l.source==="object"?l.source?.id:l.source; const t = typeof l.target==="object"?l.target?.id:l.target; return visibleIds.has(s) && visibleIds.has(t); });
+      debugLog("buildGraph:baseLinks", summarizeLinks(baseLinks));
+
+      const augmented = augmentModeration(state.visibleNodes, baseLinks, state.moderationLinks);
+      const graphNodes = augmented.nodes;
+      const nodeIds = new Set(graphNodes.map(n => String(n.id)));
+      state.visibleLinks = (augmented.links||[]).filter(l => {
+        const s = typeof l.source==="object"?l.source?.id:l.source;
+        const t = typeof l.target==="object"?l.target?.id:l.target;
+        return nodeIds.has(String(s||"")) && nodeIds.has(String(t||""));
+      });
+      debugLog("buildGraph:visibleLinks", summarizeLinks(state.visibleLinks));
+
+      if (!state.visibleNodes.length) {
+        if (state.graph && typeof state.graph.graphData==="function") state.graph.graphData({nodes:[], links:[]});
+        els.fallback.classList.remove("hidden");
+        els.fallback.textContent = "当前文献库组合下没有可展示的变量节点，请更换文献库。";
+        setEmpty("当前无可展示图谱数据。");
+        return;
+      }
+
+      if (typeof window.ForceGraph3D !== "function") {
+        els.fallback.classList.remove("hidden");
+        els.fallback.textContent = "3D 引擎未加载。";
+        setEmpty("3D 引擎未加载。");
+        return;
+      }
+
+      els.fallback.classList.add("hidden");
+      els.scene.innerHTML = "";
+
+      const forceNodes = graphNodes.map(n => { const c = Object.assign({}, n); delete c.x; delete c.y; delete c.z; delete c.fx; delete c.fy; delete c.fz; return c; });
+      const simNodeById = new Map(forceNodes.map(n => [String(n.id||""), n]));
+
+      const g = window.ForceGraph3D({ rendererConfig: { alpha: false, antialias: true } })(els.scene)
+        .backgroundColor("#e2eee0")
+        .showNavInfo(false)
+        .nodeVal(n => n && n.__is_mod_anchor ? 1.1 : 4.5)
+        .nodeVisibility(n => !(n && n.__is_mod_anchor))
+        .nodeColor(nodeColor)
+        .nodeRelSize(5)
+        .linkColor(linkColorByDirection)
+        .linkOpacity(linkOpacityFn)
+        .linkWidth(linkWidthFn)
+        .linkDirectionalArrowLength(l => l && l.is_moderation ? 0 : 12)
+        .linkDirectionalArrowRelPos(0.985)
+        .linkDirectionalArrowResolution(12)
+        .linkDirectionalArrowColor("#ef4444")
+        .linkDirectionalParticles(0)
+        .onNodeHover(n => { if(!n||n.__is_mod_anchor)return hideTip(); showTip([`<b>${esc(nodeName(n))}</b>`,`关系数：<code>${relationEdgesFor(n.id).length}</code>`],window.__graphPointerX||0,window.__graphPointerY||0); })
+        .onLinkHover(l => {
+          if(!l)return hideTip();
+          if(l.is_moderation){const ms=findNodeById(String(l.moderated_source||"")),mt=findNodeById(String(l.moderated_target||""));showTip([`<b>调节关系</b>`,`${esc(nodeName(l.source))} 调节 ${esc(nodeName(ms))} → ${esc(nodeName(mt))}`,`论文：<code>${esc(l.paper_id||"-")}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);return;}
+          const s=typeof l.source==="object"?l.source:findNodeById(String(l.source||""));const t=typeof l.target==="object"?l.target:findNodeById(String(l.target||""));
+          const cls = String(l.display_effect_class || l.direction || "-");
+          showTip([`<b>关系</b>`,`${esc(nodeName(s))} → ${esc(nodeName(t))}`,`方向：<code>${esc(cls)}</code>`],window.__graphPointerX||0,window.__graphPointerY||0);
+        })
+        .onNodeClick(n => { if(!n||n.__is_mod_anchor)return; renderNodeDetails(n); focusNode(n); })
+        .onLinkClick(l => { if(!l)return; renderLinkDetails(l); focusLink(l); })
+        .onEngineTick(() => {
+          for (const n of forceNodes) {
+            if (!n || !n.__is_mod_anchor) continue;
+            const sid = String(n.moderated_source||""), tid = String(n.moderated_target||"");
+            const s = simNodeById.get(sid), t = simNodeById.get(tid);
+            if (!s || !t) continue;
+            const x = ((Number(s.x)||0)+(Number(t.x)||0))/2;
+            const y = ((Number(s.y)||0)+(Number(t.y)||0))/2;
+            const z = ((Number(s.z)||0)+(Number(t.z)||0))/2;
+            n.x = x; n.y = y; n.z = z;
+            n.fx = x; n.fy = y; n.fz = z;
+            n.vx = 0; n.vy = 0; n.vz = 0;
+          }
+        });
+
+      state.graph = g;
+      g.graphData({ nodes: forceNodes, links: state.visibleLinks });
+      window.setTimeout(() => fixArrowOpacity(), 300);
+
+      try {
+        const gd = g.graphData();
+        debugLog("graphData:afterSet", { nodes: Array.isArray(gd?.nodes)?gd.nodes.length:0, links: summarizeLinks(gd?.links||[]) });
+      } catch(err) {
+        debugLog("graphData:afterSet:error", String(err&&err.message||err||"unknown"));
+      }
+
+      window.setTimeout(() => {
+        if (!state.graph) return;
+        try {
+          const gd = state.graph.graphData();
+          debugLog("graphData:after1s", { nodes: Array.isArray(gd?.nodes)?gd.nodes.length:0, links: summarizeLinks(gd?.links||[]) });
+        } catch(err) {
+          debugLog("graphData:after1s:error", String(err&&err.message||err||"unknown"));
+        }
+      }, 1000);
+
+      const syncGraphSize = () => {
+        const rect = els.graphWrap.getBoundingClientRect();
+        const w = Math.max(320, Math.floor(rect.width));
+        const h = Math.max(280, Math.floor(rect.height));
+        if (typeof g.width === "function") g.width(w);
+        if (typeof g.height === "function") g.height(h);
+        const r = typeof g.renderer === "function" ? g.renderer() : null;
+        if (r && typeof r.setSize === "function") r.setSize(w, h, false);
+      };
+      syncGraphSize();
+      window.addEventListener("resize", syncGraphSize);
+
+      const initialNode = state.selectedNodeId
+        ? (state.visibleNodes.find(n => String(n.id)===state.selectedNodeId && (!state.selectedNodeLibraryId||String(n.library_id||"")===state.selectedNodeLibraryId))
+          || state.visibleNodes.find(n => String(n.id)===state.selectedNodeId))
+        : null;
+      const first = initialNode || state.visibleNodes[0];
+      if (first) {
+        renderNodeDetails(first);
+        const graphFirst = findGraphNodeById(String(first.id||""), String(first.library_id||"")) || first;
+        focusNode(graphFirst);
+      }
+    }
+
+    async function loadAll() {
+      const ids = state.selectedLibraryIds.length ? state.selectedLibraryIds : [activeLibraryId];
+      debugLog("loadAll:ids", ids);
+      const payloads = await Promise.all(ids.map(async id => {
+        const r = await fetch(`/graph/full?library_id=${encodeURIComponent(id)}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const payload = await r.json();
+        debugLog("loadAll:payload", { library_id:id, nodes:Array.isArray(payload?.nodes)?payload.nodes.length:0, links:summarizeLinks(payload?.edges||[]), mods:Array.isArray(payload?.moderation_links)?payload.moderation_links.length:0 });
+        return payload;
+      }));
+      const merged = mergePayloads(payloads, ids);
+      debugLog("loadAll:merged", { nodes:Array.isArray(merged?.nodes)?merged.nodes.length:0, links:summarizeLinks(merged?.edges||[]), mods:Array.isArray(merged?.moderation_links)?merged.moderation_links.length:0 });
+      buildGraph(merged);
+    }
+
+    function bind() {
+      window.addEventListener("pointermove", evt => {
+        window.__graphPointerX = evt.clientX;
+        window.__graphPointerY = evt.clientY;
+        if (els.tooltip.style.display === "block") {
+          els.tooltip.style.left = `${evt.clientX+12}px`;
+          els.tooltip.style.top = `${evt.clientY+12}px`;
+        }
+      });
+      window.addEventListener("message", evt => {
+        const d = evt && evt.data && typeof evt.data === "object" ? evt.data : null;
+        if (!d || d.type !== "KN_GRAPH_FOCUS_NODE") return;
+        const p = (d.payload && typeof d.payload === "object") ? d.payload : {};
+        const nodeId = String(p.nodeId||"").trim();
+        const libraryId = String(p.libraryId||"").trim();
+        if (!nodeId) return;
+        const n = findNodeById(nodeId, libraryId);
+        if (!n) return;
+        renderNodeDetails(n);
+        focusNode(n);
+      });
+    }
+
+    bind();
+    loadAll().catch(err => {
+      els.fallback.classList.remove("hidden");
+      els.fallback.textContent = `图谱加载失败: ${err&&err.message?err.message:"unknown"}`;
+      setEmpty(`图谱数据无法加载：${esc(err&&err.message?err.message:"unknown")}`);
+    });
     })();
   </script>
 </body>
