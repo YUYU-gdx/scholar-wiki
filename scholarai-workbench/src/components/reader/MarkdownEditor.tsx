@@ -644,7 +644,7 @@ export default function MarkdownEditor({
 
     // ── Direct file write ──
     if (!sh || sh.runtime !== 'electron' || !absolutePath) {
-      window.alert('笔记已保存到本地数据库，但文件写入不可用（非Electron环境）');
+      window.alert('文件写入不可用（非Electron环境）');
       setTimeout(() => {
         setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 }));
       }, 600);
@@ -671,13 +671,37 @@ export default function MarkdownEditor({
         read = { ok: true, data: init };
       }
 
-      // Build note block and insert
+      // Build note block
       const now = new Date().toISOString();
       const block = `\n\n> [!NOTE] Reader Note\n> Note ID: ${noteId}\n> Quote:\n> ${picked}\n>\n> Note:\n> ${noteText}\n>\n> Time:\n> ${now}\n`;
       const src = String(read.data || '').replace(/\r\n/g, '\n');
-      const next = src.includes('## Reader Notes')
-        ? `${src}${block}`
-        : `${src}\n\n## Reader Notes${block}`;
+
+      // Find insertion position: right after the selected text's paragraph
+      let insertAt = src.length;
+      const lineEnd = selectionUI.lineEnd;
+      if (lineEnd >= 0) {
+        // Insert after the line where selection ends
+        const lines = src.split('\n');
+        const targetLine = Math.max(0, Math.min(lineEnd, lines.length - 1));
+        let offset = 0;
+        for (let i = 0; i <= targetLine; i++) {
+          offset += lines[i].length + 1; // +1 for newline
+        }
+        insertAt = Math.min(offset, src.length);
+      } else {
+        // Fallback: find by matching the selected text
+        const idx = src.indexOf(picked);
+        if (idx >= 0) {
+          const after = src.slice(idx + picked.length);
+          const nl = after.indexOf('\n');
+          insertAt = nl >= 0 ? idx + picked.length + nl : idx + picked.length;
+        }
+      }
+      console.log('[notes] insert position', { lineEnd, insertAt, srcLen: src.length });
+
+      const next = insertAt < src.length
+        ? `${src.slice(0, insertAt)}${block}${src.slice(insertAt)}`
+        : (src.includes('## Reader Notes') ? `${src}${block}` : `${src}\n\n## Reader Notes${block}`);
 
       // eslint-disable-next-line no-console
       console.log('[notes] writing file...', { srcLen: src.length, nextLen: next.length });
@@ -715,7 +739,7 @@ export default function MarkdownEditor({
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[notes] file write failed', e);
-      window.alert(`笔记已保存到本地数据库，但写入MD文件失败：${(e as Error).message}`);
+      window.alert(`写入MD文件失败：${(e as Error).message}`);
     }
   };
 
