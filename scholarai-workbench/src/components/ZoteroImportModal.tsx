@@ -42,7 +42,6 @@ export default function ZoteroImportModal({ open, onClose }: Props) {
   }, [open, activeLibraryId]);
 
   const handleScan = async () => {
-    if (!dataDir.trim()) return;
     setScanning(true);
     setScanError('');
     setScanResult(null);
@@ -175,7 +174,7 @@ export default function ZoteroImportModal({ open, onClose }: Props) {
           />
           <button
             onClick={handleScan}
-            disabled={scanning || !dataDir.trim()}
+            disabled={scanning}
             className="bg-secondary hover:bg-secondary/90 text-on-secondary px-5 py-1.5 rounded-lg text-sm font-medium transition-all disabled:opacity-50 flex items-center gap-2"
           >
             {scanning ? (
@@ -469,7 +468,7 @@ export default function ZoteroImportModal({ open, onClose }: Props) {
             </button>
             <button
               onClick={handleImport}
-              disabled={selectedIds.size === 0 || importing || !dataDir.trim()}
+              disabled={selectedIds.size === 0 || importing}
               className="bg-secondary hover:bg-secondary/90 text-on-secondary px-5 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 flex items-center gap-2"
             >
               {importing ? (
