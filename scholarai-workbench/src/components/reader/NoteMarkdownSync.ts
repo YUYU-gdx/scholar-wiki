@@ -214,7 +214,11 @@ export async function upsertNoteInMarkdown(markdownPath: string, noteId: string,
 
 export async function addNoteToMarkdownAtomic(markdownPath: string, noteId: string, quote: string, note: string): Promise<{ ok: boolean; raw: string }> {
   const shell = window.desktopShell;
-  if (!shell || shell.runtime !== 'electron' || !markdownPath) return { ok: false, raw: '' };
+  if (!shell || shell.runtime !== 'electron' || !markdownPath) {
+    // eslint-disable-next-line no-console
+    console.error('[notes] atomic: shell/runtime check failed', { hasShell: !!shell, runtime: shell?.runtime, markdownPath });
+    return { ok: false, raw: '' };
+  }
   let read = await shell.readLocalText(markdownPath);
   if (!read.ok) {
     const init = '## Reader Notes\n';
@@ -244,10 +248,24 @@ export async function addNoteToMarkdownAtomic(markdownPath: string, noteId: stri
   }
   next = dedupeReaderNotesHeadings(next.replace(/\n{3,}/g, '\n\n'));
   const wr = await shell.writeLocalText(markdownPath, next);
-  if (!wr.ok) return { ok: false, raw: src };
+  if (!wr.ok) {
+    // eslint-disable-next-line no-console
+    console.error('[notes] writeLocalText failed (atomic)', { markdownPath, error: wr.error });
+    return { ok: false, raw: src };
+  }
   const verify = await shell.readLocalText(markdownPath);
+  if (!verify.ok) {
+    // eslint-disable-next-line no-console
+    console.error('[notes] read-back verify failed (atomic)', { markdownPath, error: verify.error });
+    return { ok: false, raw: src };
+  }
   const verifyRaw = normalizeNewlines(String(verify.data || ''));
-  return { ok: !!(verify.ok && verifyRaw.includes(marker)), raw: verifyRaw };
+  const markerFound = verifyRaw.includes(marker);
+  if (!markerFound) {
+    // eslint-disable-next-line no-console
+    console.error('[notes] marker NOT found after write (atomic)', { marker, verifyLen: verifyRaw.length });
+  }
+  return { ok: markerFound, raw: verifyRaw };
 }
 
 function findInsertIndexByLine(raw: string, lineEnd: number): number {
@@ -272,14 +290,28 @@ export async function addNoteToMarkdownAtomicByLine(
   lineEnd: number,
 ): Promise<{ ok: boolean; raw: string }> {
   const shell = window.desktopShell;
-  if (!shell || shell.runtime !== 'electron' || !markdownPath) return { ok: false, raw: '' };
+  if (!shell || shell.runtime !== 'electron' || !markdownPath) {
+    // eslint-disable-next-line no-console
+    console.error('[notes] atomicByLine: shell/runtime check failed', { hasShell: !!shell, runtime: shell?.runtime, markdownPath });
+    return { ok: false, raw: '' };
+  }
   let read = await shell.readLocalText(markdownPath);
   if (!read.ok) {
+    // eslint-disable-next-line no-console
+    console.warn('[notes] atomicByLine: read failed, trying init', { markdownPath, error: read.error });
     const init = '## Reader Notes\n';
     const created = await shell.writeLocalText(markdownPath, init);
-    if (!created.ok) return { ok: false, raw: '' };
+    if (!created.ok) {
+      // eslint-disable-next-line no-console
+      console.error('[notes] atomicByLine: init create failed', { markdownPath, error: created.error });
+      return { ok: false, raw: '' };
+    }
     read = await shell.readLocalText(markdownPath);
-    if (!read.ok) return { ok: false, raw: '' };
+    if (!read.ok) {
+      // eslint-disable-next-line no-console
+      console.error('[notes] atomicByLine: re-read after init failed', { markdownPath, error: read.error });
+      return { ok: false, raw: '' };
+    }
   }
   const src = normalizeNewlines(read.data || '');
   const marker = `> Note ID: ${noteId}`;
@@ -295,16 +327,32 @@ export async function addNoteToMarkdownAtomicByLine(
     }
   } else {
     const insertAt = findInsertIndexByLine(src, lineEnd);
+    // eslint-disable-next-line no-console
+    console.log('[notes] atomicByLine insert', { noteId, lineEnd, insertAt, srcLen: src.length, hasReaderNotes: src.includes('## Reader Notes') });
     next = insertAt < src.length
       ? `${src.slice(0, insertAt)}${block}${src.slice(insertAt)}`
       : (src.includes('## Reader Notes') ? `${src}${block}` : `${src}\n\n## Reader Notes${block}`);
   }
   next = dedupeReaderNotesHeadings(next.replace(/\n{3,}/g, '\n\n'));
   const wr = await shell.writeLocalText(markdownPath, next);
-  if (!wr.ok) return { ok: false, raw: src };
+  if (!wr.ok) {
+    // eslint-disable-next-line no-console
+    console.error('[notes] writeLocalText failed', { markdownPath, error: wr.error, ok: wr.ok });
+    return { ok: false, raw: src };
+  }
   const verify = await shell.readLocalText(markdownPath);
+  if (!verify.ok) {
+    // eslint-disable-next-line no-console
+    console.error('[notes] read-back verify failed', { markdownPath, error: verify.error });
+    return { ok: false, raw: src };
+  }
   const verifyRaw = normalizeNewlines(String(verify.data || ''));
-  return { ok: !!(verify.ok && verifyRaw.includes(marker)), raw: verifyRaw };
+  const markerFound = verifyRaw.includes(marker);
+  if (!markerFound) {
+    // eslint-disable-next-line no-console
+    console.error('[notes] marker NOT found after write', { marker, verifyLen: verifyRaw.length });
+  }
+  return { ok: markerFound, raw: verifyRaw };
 }
 
 export async function deleteNoteFromMarkdown(markdownPath: string, noteId: string, quote: string, note: string): Promise<boolean> {

@@ -440,7 +440,11 @@ export default function MarkdownEditor({
     }
     const host = selectionHostRef.current;
     if (!host) return;
-    const onUp = () => {
+    const onUp = (e: MouseEvent) => {
+      // Ignore clicks inside the popover itself (prevents closing when clicking input)
+      const target = e.target as Element | null;
+      if (target?.closest('.selection-action-popover')) return;
+
       const sel = window.getSelection();
       if (!isSelectionInside(host, sel)) {
         setSelectionUI((prev) => (prev.visible ? { ...prev, visible: false, lineStart: -1, lineEnd: -1 } : prev));
@@ -642,6 +646,12 @@ export default function MarkdownEditor({
         paperId,
         libraryId,
       });
+      // Quick pre-check before attempting write
+      const sh = window.desktopShell;
+      if (!sh || sh.runtime !== 'electron' || !absolutePath) {
+        throw new Error(`文件写入不可用：runtime=${sh?.runtime || 'none'}, path=${absolutePath || 'none'}`);
+      }
+
       const saved = await readerNotesManager.add({
         paper_id: paperId,
         library_id: libraryId,
@@ -652,10 +662,17 @@ export default function MarkdownEditor({
         md_anchor: readerNotesManager.makeAnchor(text, picked),
         markdown_path_at_write: absolutePath,
       });
+
+      // Probe read first to confirm file is accessible
+      const probe = await sh.readLocalText(absolutePath);
+      if (!probe.ok) {
+        throw new Error(`文件读取失败: ${probe.error || 'unknown'} (path: ${absolutePath})`);
+      }
+
       const atomic = selectionUI.lineEnd >= 0
         ? await addNoteToMarkdownAtomicByLine(absolutePath, saved.id, picked, noteText, selectionUI.lineEnd)
         : await addNoteToMarkdownAtomic(absolutePath, saved.id, picked, noteText);
-      if (!atomic.ok) throw new Error('md_atomic_add_failed');
+      if (!atomic.ok) throw new Error(`写入验证失败: marker未在回读中找到 (path: ${absolutePath})`);
       // eslint-disable-next-line no-console
       console.log('[notes] markdown save atomic result', { noteId: saved.id, rawLen: atomic.raw.length, hasMarker: atomic.raw.includes(`> Note ID: ${saved.id}`) });
       setText(atomic.raw);
@@ -684,7 +701,15 @@ export default function MarkdownEditor({
       setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 }));
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.error('[notes] markdown save failed', e);
+      console.error('[notes] markdown save failed', {
+        error: (e as Error).message,
+        absolutePath,
+        hasShell: !!window.desktopShell,
+        runtime: window.desktopShell?.runtime,
+        lineEnd: selectionUI.lineEnd,
+        pickedLen: String(selectionUI.text || '').trim().length,
+        noteLen: String(note || '').trim().length,
+      });
       window.alert(`保存笔记失败：${(e as Error).message}`);
     }
   };
