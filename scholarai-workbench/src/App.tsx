@@ -223,12 +223,12 @@ export default function App() {
   }, [activeLibraryId, setPipelineJobs]);
 
   const navItems = [
-    { id: 'library' as View, icon: Library, label: 'Library' },
-    { id: 'graph' as View, icon: Share2, label: 'Graph' },
-    { id: 'chat' as View, icon: MessageSquare, label: 'Chat' },
-    { id: 'reader' as View, icon: BookOpen, label: 'Reader' },
-    { id: 'pipeline' as View, icon: Database, label: 'Pipeline' },
-    { id: 'settings' as View, icon: Settings, label: 'Settings' },
+    { id: 'library' as View, icon: Library, label: '文献库＆变量库' },
+    { id: 'graph' as View, icon: Share2, label: '知识图谱' },
+    { id: 'chat' as View, icon: MessageSquare, label: '知识问答' },
+    { id: 'reader' as View, icon: BookOpen, label: '阅读器' },
+    { id: 'pipeline' as View, icon: Database, label: '文献导入' },
+    { id: 'settings' as View, icon: Settings, label: '设置' },
   ];
 
   const nodeCount = graphData?.nodes?.filter(n => String(n.type || '') === 'variable' && !!n.validated_variable && Number(n.relation_degree || 0) > 0).length ?? 0;
@@ -280,13 +280,13 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tighter text-on-surface leading-none">Scholar Wiki</h1>
-              <p className="text-[10px] font-mono uppercase tracking-widest text-on-surface-variant mt-1">Academic Knowledge Graph</p>
+              <p className="text-[10px] font-mono uppercase tracking-widest text-on-surface-variant mt-1">学术知识图谱</p>
             </div>
           </div>
 
           <div className="px-2 mb-2">
             <div className="flex items-center justify-between mb-1">
-              <label className="text-[10px] font-mono text-outline uppercase tracking-widest">Libraries (Multi-select)</label>
+              <label className="text-[10px] font-mono text-outline uppercase tracking-widest">文献库（可多选）</label>
               <button
                 type="button"
                 title="创建文献库"
@@ -322,7 +322,7 @@ export default function App() {
                       })();
                     }
                   }}
-                  placeholder="library_id"
+                  placeholder="文献库ID"
                   className="flex-1 bg-surface-container border border-outline-variant rounded px-2 py-1 text-xs font-mono text-on-surface outline-none focus:border-secondary"
                 />
                 <button
@@ -356,6 +356,11 @@ export default function App() {
               </div>
             )}
             <div className="max-h-36 overflow-auto rounded-lg border border-outline-variant bg-surface-container p-1.5 space-y-1">
+              {libraries.length === 0 && (
+                <div className="text-xs text-red-500 font-medium px-1.5 py-2 text-center">
+                  请先创建文献库
+                </div>
+              )}
               {libraries.map((lib) => {
                 const checked = selectedLibraryIds.includes(lib.library_id);
                 return (
@@ -420,15 +425,15 @@ export default function App() {
             <div className="grid grid-cols-3 gap-2 text-center">
               <div className="p-2 bg-surface-container rounded-lg">
                 <p className="text-sm font-bold text-on-surface">{nodeCount}</p>
-                <p className="text-[9px] text-outline font-mono uppercase">Nodes</p>
+                <p className="text-[9px] text-outline font-mono uppercase">节点</p>
               </div>
               <div className="p-2 bg-surface-container rounded-lg">
                 <p className="text-sm font-bold text-on-surface">{edgeCount}</p>
-                <p className="text-[9px] text-outline font-mono uppercase">Edges</p>
+                <p className="text-[9px] text-outline font-mono uppercase">边</p>
               </div>
               <div className="p-2 bg-surface-container rounded-lg">
                 <p className="text-sm font-bold text-on-surface">{paperCount}</p>
-                <p className="text-[9px] text-outline font-mono uppercase">Papers</p>
+                <p className="text-[9px] text-outline font-mono uppercase">论文</p>
               </div>
             </div>
           </div>
@@ -443,7 +448,7 @@ export default function App() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-outline group-focus-within:text-secondary transition-colors" />
                 <input
                   type="text"
-                  placeholder="Search variables, papers..."
+                  placeholder="搜索变量、论文..."
                   className="electron-no-drag w-full bg-surface-container border border-outline-variant rounded-lg px-10 py-1.5 text-sm font-mono focus:ring-1 focus:ring-secondary/30 outline-none transition-all placeholder:text-outline"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && e.currentTarget.value.trim()) {
@@ -458,7 +463,7 @@ export default function App() {
             <div className="electron-no-drag flex items-center gap-4">
               <button className="electron-no-drag text-on-surface-variant hover:text-secondary transition-all flex items-center gap-1.5 focus:outline-none">
                 <Zap className="w-4 h-4" />
-                <span className="text-[11px] font-mono uppercase tracking-wider">Live</span>
+                <span className="text-[11px] font-mono uppercase tracking-wider">活跃</span>
               </button>
               <button className="electron-no-drag text-on-surface-variant hover:text-secondary transition-all relative focus:outline-none">
                 <Bell className="w-4 h-4" />

@@ -159,10 +159,9 @@ export default function ReaderView() {
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center space-y-4">
           <BookOpen className="w-12 h-12 text-outline mx-auto" />
-          <h3 className="text-lg font-medium text-on-surface">Document Reader</h3>
+          <h3 className="text-lg font-medium text-on-surface">阅读器</h3>
           <p className="text-sm text-on-surface-variant max-w-md">
-            Select a paper from the Graph or Library view to read its full text.
-            Supports PDF and Markdown documents.
+            从知识图谱或文献库中选择论文阅读全文，支持 PDF 和 Markdown 文档。
           </p>
         </div>
       </div>
@@ -194,7 +193,7 @@ export default function ReaderView() {
           }}
         >
           <ArrowLeft className="w-3.5 h-3.5" />
-          Back
+          返回
         </button>
         <div className="flex items-center gap-2 ml-2">
           <FileText className="w-4 h-4 text-secondary" />
@@ -232,7 +231,7 @@ export default function ReaderView() {
           <div className="text-center space-y-3">
             <BookOpen className="w-8 h-8 text-outline mx-auto" />
             <p className="text-sm text-on-surface-variant">
-              Variable detail view - select a paper to open documents.
+              变量详情视图 - 选择论文以打开文档。
             </p>
           </div>
         </div>

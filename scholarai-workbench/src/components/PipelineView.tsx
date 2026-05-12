@@ -5,21 +5,21 @@ import { api } from '../api';
 import type { PipelineAgentEvent, PipelineJob } from '../types';
 
 const STAGE_OPTIONS = [
-  { value: '', label: 'All Stages' },
-  { value: 'accepted', label: 'Accepted' },
-  { value: 'parse_pdf', label: 'Parse PDF' },
-  { value: 'materialize_paper', label: 'Materialize Paper' },
-  { value: 'extract_entities', label: 'Extract Entities' },
-  { value: 'finalize', label: 'Finalize' },
+  { value: '', label: '全部阶段' },
+  { value: 'accepted', label: '已接受' },
+  { value: 'parse_pdf', label: '解析 PDF' },
+  { value: 'materialize_paper', label: '实体化论文' },
+  { value: 'extract_entities', label: '提取实体' },
+  { value: 'finalize', label: '完成' },
 ] as const;
 
 const STATUS_OPTIONS = [
-  { value: '', label: 'All Status' },
-  { value: 'queued', label: 'Queued' },
-  { value: 'running', label: 'Running' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'failed', label: 'Failed' },
-  { value: 'cancelled', label: 'Cancelled' },
+  { value: '', label: '全部状态' },
+  { value: 'queued', label: '排队中' },
+  { value: 'running', label: '运行中' },
+  { value: 'completed', label: '已完成' },
+  { value: 'failed', label: '失败' },
+  { value: 'cancelled', label: '已取消' },
 ] as const;
 
 type JobLogRow = { time: string; level: 'info' | 'warn' | 'error'; text: string; detail?: string };
@@ -104,14 +104,14 @@ function agentEventToLogRow(e: PipelineAgentEvent): JobLogRow {
   }
   if (method === 'item/agentMessage/delta') {
     const delta = flattenText((params as Record<string, unknown>).delta);
-    return { time: t, level: 'info', text: '模型输出增量', detail: delta || '(empty delta)' };
+    return { time: t, level: 'info', text: '模型输出增量', detail: delta || '（空增量）' };
   }
   if (method === 'item/started') {
     const item = ((params as Record<string, unknown>).item || {}) as Record<string, unknown>;
     return {
       time: t,
       level: 'info',
-      text: `步骤开始：${String(item.tool || item.type || 'unknown')}`,
+      text: `步骤开始：${String(item.tool || item.type || '未知')}`,
       detail: flattenText(item.arguments || {}),
     };
   }
@@ -122,7 +122,7 @@ function agentEventToLogRow(e: PipelineAgentEvent): JobLogRow {
     return {
       time: t,
       level: lvl,
-      text: `步骤完成：${String(item.tool || item.type || 'unknown')}（${status}）`,
+      text: `步骤完成：${String(item.tool || item.type || '未知')}（${status}）`,
       detail: flattenText(item.result || {}),
     };
   }
@@ -456,19 +456,19 @@ export default function PipelineView() {
     <div className="flex-1 flex flex-col overflow-y-auto px-8 py-8 bg-surface-container-low/30 relative">
       <div className="flex justify-between items-end mb-8">
         <div className="space-y-1.5">
-          <h2 className="text-3xl font-bold tracking-tight text-on-surface font-sans">Data Pipeline</h2>
-          <p className="text-sm text-on-surface-variant">Import papers and extract knowledge graphs</p>
+          <h2 className="text-3xl font-bold tracking-tight text-on-surface font-sans">文献导入</h2>
+          <p className="text-sm text-on-surface-variant">导入论文并提取知识图谱</p>
         </div>
         <button onClick={refresh} disabled={refreshing} className="bg-secondary hover:bg-secondary/90 text-on-secondary flex items-center gap-2 px-5 py-2.5 rounded-xl shadow-lg shadow-secondary/20 transition-all active:scale-95 disabled:opacity-50">
           <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-          <span className="font-bold text-sm">Refresh</span>
+          <span className="font-bold text-sm">刷新</span>
         </button>
       </div>
 
       <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-hidden glass-shadow mb-8">
         <div className="p-4 bg-surface-container-lowest border-b border-outline-variant flex items-center gap-3">
           <CloudUpload className="w-5 h-5 text-secondary" />
-          <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono">Upload PDF</h3>
+          <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono">上传 PDF</h3>
         </div>
         <div className="p-6">
           <div className="flex items-center gap-4">
@@ -483,8 +483,8 @@ export default function PipelineView() {
               <label htmlFor="pdf-upload" className="flex items-center gap-3 p-4 border-2 border-dashed border-outline-variant rounded-xl cursor-pointer hover:border-secondary transition-all bg-surface-container-low/30">
                 <FileText className="w-6 h-6 text-outline shrink-0" />
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-on-surface truncate">{uploadFile ? uploadFile.name : 'Choose a PDF file'}</p>
-                  <p className="text-[10px] text-outline font-mono">{uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : 'Click to browse'}</p>
+                  <p className="text-sm font-medium text-on-surface truncate">{uploadFile ? uploadFile.name : '选择 PDF 文件'}</p>
+                  <p className="text-[10px] text-outline font-mono">{uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : '点击浏览'}</p>
                 </div>
               </label>
             </label>
@@ -496,12 +496,12 @@ export default function PipelineView() {
               {uploading ? (
                 <>
                   <div className="w-4 h-4 border-2 border-on-secondary border-t-transparent rounded-full animate-spin" />
-                  Uploading...
+                  上传中...
                 </>
               ) : (
                 <>
                   <CloudUpload className="w-4 h-4" />
-                  Import
+                  导入
                 </>
               )}
             </button>
@@ -510,28 +510,28 @@ export default function PipelineView() {
       </div>
 
       <div className="flex items-center gap-3 mb-4">
-        <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono flex-1">Pipeline Jobs</h3>
-        <span className="text-[11px] text-on-surface-variant font-mono">Selected: {selectedJobs.length}</span>
+        <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono flex-1">导入任务</h3>
+        <span className="text-[11px] text-on-surface-variant font-mono">已选: {selectedJobs.length}</span>
         <button
           onClick={() => batchOperate('cancel')}
           disabled={selectedJobs.length === 0}
           className="bg-surface-container border border-outline-variant rounded-lg px-3 py-1.5 text-xs text-on-surface disabled:opacity-50"
         >
-          Batch Cancel
+          批量取消
         </button>
         <button
           onClick={() => batchOperate('retry')}
           disabled={selectedJobs.length === 0}
           className="bg-surface-container border border-outline-variant rounded-lg px-3 py-1.5 text-xs text-on-surface disabled:opacity-50"
         >
-          Batch Retry
+          批量重试
         </button>
         <button
           onClick={() => batchOperate('delete')}
           disabled={selectedJobs.length === 0}
           className="bg-surface-container border border-outline-variant rounded-lg px-3 py-1.5 text-xs text-on-surface disabled:opacity-50"
         >
-          Batch Delete
+          批量删除
         </button>
         <select
           value={statusFilter}
@@ -557,18 +557,18 @@ export default function PipelineView() {
                 <th className="px-4 py-4 w-[44px] text-center">
                   <input type="checkbox" checked={allVisibleSelected} onChange={() => toggleSelectAllVisible()} />
                 </th>
-                <th className="px-6 py-4 w-[130px]">Job ID</th>
-                <th className="px-6 py-4">Filename</th>
-                <th className="px-6 py-4 w-[140px]">Stage</th>
-                <th className="px-6 py-4 w-[160px]">Progress</th>
-                <th className="px-6 py-4 text-center w-[120px]">Actions</th>
+                <th className="px-6 py-4 w-[130px]">任务ID</th>
+                <th className="px-6 py-4">文件名</th>
+                <th className="px-6 py-4 w-[140px]">阶段</th>
+                <th className="px-6 py-4 w-[160px]">进度</th>
+                <th className="px-6 py-4 text-center w-[120px]">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant/10">
               {visibleJobs.length === 0 && (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-on-surface-variant text-sm">
-                    No pipeline jobs found.
+                    暂无导入任务
                   </td>
                 </tr>
               )}
@@ -587,7 +587,7 @@ export default function PipelineView() {
                       <div className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center text-red-500 border border-red-100 group-hover:scale-110 transition-transform">
                         <FileText className="w-4 h-4" />
                       </div>
-                      <span className="text-sm font-semibold text-on-surface break-all">{job.display_name || job.file_name || job.input_path?.split('/').pop() || 'Unknown'}</span>
+                      <span className="text-sm font-semibold text-on-surface break-all">{job.display_name || job.file_name || job.input_path?.split('/').pop() || '未知'}</span>
                     </div>
                   </td>
                   <td className="px-6 py-4 shrink-0">
@@ -608,16 +608,16 @@ export default function PipelineView() {
                   </td>
                   <td className="px-6 py-4 text-center">
                     <div className="flex justify-center gap-1.5">
-                      <button onClick={() => deleteJob(job.job_id, job.file_name || '')} className="text-outline hover:text-red-500 hover:scale-110 transition-all p-1" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => setLogJob(job)} className="text-outline hover:text-secondary hover:scale-110 transition-all p-1" title="Logs"><Terminal className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => deleteJob(job.job_id, job.file_name || '')} className="text-outline hover:text-red-500 hover:scale-110 transition-all p-1" title="删除"><Trash2 className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => setLogJob(job)} className="text-outline hover:text-secondary hover:scale-110 transition-all p-1" title="日志"><Terminal className="w-3.5 h-3.5" /></button>
                       {job.status === 'completed' && (
-                        <button onClick={() => setSelectedJob(job)} className="text-outline hover:text-secondary hover:scale-110 transition-all p-1" title="Detail"><Info className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setSelectedJob(job)} className="text-outline hover:text-secondary hover:scale-110 transition-all p-1" title="详情"><Info className="w-3.5 h-3.5" /></button>
                       )}
                       {(job.status === 'queued' || job.status === 'running') && job.can_cancel && (
-                        <button onClick={() => cancelJob(job.job_id)} className="text-outline hover:text-error hover:scale-110 transition-all p-1" title="Cancel"><XCircle className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => cancelJob(job.job_id)} className="text-outline hover:text-error hover:scale-110 transition-all p-1" title="取消"><XCircle className="w-3.5 h-3.5" /></button>
                       )}
                       {(job.status === 'failed' || job.status === 'cancelled') && job.can_retry && (
-                        <button onClick={() => retryJob(job.job_id)} className="text-outline hover:text-secondary hover:scale-110 transition-all p-1" title="Retry"><RefreshCw className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => retryJob(job.job_id)} className="text-outline hover:text-secondary hover:scale-110 transition-all p-1" title="重试"><RefreshCw className="w-3.5 h-3.5" /></button>
                       )}
                     </div>
                   </td>
@@ -631,15 +631,15 @@ export default function PipelineView() {
       {selectedJob && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center" onClick={() => setSelectedJob(null)}>
           <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl p-8 max-w-lg w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-sm font-bold text-on-surface uppercase tracking-widest font-mono mb-4">Job Detail</h3>
+            <h3 className="text-sm font-bold text-on-surface uppercase tracking-widest font-mono mb-4">任务详情</h3>
             <div className="space-y-3 text-sm">
-              <div className="flex justify-between"><span className="text-on-surface-variant">Job ID</span><span className="font-mono text-on-surface">{selectedJob.job_id}</span></div>
-              <div className="flex justify-between"><span className="text-on-surface-variant">Status</span><span className="font-mono text-on-surface">{selectedJob.status}</span></div>
-              <div className="flex justify-between"><span className="text-on-surface-variant">Stage</span><span className="font-mono text-on-surface">{selectedJob.stage_label || selectedJob.stage || '-'}</span></div>
-              <div className="flex justify-between"><span className="text-on-surface-variant">Library</span><span className="font-mono text-on-surface">{selectedJob.library_id}</span></div>
+              <div className="flex justify-between"><span className="text-on-surface-variant">任务ID</span><span className="font-mono text-on-surface">{selectedJob.job_id}</span></div>
+              <div className="flex justify-between"><span className="text-on-surface-variant">状态</span><span className="font-mono text-on-surface">{selectedJob.status}</span></div>
+              <div className="flex justify-between"><span className="text-on-surface-variant">阶段</span><span className="font-mono text-on-surface">{selectedJob.stage_label || selectedJob.stage || '-'}</span></div>
+              <div className="flex justify-between"><span className="text-on-surface-variant">文献库</span><span className="font-mono text-on-surface">{selectedJob.library_id}</span></div>
               {selectedJob.error_detail && <div className="bg-error-container/10 border border-error/20 rounded-lg p-3 text-sm text-error">{selectedJob.error_detail}</div>}
             </div>
-            <button onClick={() => setSelectedJob(null)} className="mt-6 w-full py-2 bg-surface-container border border-outline-variant rounded-lg text-sm font-medium hover:bg-surface-container-high transition-all">Close</button>
+            <button onClick={() => setSelectedJob(null)} className="mt-6 w-full py-2 bg-surface-container border border-outline-variant rounded-lg text-sm font-medium hover:bg-surface-container-high transition-all">关闭</button>
           </div>
         </div>
       )}
@@ -648,14 +648,14 @@ export default function PipelineView() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center" onClick={() => setLogJob(null)}>
           <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl p-6 max-w-4xl w-full mx-4 shadow-2xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-on-surface uppercase tracking-widest font-mono">Task Logs</h3>
-              <button onClick={() => setLogJob(null)} className="px-3 py-1.5 bg-surface-container border border-outline-variant rounded text-xs">Close</button>
+              <h3 className="text-sm font-bold text-on-surface uppercase tracking-widest font-mono">任务日志</h3>
+              <button onClick={() => setLogJob(null)} className="px-3 py-1.5 bg-surface-container border border-outline-variant rounded text-xs">关闭</button>
             </div>
             <div className="text-xs font-mono text-on-surface-variant mb-4">
-              <div>Job: {logJob.job_id}</div>
-              <div>File: {logJob.display_name || logJob.file_name || '-'}</div>
-              <div>Status: {logJob.status} / Stage: {logJob.stage_code || logJob.stage || '-'}</div>
-              <div>Agent Event Stream: {liveLogConnected ? 'connected' : 'disconnected'}</div>
+              <div>任务: {logJob.job_id}</div>
+              <div>文件: {logJob.display_name || logJob.file_name || '-'}</div>
+              <div>状态: {logJob.status} / 阶段: {logJob.stage_code || logJob.stage || '-'}</div>
+              <div>事件流: {liveLogConnected ? '已连接' : '已断开'}</div>
             </div>
             <div className="space-y-2">
               {liveJobLogs.map((r, idx) => (
@@ -674,7 +674,7 @@ export default function PipelineView() {
                   {expandedLogItems[`${r.time}-${idx}`] && (
                     <div className="px-3 pb-3">
                       <div className="text-xs text-on-surface-variant whitespace-pre-wrap break-all bg-surface-container p-2 rounded border border-outline-variant/40">
-                        {r.detail || '(no detail)'}
+                        {r.detail || '（无详情）'}
                       </div>
                     </div>
                   )}

@@ -136,7 +136,7 @@ export default function GraphView() {
     <div className="flex-1 bg-surface-container-low relative">
       <div className={`absolute top-3 left-4 right-4 lg:right-[30rem] z-30 rounded-2xl border border-secondary/20 bg-surface-container-lowest/95 backdrop-blur shadow-2xl shadow-black/10 transition-all ${expanded ? 'max-h-[64vh]' : 'max-h-12'} overflow-visible`}>
         <div className="h-12 px-3 flex items-center gap-2 border-b border-outline-variant/30 bg-linear-to-r from-secondary-container/20 to-surface-container-lowest rounded-t-2xl">
-          <div className="text-[11px] font-mono text-outline-variant hidden md:block">Variable Semantic Search</div>
+          <div className="text-[11px] font-mono text-outline-variant hidden md:block">变量语义搜索</div>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -176,7 +176,7 @@ export default function GraphView() {
           ) : (
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
-                <div className="text-xs font-mono uppercase tracking-wider text-outline-variant">Matched Variables</div>
+                <div className="text-xs font-mono uppercase tracking-wider text-outline-variant">匹配变量</div>
                 <div className="text-[11px] text-outline">共 {searchResult.length} 条</div>
               </div>
               {searchResult.map((row) => {

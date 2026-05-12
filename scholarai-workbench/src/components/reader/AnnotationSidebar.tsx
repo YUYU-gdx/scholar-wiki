@@ -127,7 +127,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
   const updateNoteBlockInMarkdown = async (noteId: string, selectedText: string, noteText: string, notePath?: string) =>
     upsertNoteInMarkdown(resolveMarkdownPath(notePath), noteId, selectedText, noteText);
 
-  const handleSave = async (id: string) => {
+  const handle保存 = async (id: string) => {
     if (id.startsWith('rn:')) {
       const rid = id.slice(3);
       const row = readerNotes.find((x) => x.id === rid);
@@ -159,12 +159,12 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
   return (
     <div className={`border-l border-outline-variant bg-surface-container-lowest flex flex-col transition-all duration-200 ${isOpen ? 'w-72' : 'w-0 overflow-hidden'}`}>
       <div className="px-3 py-2 border-b border-outline-variant flex items-center justify-between">
-        <span className="text-xs font-mono font-bold text-on-surface uppercase tracking-wider">Notes ({annotations.length + readerNotes.length})</span>
+        <span className="text-xs font-mono font-bold text-on-surface uppercase tracking-wider">笔记 ({annotations.length + readerNotes.length})</span>
         <button onClick={onToggle} className="text-xs text-outline hover:text-on-surface">&times;</button>
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {sorted.length === 0 && sortedReaderNotes.length === 0 && (
-          <p className="text-xs text-on-surface-variant text-center py-8">No annotations yet</p>
+          <p className="text-xs text-on-surface-variant text-center py-8">暂无标注</p>
         )}
         {sortedReaderNotes.map((rn) => {
           const rowId = `rn:${rn.id}`;
@@ -182,13 +182,13 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
                 <div className="mt-1">
                   <textarea className="w-full text-xs p-1 border border-outline-variant rounded bg-surface-container" rows={2} value={editComment} onChange={(e) => setEditComment(e.target.value)} />
                   <div className="flex gap-1 mt-1">
-                    <button className="text-[10px] px-2 py-0.5 bg-primary-container text-on-primary-container rounded" onClick={() => handleSave(rowId)}>Save</button>
-                    <button className="text-[10px] px-2 py-0.5 text-outline" onClick={() => setEditingId(null)}>Cancel</button>
+                    <button className="text-[10px] px-2 py-0.5 bg-primary-container text-on-primary-container rounded" onClick={() => handle保存(rowId)}>保存</button>
+                    <button className="text-[10px] px-2 py-0.5 text-outline" onClick={() => setEditingId(null)}>取消</button>
                   </div>
                 </div>
               ) : (
                 <button className="text-xs text-secondary mt-1 italic text-left w-full" onClick={() => { setEditingId(rowId); setEditComment(rn.note_text); }}>
-                  {rn.note_text || 'Add note...'}
+                  {rn.note_text || '添加笔记...'}
                 </button>
               )}
             </div>
@@ -226,8 +226,8 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
                   onChange={(e) => setEditComment(e.target.value)}
                 />
                 <div className="flex gap-1 mt-1">
-                  <button className="text-[10px] px-2 py-0.5 bg-primary-container text-on-primary-container rounded" onClick={() => handleSave(ann.id)}>Save</button>
-                  <button className="text-[10px] px-2 py-0.5 text-outline" onClick={() => setEditingId(null)}>Cancel</button>
+                  <button className="text-[10px] px-2 py-0.5 bg-primary-container text-on-primary-container rounded" onClick={() => handle保存(ann.id)}>保存</button>
+                  <button className="text-[10px] px-2 py-0.5 text-outline" onClick={() => setEditingId(null)}>取消</button>
                 </div>
               </div>
             ) : ann.comment ? (
@@ -237,7 +237,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
                 className="text-[10px] text-outline hover:text-secondary mt-1"
                 onClick={(e) => { e.stopPropagation(); setEditingId(ann.id); setEditComment(ann.comment); }}
               >
-                Add note...
+                添加笔记...
               </button>
             )}
           </div>

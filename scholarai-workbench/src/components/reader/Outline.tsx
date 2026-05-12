@@ -31,7 +31,7 @@ export default function Outline({ content, activeLine = -1, onGoToLine }: Outlin
   if (items.length === 0) {
     return (
       <div className="w-48 shrink-0 border-r border-outline-variant bg-surface-container-lowest p-3">
-        <p className="text-xs text-outline">No headings</p>
+        <p className="text-xs text-outline">无标题</p>
       </div>
     );
   }
@@ -39,7 +39,7 @@ export default function Outline({ content, activeLine = -1, onGoToLine }: Outlin
   return (
     <div className="w-48 shrink-0 border-r border-outline-variant bg-surface-container-lowest overflow-y-auto">
       <div className="p-2">
-        <h4 className="text-[11px] font-medium text-on-surface-variant px-1.5 py-1 mb-1">Outline</h4>
+        <h4 className="text-[11px] font-medium text-on-surface-variant px-1.5 py-1 mb-1">大纲</h4>
         {items.map((item) => {
           const isExact = item.line === activeLine;
           return (

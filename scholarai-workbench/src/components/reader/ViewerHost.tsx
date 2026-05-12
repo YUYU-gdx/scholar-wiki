@@ -60,7 +60,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
       <div className="flex-1 flex items-center justify-center bg-surface-container-low">
         <div className="text-center space-y-3">
           <FileText className="w-8 h-8 text-outline animate-pulse mx-auto" />
-          <p className="text-sm text-on-surface-variant">Loading document...</p>
+          <p className="text-sm text-on-surface-variant">加载文档中...</p>
         </div>
       </div>
     );
@@ -82,7 +82,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
       <div className="flex-1 flex items-center justify-center bg-surface-container-low">
         <div className="text-center space-y-3">
           <FileText className="w-8 h-8 text-outline mx-auto" />
-          <p className="text-sm text-on-surface-variant">No readable file available for this paper.</p>
+          <p className="text-sm text-on-surface-variant">该论文无可读文件。</p>
           <p className="text-xs text-outline">{paperId}</p>
         </div>
       </div>
@@ -165,10 +165,10 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
                 : 'bg-surface-container-lowest/90 backdrop-blur border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
             }`}
             onClick={() => setSidebarOpen((v) => !v)}
-            title="Notes"
+            title="笔记"
           >
             <StickyNote className="w-3.5 h-3.5" />
-            <span className="hidden group-hover:inline">Notes</span>
+            <span className="hidden group-hover:inline">笔记</span>
           </button>
           <button
             className={`inline-flex items-center justify-center gap-2 w-11 h-11 rounded-xl border text-xs font-semibold shadow-sm transition-all group hover:w-[118px] hover:justify-start hover:px-3 ${
@@ -177,10 +177,10 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
                 : 'bg-surface-container-lowest/90 backdrop-blur border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
             }`}
             onClick={() => setBacklinksOpen((v) => !v)}
-            title="Links"
+            title="链接"
           >
             <Link2 className="w-3.5 h-3.5" />
-            <span className="hidden group-hover:inline">Links</span>
+            <span className="hidden group-hover:inline">链接</span>
           </button>
           <button
             className={`inline-flex items-center justify-center gap-2 w-11 h-11 rounded-xl border text-xs font-semibold shadow-sm transition-all group hover:w-[118px] hover:justify-start hover:px-3 ${
@@ -189,10 +189,10 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
                 : 'bg-surface-container-lowest/90 backdrop-blur border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
             }`}
             onClick={() => setEntitiesOpen((v) => !v)}
-            title="Entities"
+            title="实体"
           >
             <Network className="w-3.5 h-3.5" />
-            <span className="hidden group-hover:inline">Entities</span>
+            <span className="hidden group-hover:inline">实体</span>
           </button>
           <button
             className={`inline-flex items-center justify-center gap-2 w-11 h-11 rounded-xl border text-xs font-semibold shadow-sm transition-all group hover:w-[118px] hover:justify-start hover:px-3 ${
@@ -201,10 +201,10 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
                 : 'bg-surface-container-lowest/90 backdrop-blur border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-secondary/40 hover:bg-surface-container-low'
             }`}
             onClick={() => setChatOpen((v) => !v)}
-            title="Reader Chat"
+            title="阅读器对话"
           >
             <MessageSquare className="w-3.5 h-3.5" />
-            <span className="hidden group-hover:inline">Reader Chat</span>
+            <span className="hidden group-hover:inline">阅读器对话</span>
           </button>
         </div>
       )}
@@ -217,7 +217,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
             }`}
             onClick={() => setSidebarOpen((v) => !v)}
           >
-            <StickyNote className="w-3.5 h-3.5" /> Notes
+            <StickyNote className="w-3.5 h-3.5" /> 笔记
           </button>
           <button
             className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
@@ -225,7 +225,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
             }`}
             onClick={() => setBacklinksOpen((v) => !v)}
           >
-            <Link2 className="w-3.5 h-3.5" /> Links
+            <Link2 className="w-3.5 h-3.5" /> 链接
           </button>
           <button
             className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
@@ -233,7 +233,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
             }`}
             onClick={() => setEntitiesOpen((v) => !v)}
           >
-            <Network className="w-3.5 h-3.5" /> Entities
+            <Network className="w-3.5 h-3.5" /> 实体
           </button>
           <button
             className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
@@ -241,7 +241,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
             }`}
             onClick={() => setChatOpen((v) => !v)}
           >
-            <MessageSquare className="w-3.5 h-3.5" /> Chat
+            <MessageSquare className="w-3.5 h-3.5" /> 对话
           </button>
         </div>
       )}

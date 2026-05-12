@@ -325,13 +325,13 @@ export default function LibraryView() {
     <div className="flex-1 overflow-auto px-8 py-6 space-y-6">
       <div className="flex items-center gap-3">
         <Library className="w-5 h-5 text-secondary" />
-        <h2 className="text-2xl font-medium tracking-tight text-on-surface">Research Library</h2>
-        <span className="text-[10px] font-mono font-bold text-outline-variant bg-surface-container px-2 py-0.5 rounded">Selected: {selectedLibraryIds.join(', ')}</span>
+        <h2 className="text-2xl font-medium tracking-tight text-on-surface">文献库</h2>
+        <span className="text-[10px] font-mono font-bold text-outline-variant bg-surface-container px-2 py-0.5 rounded">已选: {selectedLibraryIds.join(', ')}</span>
       </div>
 
       <div className="flex items-center gap-2 p-1 bg-surface-container-low w-fit rounded-xl border border-outline-variant">
-        <button onClick={() => setLibraryMode('papers')} className={`px-4 py-1.5 text-xs font-bold rounded-lg ${mode === 'papers' ? 'bg-surface-container-lowest text-on-surface' : 'text-outline'}`}>Papers</button>
-        <button onClick={() => setLibraryMode('variables')} className={`px-4 py-1.5 text-xs font-bold rounded-lg ${mode === 'variables' ? 'bg-surface-container-lowest text-on-surface' : 'text-outline'}`}>Variables</button>
+        <button onClick={() => setLibraryMode('papers')} className={`px-4 py-1.5 text-xs font-bold rounded-lg ${mode === 'papers' ? 'bg-surface-container-lowest text-on-surface' : 'text-outline'}`}>论文</button>
+        <button onClick={() => setLibraryMode('variables')} className={`px-4 py-1.5 text-xs font-bold rounded-lg ${mode === 'variables' ? 'bg-surface-container-lowest text-on-surface' : 'text-outline'}`}>变量</button>
       </div>
 
       {mode === 'papers' && (
@@ -349,6 +349,11 @@ export default function LibraryView() {
           }}
           tabIndex={-1}
         >
+          {paperList.length === 0 && (
+            <div className="text-sm text-on-surface-variant text-center py-8">
+              暂未导入文献
+            </div>
+          )}
           {paperList.map((p, idx) => {
             const expanded = !!expandedPapers[p.scopedKey];
             const previewVars = p.variables.slice(0, 5);
@@ -498,11 +503,11 @@ export default function LibraryView() {
         <section>
           <div className="flex items-center gap-3 mb-4">
             <Layers className="w-5 h-5 text-secondary" />
-            <h3 className="text-xl font-medium text-on-surface">Variables and Concepts</h3>
+            <h3 className="text-xl font-medium text-on-surface">变量与概念</h3>
           </div>
           <div className="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden">
             <table className="w-full text-left border-collapse">
-              <thead className="bg-surface-container-low border-b border-outline-variant"><tr><th className="px-4 py-3 text-[11px] font-mono uppercase text-outline">Variable</th><th className="px-4 py-3 text-[11px] font-mono uppercase text-outline">Concept</th><th className="px-4 py-3 text-[11px] font-mono uppercase text-outline">Source Paper</th><th className="px-4 py-3" /></tr></thead>
+              <thead className="bg-surface-container-low border-b border-outline-variant"><tr><th className="px-4 py-3 text-[11px] font-mono uppercase text-outline">变量</th><th className="px-4 py-3 text-[11px] font-mono uppercase text-outline">概念</th><th className="px-4 py-3 text-[11px] font-mono uppercase text-outline">来源论文</th><th className="px-4 py-3" /></tr></thead>
               <tbody className="divide-y divide-outline-variant">
                 {variableRows.map((row) => (
                   <tr key={`${row.libraryId}-${row.id}`} className="hover:bg-surface-container-low transition-colors">

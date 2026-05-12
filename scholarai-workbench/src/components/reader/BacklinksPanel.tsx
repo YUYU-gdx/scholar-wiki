@@ -93,11 +93,11 @@ export default function BacklinksPanel({ paperId, libraryId, currentMarkdownPath
     <div className="w-64 shrink-0 border-l border-outline-variant bg-surface-container-lowest overflow-y-auto">
       <div className="p-3">
         <div className="flex items-center justify-between mb-2">
-          <h4 className="text-xs font-medium text-on-surface-variant">Backlinks ({entries.length})</h4>
+          <h4 className="text-xs font-medium text-on-surface-variant">反向链接 ({entries.length})</h4>
           <button className="text-xs text-outline hover:text-on-surface" onClick={onToggle}>×</button>
         </div>
-        {loading && <p className="text-xs text-outline">Searching...</p>}
-        {!loading && entries.length === 0 && <p className="text-xs text-outline">No backlinks found</p>}
+        {loading && <p className="text-xs text-outline">搜索中...</p>}
+        {!loading && entries.length === 0 && <p className="text-xs text-outline">未找到反向链接</p>}
         {entries.map((entry, i) => (
           <div key={i} className="mb-2 p-2 rounded bg-surface-container text-xs">
             <div className="flex items-center gap-1 mb-0.5">

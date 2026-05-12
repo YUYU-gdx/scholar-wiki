@@ -19,8 +19,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function renderScalar(value: unknown): string {
-  if (value === null || value === undefined) return '(empty)';
-  if (typeof value === 'string') return value || '(empty)';
+  if (value === null || value === undefined) return '（空）';
+  if (typeof value === 'string') return value || '（空）';
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return stringifyToolPayload(value);
 }
@@ -53,10 +53,10 @@ function extractToolName(toolCall: Record<string, unknown>): string {
   const normalized = raw.split('.').pop() || raw;
   const key = normalized.toLowerCase();
   if (key.includes('rag_search') || key.includes('rag')) return 'RAG';
-  if (key.includes('grep') || key.includes('rg')) return 'Local File Search';
-  if (key.includes('graph_search')) return 'Graph Search';
-  if (key.includes('literature_search')) return 'Literature Search';
-  if (key.includes('literature_fetch_object')) return 'Fetch Object';
+  if (key.includes('grep') || key.includes('rg')) return '本地文件搜索';
+  if (key.includes('graph_search')) return '图谱检索';
+  if (key.includes('literature_search')) return '文献检索';
+  if (key.includes('literature_fetch_object')) return '对象读取';
   return normalized || 'tool';
 }
 
@@ -162,21 +162,21 @@ function toTimelineRow(raw: unknown): TimelineRow | null {
   }
   if (evt === 'agent_item_started' || evt === 'agent_item_completed') {
     const item = String(row.item || row.kind || '步骤').trim();
-    const title = `${evt.endsWith('started') ? '步骤开始' : '步骤完成'}：${item || 'unknown'}`;
+    const title = `${evt.endsWith('started') ? '步骤开始' : '步骤完成'}：${item || '未知'}`;
     return { title, detail: stringifyToolPayload(row.detail || row), state, kind: 'event' };
   }
   if (evt === 'agent_item_delta') {
     const text = String(row.text || row.summary || '').trim();
-    return { title: '模型增量输出', detail: text || '(empty)', state: 'running', kind: 'delta_text' };
+    return { title: '模型增量输出', detail: text || '（空）', state: 'running', kind: 'delta_text' };
   }
   if (evt === 'agent_item_thinking') {
     const detail = String(row.detail || row.summary || '').trim();
-    return { title: '思考过程', detail: detail || '(empty)', state: 'running', kind: 'event' };
+    return { title: '思考过程', detail: detail || '（空）', state: 'running', kind: 'event' };
   }
   if (evt === 'status') {
     const stage = String(row.stage || '').trim();
     const label = String(row.label || '').trim();
-    return { title: `状态：${stage || 'unknown'}`, detail: label || stringifyToolPayload(row), state, kind: 'event' };
+    return { title: `状态：${stage || '未知'}`, detail: label || stringifyToolPayload(row), state, kind: 'event' };
   }
   if (evt === 'citation') {
     return { title: '检索事件', detail: stringifyToolPayload(row), state: 'info', kind: 'event' };
@@ -445,7 +445,7 @@ export default function ChatView() {
     <div className="flex-1 flex overflow-hidden">
       <aside className="w-72 border-r border-outline-variant bg-surface-container-low flex flex-col">
         <div className="p-4 border-b border-outline-variant flex justify-between items-center">
-          <h2 className="text-[10px] font-bold text-on-surface uppercase tracking-widest font-mono">Sessions</h2>
+          <h2 className="text-[10px] font-bold text-on-surface uppercase tracking-widest font-mono">会话</h2>
           <button onClick={createSession} disabled={creating} className="text-secondary hover:bg-secondary-container/20 p-1.5 rounded-lg transition-all disabled:opacity-40">
             <PlusSquare className="w-4 h-4" />
           </button>
@@ -479,11 +479,11 @@ export default function ChatView() {
               <div className="w-16 h-16 bg-secondary-container/30 border border-secondary/20 rounded-2xl flex items-center justify-center mx-auto">
                 <Bot className="w-8 h-8 text-secondary" />
               </div>
-              <h3 className="text-lg font-medium text-on-surface">Select or create a session</h3>
-              <p className="text-sm text-on-surface-variant">Choose a session from the sidebar or create a new one.</p>
+              <h3 className="text-lg font-medium text-on-surface">选择或创建会话</h3>
+              <p className="text-sm text-on-surface-variant">从侧边栏选择会话或创建新会话</p>
               <button onClick={createSession} disabled={creating} className="bg-secondary text-on-secondary px-6 py-2.5 rounded-xl text-sm font-bold hover:opacity-90 transition-all flex items-center gap-2 mx-auto disabled:opacity-50">
                 {creating ? <span className="inline-block w-4 h-4 border-2 border-on-secondary/30 border-t-on-secondary rounded-full animate-spin" /> : <PlusSquare className="w-4 h-4" />}
-                {creating ? 'Creating...' : 'New Session'}
+                {creating ? '创建中...' : '新会话'}
               </button>
             </div>
           </div>
@@ -502,7 +502,7 @@ export default function ChatView() {
                       <>
                         {(!Array.isArray(m.tool_trace) || m.tool_trace.length === 0) && (
                           <div className="font-serif text-[15px] text-on-surface leading-relaxed antialiased whitespace-pre-wrap">
-                            {ensureCitationMarkers(m.content || '', Array.isArray(m.citations) ? m.citations : []) || (m.status === 'running' ? 'Thinking...' : '')}
+                            {ensureCitationMarkers(m.content || '', Array.isArray(m.citations) ? m.citations : []) || (m.status === 'running' ? '思考中...' : '')}
                             {m.status === 'running' && <span className="animate-pulse-soft"> ▌</span>}
                           </div>
                         )}
@@ -513,7 +513,7 @@ export default function ChatView() {
                         )}
                         {Array.isArray(m.citations) && m.citations.length > 0 && (
                           <div className="mt-4 rounded-xl border border-outline-variant bg-surface-container-low p-3 space-y-2">
-                            <div className="text-[10px] font-mono uppercase tracking-widest text-outline">References</div>
+                            <div className="text-[10px] font-mono uppercase tracking-widest text-outline">参考文献</div>
                             {m.citations.map((c, idx) => (
                               <button
                                 key={`${m.message_id}-c-${idx}`}
@@ -522,7 +522,7 @@ export default function ChatView() {
                               >
                                 <div className="flex items-center gap-2 mb-1">
                                   <span className="text-[9px] font-mono font-bold bg-secondary-container/20 text-secondary px-1.5 py-0.5 rounded border border-secondary/20">[{idx + 1}]</span>
-                                  <span className="text-xs text-on-surface-variant group-hover:text-secondary transition-colors truncate">{c.title || c.paper_id || c.id || 'Citation'}</span>
+                                  <span className="text-xs text-on-surface-variant group-hover:text-secondary transition-colors truncate">{c.title || c.paper_id || c.id || '引用'}</span>
                                 </div>
                                 <div className="text-[11px] text-outline line-clamp-2">
                                   {String(c.text || normalizeCitationText(c).paragraph || normalizeCitationText(c).sentence || '').trim()}
@@ -590,14 +590,14 @@ export default function ChatView() {
                     className={`px-4 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all ${mode === 'fast' ? 'bg-surface-container-lowest text-on-surface precision-shadow' : 'text-outline hover:text-on-surface-variant'}`}
                   >
                     <Zap className="w-3.5 h-3.5" />
-                    Fast
+                    快速
                   </button>
                   <button
                     onClick={() => setMode('agent')}
                     className={`px-4 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all ${mode === 'agent' ? 'bg-surface-container-lowest text-on-surface precision-shadow' : 'text-outline hover:text-on-surface-variant'}`}
                   >
                     <Activity className="w-3.5 h-3.5" />
-                    Agent
+                    智能
                   </button>
                 </div>
 
@@ -607,7 +607,7 @@ export default function ChatView() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
                     className="w-full p-4 text-sm border-none focus:ring-0 resize-none font-sans min-h-[80px] outline-none bg-transparent"
-                    placeholder="Ask about your research..."
+                    placeholder="询问您的研究问题..."
                     disabled={submitting || !!runningAssistant}
                     rows={3}
                   />
@@ -618,7 +618,7 @@ export default function ChatView() {
                       disabled={submitting || !input.trim() || !!runningAssistant}
                       className="bg-secondary text-on-secondary px-5 py-2 rounded-xl text-xs font-bold hover:opacity-90 transition-all flex items-center gap-2 shadow-lg shadow-secondary/10 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Send
+                      发送
                       <Send className="w-4 h-4" />
                     </button>
                   </div>
@@ -633,24 +633,24 @@ export default function ChatView() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center" onClick={() => setCitationModal(null)}>
           <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl p-8 max-w-lg w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-on-surface uppercase tracking-widest font-mono">Citation Detail</h3>
+              <h3 className="text-sm font-bold text-on-surface uppercase tracking-widest font-mono">引用详情</h3>
               <button onClick={() => setCitationModal(null)} className="text-outline hover:text-on-surface transition-colors"><X className="w-4 h-4" /></button>
             </div>
             <div className="space-y-4">
               {citationModal.sentence && (
                 <div>
-                  <span className="text-[10px] font-mono text-secondary uppercase tracking-widest block mb-2">Hit Sentence</span>
+                  <span className="text-[10px] font-mono text-secondary uppercase tracking-widest block mb-2">命中句子</span>
                   <pre className="whitespace-pre-wrap text-sm text-on-surface bg-surface-container-low p-4 rounded-xl border border-outline-variant">{citationModal.sentence}</pre>
                 </div>
               )}
               {citationModal.paragraph && (
                 <div>
-                  <span className="text-[10px] font-mono text-secondary uppercase tracking-widest block mb-2">Paragraph</span>
+                  <span className="text-[10px] font-mono text-secondary uppercase tracking-widest block mb-2">段落</span>
                   <pre className="whitespace-pre-wrap text-sm text-on-surface bg-surface-container-low p-4 rounded-xl border border-outline-variant max-h-60 overflow-auto custom-scrollbar">{citationModal.paragraph}</pre>
                 </div>
               )}
               <div className="text-[11px] text-outline font-mono">
-                {citationModal.paper_id && <span>Paper: {citationModal.paper_id}</span>}
+                {citationModal.paper_id && <span>论文: {citationModal.paper_id}</span>}
                 {citationModal.title && <span className="ml-4">{citationModal.title}</span>}
               </div>
             </div>
@@ -662,7 +662,7 @@ export default function ChatView() {
         <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-50 flex items-center justify-center">
           <div className="bg-surface-container-lowest border border-outline-variant rounded-xl px-6 py-4 shadow-2xl flex items-center gap-3">
             <div className="w-4 h-4 border-2 border-secondary border-t-transparent rounded-full animate-spin" />
-            <span className="text-sm font-medium text-on-surface">Loading session...</span>
+            <span className="text-sm font-medium text-on-surface">加载会话中...</span>
           </div>
         </div>
       )}
