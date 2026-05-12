@@ -19,6 +19,8 @@ wheels/
 # Local editor / agent state
 .obsidian/
 .learnings/
+.worktrees/
+.claude/
 
 # Generated run artifacts
 outputs/
