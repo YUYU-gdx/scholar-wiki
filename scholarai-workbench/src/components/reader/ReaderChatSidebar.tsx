@@ -181,7 +181,7 @@ export default function ReaderChatSidebar({
   if (!isOpen && showClosedToggle) {
     return (
       <button
-        className="absolute right-4 top-64 px-2.5 py-1.5 text-[10px] font-mono bg-surface-container border border-outline-variant rounded-lg hover:bg-surface-container-low z-10 shadow-sm inline-flex items-center gap-1"
+        className="absolute right-4 top-64 px-2.5 py-1.5 text-xs font-mono bg-surface-container border border-outline-variant rounded-lg hover:bg-surface-container-low z-10 shadow-sm inline-flex items-center gap-1"
         onClick={onToggle}
       >
         <PanelRightOpen className="w-3 h-3" />
@@ -241,7 +241,7 @@ export default function ReaderChatSidebar({
                         );
                       }
                       return (
-                        <div key={itemKey} className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-[10px] font-mono overflow-hidden">
+                        <div key={itemKey} className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-xs font-mono overflow-hidden">
                           <button
                             onClick={() => setExpandedToolItems((prev) => ({ ...prev, [itemKey]: !itemExpanded }))}
                             className="w-full text-left p-2.5 flex items-center justify-between hover:bg-surface-container-low transition-colors"
@@ -252,7 +252,7 @@ export default function ReaderChatSidebar({
                           {itemExpanded && (
                             <div className="px-2.5 pb-2.5 space-y-2">
                               <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30">
-                                <div className="text-[11px] text-on-surface-variant break-words whitespace-pre-wrap">{timeline.detail}</div>
+                                <div className="text-[13px] text-on-surface-variant break-words whitespace-pre-wrap">{timeline.detail}</div>
                               </div>
                             </div>
                           )}
@@ -267,7 +267,7 @@ export default function ReaderChatSidebar({
       </div>
 
       <div className="p-4 border-t border-outline-variant bg-surface-container-low">
-        <div className="text-[10px] text-outline mb-2">发送时会自动拼接文献绝对路径提示</div>
+        <div className="text-xs text-outline mb-2">发送时会自动拼接文献绝对路径提示</div>
         <div className="flex items-end gap-2">
           <textarea
             value={input}

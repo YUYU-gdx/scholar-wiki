@@ -202,7 +202,7 @@ export default function ReaderView() {
           </span>
         </div>
         {displayPath && (
-          <span className="text-[10px] text-outline truncate ml-auto max-w-[48%]" title={displayPath}>
+          <span className="text-xs text-outline truncate ml-auto max-w-[48%]" title={displayPath}>
             {displayPath}
           </span>
         )}

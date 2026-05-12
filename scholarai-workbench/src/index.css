@@ -137,15 +137,18 @@
   -webkit-app-region: no-drag;
 }
 
+/* ===== Markdown Rendering ===== */
 .reader-markdown {
-  max-width: 860px;
+  max-width: 720px;
   margin: 0 auto;
   color: var(--color-on-surface);
   font-family: "Newsreader", ui-serif, Georgia, serif;
-  line-height: 1.75;
+  line-height: 1.78;
   font-size: 16px;
+  word-break: break-word;
 }
 
+/* ---- Headings ---- */
 .reader-markdown h1,
 .reader-markdown h2,
 .reader-markdown h3,
@@ -154,43 +157,119 @@
 .reader-markdown h6 {
   font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
   line-height: 1.25;
-  margin-top: 1.3em;
-  margin-bottom: 0.55em;
+  margin-top: 1.6em;
+  margin-bottom: 0.5em;
   color: var(--color-on-surface);
+  letter-spacing: -0.02em;
 }
 
-.reader-markdown h1 { font-size: 1.9rem; }
-.reader-markdown h2 { font-size: 1.5rem; }
-.reader-markdown h3 { font-size: 1.2rem; }
+.reader-markdown h1 { font-size: 1.8rem; font-weight: 700; border-bottom: 1px solid var(--color-outline-variant); padding-bottom: 0.3em; }
+.reader-markdown h2 { font-size: 1.45rem; font-weight: 600; border-bottom: 1px solid var(--color-outline-variant); padding-bottom: 0.25em; }
+.reader-markdown h3 { font-size: 1.2rem; font-weight: 600; }
+.reader-markdown h4 { font-size: 1.05rem; font-weight: 600; }
+.reader-markdown h5 { font-size: 0.95rem; font-weight: 600; color: var(--color-on-surface-variant); }
+.reader-markdown h6 { font-size: 0.85rem; font-weight: 600; color: var(--color-outline); text-transform: uppercase; letter-spacing: 0.04em; }
 
+.reader-markdown h1:first-child,
+.reader-markdown h2:first-child,
+.reader-markdown h3:first-child {
+  margin-top: 0;
+}
+
+/* ---- Paragraphs ---- */
 .reader-markdown p {
-  margin: 0.8em 0;
+  margin: 0.75em 0;
 }
 
+.reader-markdown h1 + p,
+.reader-markdown h2 + p,
+.reader-markdown h3 + p,
+.reader-markdown h4 + p {
+  margin-top: 0.3em;
+}
+
+/* ---- Links ---- */
+.reader-markdown a {
+  color: var(--color-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  transition: color 0.15s ease;
+}
+
+.reader-markdown a:hover {
+  color: var(--color-on-secondary-container);
+}
+
+/* ---- Blockquotes ---- */
 .reader-markdown blockquote {
   margin: 1em 0;
   padding: 0.65em 1em;
-  border-left: 3px solid var(--color-secondary);
+  border-left: 3px solid var(--color-outline-variant);
   background: var(--color-surface-container-low);
-  border-radius: 8px;
+  border-radius: 0 8px 8px 0;
+  color: var(--color-on-surface-variant);
 }
 
-.reader-markdown code {
-  font-family: "Work Sans", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace;
+.reader-markdown blockquote p:first-child { margin-top: 0; }
+.reader-markdown blockquote p:last-child { margin-bottom: 0; }
+
+/* ---- Callouts (injected by JS) ---- */
+.reader-markdown .callout {
+  margin: 1em 0;
+  padding: 0.85em 1em 0.85em 2.9em;
+  border-radius: 8px;
+  border-left: 4px solid;
+  position: relative;
+  font-size: 0.95em;
+}
+.reader-markdown .callout-icon {
+  position: absolute;
+  left: 0.75em;
+  top: 0.9em;
+  width: 1.2em;
+  height: 1.2em;
+  flex-shrink: 0;
+}
+.reader-markdown .callout-title {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 600;
   font-size: 0.9em;
+  margin-bottom: 0.3em;
+  color: inherit;
+}
+.reader-markdown .callout p:last-child { margin-bottom: 0; }
+
+.callout-note  { background: rgba(68, 138, 255, 0.08);  border-color: #448aff; }
+.callout-warning { background: rgba(255, 145, 0, 0.08);  border-color: #ff9100; }
+.callout-danger  { background: rgba(255, 82, 82, 0.08);   border-color: #ff5252; }
+.callout-tip     { background: rgba(0, 200, 83, 0.08);    border-color: #00c853; }
+.callout-info    { background: rgba(0, 184, 212, 0.08);   border-color: #00b8d4; }
+.callout-example { background: rgba(156, 39, 176, 0.08);  border-color: #9c27b0; }
+.callout-quote   { background: rgba(158, 158, 158, 0.08); border-color: #9e9e9e; }
+
+/* ---- Inline code ---- */
+.reader-markdown code {
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.88em;
   background: var(--color-surface-container-low);
   border: 1px solid var(--color-outline-variant);
-  border-radius: 6px;
-  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  padding: 0.15em 0.4em;
+  color: var(--color-on-surface);
 }
 
+/* ---- Code blocks ---- */
 .reader-markdown pre {
-  margin: 1em 0;
-  padding: 0.9em 1em;
+  margin: 1.1em 0;
+  padding: 1em 1em;
   border-radius: 10px;
   background: #111318;
   color: #e9edf8;
   overflow-x: auto;
+  position: relative;
+  font-size: 0.88em;
+  line-height: 1.55;
 }
 
 .reader-markdown pre code {
@@ -198,42 +277,202 @@
   border: 0;
   padding: 0;
   color: inherit;
+  font-size: inherit;
 }
 
+.reader-markdown .code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4em 1em;
+  margin: 1.1em 0 -1em 0;
+  background: #1a1d26;
+  border-radius: 10px 10px 0 0;
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.75em;
+  color: #8b949e;
+}
+
+.reader-markdown .code-block-header + pre {
+  margin-top: 0;
+  border-radius: 0 0 10px 10px;
+}
+
+.reader-markdown .code-lang-label {
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.reader-markdown .code-copy-btn {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #8b949e;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  transition: all 0.15s ease;
+}
+
+.reader-markdown .code-copy-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: #e9edf8;
+}
+
+.reader-markdown .code-copy-btn.copied {
+  color: #00c853;
+  border-color: #00c853;
+}
+
+/* ---- Highlight.js token colors ---- */
+.reader-markdown .hljs-keyword   { color: #c792ea; }
+.reader-markdown .hljs-string    { color: #c3e88d; }
+.reader-markdown .hljs-number    { color: #f78c6c; }
+.reader-markdown .hljs-comment   { color: #676e95; font-style: italic; }
+.reader-markdown .hljs-function  { color: #82aaff; }
+.reader-markdown .hljs-title     { color: #82aaff; }
+.reader-markdown .hljs-type      { color: #ffcb6b; }
+.reader-markdown .hljs-built_in  { color: #c792ea; }
+.reader-markdown .hljs-literal   { color: #f78c6c; }
+.reader-markdown .hljs-params    { color: #e9edf8; }
+.reader-markdown .hljs-attr      { color: #ffcb6b; }
+.reader-markdown .hljs-selector  { color: #c792ea; }
+.reader-markdown .hljs-operator  { color: #89ddff; }
+.reader-markdown .hljs-punctuation { color: #89ddff; }
+.reader-markdown .hljs-regexp    { color: #c3e88d; }
+.reader-markdown .hljs-variable  { color: #e9edf8; }
+.reader-markdown .hljs-property  { color: #82aaff; }
+.reader-markdown .hljs-meta      { color: #89ddff; }
+
+/* ---- Tables ---- */
 .reader-markdown table {
   width: 100%;
   border-collapse: collapse;
   margin: 1em 0;
-  font-size: 0.95em;
+  font-size: 0.92em;
 }
 
 .reader-markdown th,
 .reader-markdown td {
   border: 1px solid var(--color-outline-variant);
-  padding: 0.5em 0.65em;
+  padding: 0.55em 0.75em;
   text-align: left;
   vertical-align: top;
 }
 
 .reader-markdown thead th {
-  background: var(--color-surface-container);
+  background: var(--color-surface-container-high);
   font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
   font-weight: 600;
+  font-size: 0.9em;
+  border-bottom: 2px solid var(--color-outline);
 }
 
+.reader-markdown tbody tr:nth-child(even) {
+  background: var(--color-surface-container-low);
+}
+
+.reader-markdown tbody tr:hover {
+  background: var(--color-surface-container);
+}
+
+/* ---- Lists ---- */
 .reader-markdown ul,
 .reader-markdown ol {
-  margin: 0.7em 0;
-  padding-left: 1.4em;
+  margin: 0.65em 0;
+  padding-left: 1.5em;
 }
 
+.reader-markdown li {
+  margin: 0.15em 0;
+}
+
+.reader-markdown ul ul,
+.reader-markdown ol ol,
+.reader-markdown ul ol,
+.reader-markdown ol ul {
+  margin: 0.15em 0;
+}
+
+.reader-markdown ul > li::marker {
+  color: var(--color-outline);
+}
+
+/* ---- Task list checkboxes ---- */
+.reader-markdown input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.4em;
+  border: 1.5px solid var(--color-outline);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  vertical-align: -2px;
+  transition: all 0.15s ease;
+}
+
+.reader-markdown input[type="checkbox"]:checked {
+  background: var(--color-secondary);
+  border-color: var(--color-secondary);
+}
+
+.reader-markdown input[type="checkbox"]:checked::after {
+  content: '';
+  display: block;
+  width: 5px;
+  height: 9px;
+  border: solid white;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  margin: 1px 0 0 4px;
+}
+
+/* ---- Horizontal rules ---- */
 .reader-markdown hr {
   border: none;
   border-top: 1px solid var(--color-outline-variant);
-  margin: 1.2em 0;
+  margin: 1.5em 0;
 }
 
-/* Keep markdown sub/sup typography stable inside reader content. */
+/* ---- Images ---- */
+.reader-markdown img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1em auto;
+  border-radius: 8px;
+}
+
+/* ---- Footnotes ---- */
+.reader-markdown .footnote-item {
+  font-size: 0.85em;
+  color: var(--color-on-surface-variant);
+}
+
+.reader-markdown .footnote-item p {
+  display: inline;
+  margin: 0;
+}
+
+.reader-markdown a[href^="#fn"] {
+  font-size: 0.82em;
+  vertical-align: super;
+  text-decoration: none;
+}
+
+.reader-markdown a[href^="#fnref"] {
+  text-decoration: none;
+}
+
+/* ---- Selection ---- */
+.reader-markdown ::selection {
+  background: rgba(86, 94, 116, 0.22);
+}
+
+/* ---- Sub/sup ---- */
 .reader-markdown sub,
 .reader-markdown sup {
   font-size: 0.75em;
@@ -250,7 +489,7 @@
   bottom: -0.25em;
 }
 
-/* KaTeX container normalization for reader mode. */
+/* ---- KaTeX ---- */
 .reader-markdown .katex {
   font-size: 1em;
 }
@@ -259,4 +498,24 @@
   margin: 1em 0;
   overflow-x: auto;
   overflow-y: hidden;
+  text-align: center;
+}
+
+.reader-markdown .katex-display > .katex {
+  display: inline-block;
+  text-align: center;
+}
+
+/* ---- Outline / TOC ---- */
+.outline-item {
+  position: relative;
+}
+
+.outline-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-outline-variant);
+  opacity: 0.35;
 }

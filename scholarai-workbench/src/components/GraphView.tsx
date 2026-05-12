@@ -136,7 +136,7 @@ export default function GraphView() {
     <div className="flex-1 bg-surface-container-low relative">
       <div className={`absolute top-3 left-4 right-4 lg:right-[30rem] z-30 rounded-2xl border border-secondary/20 bg-surface-container-lowest/95 backdrop-blur shadow-2xl shadow-black/10 transition-all ${expanded ? 'max-h-[64vh]' : 'max-h-12'} overflow-visible`}>
         <div className="h-12 px-3 flex items-center gap-2 border-b border-outline-variant/30 bg-linear-to-r from-secondary-container/20 to-surface-container-lowest rounded-t-2xl">
-          <div className="text-[11px] font-mono text-outline-variant hidden md:block">变量语义搜索</div>
+          <div className="text-[13px] font-mono text-outline-variant hidden md:block">变量语义搜索</div>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -162,7 +162,7 @@ export default function GraphView() {
         </div>
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="absolute left-1/2 -translate-x-1/2 bottom-0 translate-y-1/2 h-5 min-w-12 px-2 rounded-full border border-outline-variant bg-surface-container text-[10px] leading-none text-outline hover:border-secondary hover:text-secondary shadow"
+          className="absolute left-1/2 -translate-x-1/2 bottom-0 translate-y-1/2 h-5 min-w-12 px-2 rounded-full border border-outline-variant bg-surface-container text-xs leading-none text-outline hover:border-secondary hover:text-secondary shadow"
           title={expanded ? '收起检索' : '展开检索'}
         >
           {expanded ? '▴' : '▾'}
@@ -177,7 +177,7 @@ export default function GraphView() {
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <div className="text-xs font-mono uppercase tracking-wider text-outline-variant">匹配变量</div>
-                <div className="text-[11px] text-outline">共 {searchResult.length} 条</div>
+                <div className="text-[13px] text-outline">共 {searchResult.length} 条</div>
               </div>
               {searchResult.map((row) => {
                 const key = `${row.library_id}::${row.variable_name}`;
@@ -188,7 +188,7 @@ export default function GraphView() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="font-semibold text-on-surface truncate">{row.variable_name || row.node_id || '-'}</div>
-                        <div className="text-[10px] mt-1 inline-flex px-2 py-0.5 rounded bg-secondary-container/20 text-secondary font-mono">{row.library_id}</div>
+                        <div className="text-xs mt-1 inline-flex px-2 py-0.5 rounded bg-secondary-container/20 text-secondary font-mono">{row.library_id}</div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <button
@@ -213,25 +213,25 @@ export default function GraphView() {
                       {neighborSets.map((group, idx) => (
                         <div key={`${key}-${idx}`} className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
                           <div className="rounded-xl border border-emerald-300/40 p-2 bg-emerald-50/30">
-                            <div className="text-[11px] font-mono uppercase text-emerald-700 mb-1">Causes / 前因</div>
+                            <div className="text-[13px] font-mono uppercase text-emerald-700 mb-1">Causes / 前因</div>
                             <div className="space-y-1">
-                              {group.cause_variables.length === 0 && <div className="text-[11px] text-on-surface-variant">无前因变量</div>}
+                              {group.cause_variables.length === 0 && <div className="text-[13px] text-on-surface-variant">无前因变量</div>}
                               {group.cause_variables.map((v) => (
                                 <button key={`${v.library_id}-${v.node_id}-c`} onClick={() => focusGraphNode(v.node_id, v.variable_name, v.library_id)} className="w-full text-left rounded-lg border border-outline-variant/30 px-2 py-1 hover:border-secondary bg-white/70">
                                   <div className="text-xs font-semibold">{v.variable_name}</div>
-                                  <div className="text-[11px] text-on-surface-variant line-clamp-2">{v.concept_text || '暂无概念'}</div>
+                                  <div className="text-[13px] text-on-surface-variant line-clamp-2">{v.concept_text || '暂无概念'}</div>
                                 </button>
                               ))}
                             </div>
                           </div>
                           <div className="rounded-xl border border-sky-300/40 p-2 bg-sky-50/30">
-                            <div className="text-[11px] font-mono uppercase text-sky-700 mb-1">Effects / 后果</div>
+                            <div className="text-[13px] font-mono uppercase text-sky-700 mb-1">Effects / 后果</div>
                             <div className="space-y-1">
-                              {group.effect_variables.length === 0 && <div className="text-[11px] text-on-surface-variant">无后果变量</div>}
+                              {group.effect_variables.length === 0 && <div className="text-[13px] text-on-surface-variant">无后果变量</div>}
                               {group.effect_variables.map((v) => (
                                 <button key={`${v.library_id}-${v.node_id}-e`} onClick={() => focusGraphNode(v.node_id, v.variable_name, v.library_id)} className="w-full text-left rounded-lg border border-outline-variant/30 px-2 py-1 hover:border-secondary bg-white/70">
                                   <div className="text-xs font-semibold">{v.variable_name}</div>
-                                  <div className="text-[11px] text-on-surface-variant line-clamp-2">{v.concept_text || '暂无概念'}</div>
+                                  <div className="text-[13px] text-on-surface-variant line-clamp-2">{v.concept_text || '暂无概念'}</div>
                                 </button>
                               ))}
                             </div>

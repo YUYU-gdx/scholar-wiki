@@ -445,7 +445,7 @@ export default function ChatView() {
     <div className="flex-1 flex overflow-hidden">
       <aside className="w-72 border-r border-outline-variant bg-surface-container-low flex flex-col">
         <div className="p-4 border-b border-outline-variant flex justify-between items-center">
-          <h2 className="text-[10px] font-bold text-on-surface uppercase tracking-widest font-mono">会话</h2>
+          <h2 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono">会话</h2>
           <button onClick={createSession} disabled={creating} className="text-secondary hover:bg-secondary-container/20 p-1.5 rounded-lg transition-all disabled:opacity-40">
             <PlusSquare className="w-4 h-4" />
           </button>
@@ -463,7 +463,7 @@ export default function ChatView() {
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <p className="text-[10px] text-outline font-mono mt-1 flex items-center gap-1.5">
+              <p className="text-xs text-outline font-mono mt-1 flex items-center gap-1.5">
                 <Clock className="w-3 h-3" />
                 {s.default_mode}
               </p>
@@ -513,7 +513,7 @@ export default function ChatView() {
                         )}
                         {Array.isArray(m.citations) && m.citations.length > 0 && (
                           <div className="mt-4 rounded-xl border border-outline-variant bg-surface-container-low p-3 space-y-2">
-                            <div className="text-[10px] font-mono uppercase tracking-widest text-outline">参考文献</div>
+                            <div className="text-xs font-mono uppercase tracking-widest text-outline">参考文献</div>
                             {m.citations.map((c, idx) => (
                               <button
                                 key={`${m.message_id}-c-${idx}`}
@@ -521,10 +521,10 @@ export default function ChatView() {
                                 className="w-full text-left bg-surface-container-lowest border border-outline-variant rounded-xl px-3 py-2 hover:border-secondary transition-all group"
                               >
                                 <div className="flex items-center gap-2 mb-1">
-                                  <span className="text-[9px] font-mono font-bold bg-secondary-container/20 text-secondary px-1.5 py-0.5 rounded border border-secondary/20">[{idx + 1}]</span>
+                                  <span className="text-[13px] font-mono font-bold bg-secondary-container/20 text-secondary px-1.5 py-0.5 rounded border border-secondary/20">[{idx + 1}]</span>
                                   <span className="text-xs text-on-surface-variant group-hover:text-secondary transition-colors truncate">{c.title || c.paper_id || c.id || '引用'}</span>
                                 </div>
-                                <div className="text-[11px] text-outline line-clamp-2">
+                                <div className="text-[13px] text-outline line-clamp-2">
                                   {String(c.text || normalizeCitationText(c).paragraph || normalizeCitationText(c).sentence || '').trim()}
                                 </div>
                               </button>
@@ -550,7 +550,7 @@ export default function ChatView() {
                                       );
                                     }
                                     return (
-                                      <div key={idx} className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-[10px] font-mono overflow-hidden">
+                                      <div key={idx} className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-xs font-mono overflow-hidden">
                                         <button
                                           onClick={() => setExpandedToolItems(prev => ({ ...prev, [itemKey]: !itemExpanded }))}
                                           className="w-full text-left p-2.5 flex items-center justify-between hover:bg-surface-container-low transition-colors"
@@ -561,7 +561,7 @@ export default function ChatView() {
                                         {itemExpanded && (
                                           <div className="px-2.5 pb-2.5 space-y-2">
                                             <div className="bg-surface-container-low p-2 rounded border border-outline-variant/30">
-                                              <div className="text-[11px] text-on-surface-variant break-words whitespace-pre-wrap">{timeline.detail}</div>
+                                              <div className="text-[13px] text-on-surface-variant break-words whitespace-pre-wrap">{timeline.detail}</div>
                                             </div>
                                           </div>
                                         )}
@@ -639,17 +639,17 @@ export default function ChatView() {
             <div className="space-y-4">
               {citationModal.sentence && (
                 <div>
-                  <span className="text-[10px] font-mono text-secondary uppercase tracking-widest block mb-2">命中句子</span>
+                  <span className="text-xs font-mono text-secondary uppercase tracking-widest block mb-2">命中句子</span>
                   <pre className="whitespace-pre-wrap text-sm text-on-surface bg-surface-container-low p-4 rounded-xl border border-outline-variant">{citationModal.sentence}</pre>
                 </div>
               )}
               {citationModal.paragraph && (
                 <div>
-                  <span className="text-[10px] font-mono text-secondary uppercase tracking-widest block mb-2">段落</span>
+                  <span className="text-xs font-mono text-secondary uppercase tracking-widest block mb-2">段落</span>
                   <pre className="whitespace-pre-wrap text-sm text-on-surface bg-surface-container-low p-4 rounded-xl border border-outline-variant max-h-60 overflow-auto custom-scrollbar">{citationModal.paragraph}</pre>
                 </div>
               )}
-              <div className="text-[11px] text-outline font-mono">
+              <div className="text-[13px] text-outline font-mono">
                 {citationModal.paper_id && <span>论文: {citationModal.paper_id}</span>}
                 {citationModal.title && <span className="ml-4">{citationModal.title}</span>}
               </div>

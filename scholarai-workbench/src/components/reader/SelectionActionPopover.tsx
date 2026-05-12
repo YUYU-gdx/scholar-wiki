@@ -40,8 +40,8 @@ export default function SelectionActionPopover({
       className="selection-action-popover fixed z-50 w-[380px] max-w-[90vw] rounded-xl border border-outline-variant bg-surface-container-lowest shadow-2xl p-3 space-y-2"
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="text-[11px] text-on-surface-variant line-clamp-2">{selectedText}</div>
-        <button className="text-[10px] px-1.5 py-0.5 rounded border border-outline-variant hover:bg-surface-container" onClick={onClose}>关闭</button>
+        <div className="text-[13px] text-on-surface-variant line-clamp-2">{selectedText}</div>
+        <button className="text-xs px-1.5 py-0.5 rounded border border-outline-variant hover:bg-surface-container" onClick={onClose}>关闭</button>
       </div>
       <div className="flex items-center gap-2">
         <button onClick={onTranslate} className="px-3 py-1.5 rounded-lg border border-outline-variant hover:bg-surface-container inline-flex items-center gap-1 text-xs">

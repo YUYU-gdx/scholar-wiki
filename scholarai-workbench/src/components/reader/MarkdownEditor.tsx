@@ -6,6 +6,7 @@ import markdownItMark from 'markdown-it-mark';
 import markdownItDeflist from 'markdown-it-deflist';
 import markdownItKatex from '@vscode/markdown-it-katex';
 import DOMPurify from 'dompurify';
+import hljs from 'highlight.js';
 import 'katex/dist/katex.min.css';
 import type { ViewerMode } from './types';
 import SelectionActionPopover from './SelectionActionPopover';
@@ -100,6 +101,109 @@ function guessMimeByPath(p: string): string {
   if (lower.endsWith('.svg')) return 'image/svg+xml';
   if (lower.endsWith('.bmp')) return 'image/bmp';
   return 'application/octet-stream';
+}
+
+// ---- Callout icons (inline SVG) ----
+const CALLOUT_ICONS: Record<string, string> = {
+  note: '<svg viewBox="0 0 24 24" fill="none" stroke="#448aff" stroke-width="2" style="width:100%;height:100%"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>',
+  warning: '<svg viewBox="0 0 24 24" fill="none" stroke="#ff9100" stroke-width="2" style="width:100%;height:100%"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>',
+  danger: '<svg viewBox="0 0 24 24" fill="none" stroke="#ff5252" stroke-width="2" style="width:100%;height:100%"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+  tip: '<svg viewBox="0 0 24 24" fill="none" stroke="#00c853" stroke-width="2" style="width:100%;height:100%"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>',
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="#00b8d4" stroke-width="2" style="width:100%;height:100%"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+  example: '<svg viewBox="0 0 24 24" fill="none" stroke="#9c27b0" stroke-width="2" style="width:100%;height:100%"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>',
+  quote: '<svg viewBox="0 0 24 24" fill="#9e9e9e" style="width:100%;height:100%"><path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/></svg>',
+};
+
+const CALLOUT_LABELS: Record<string, string> = {
+  note: 'Note', warning: 'Warning', danger: 'Danger', tip: 'Tip',
+  info: 'Info', example: 'Example', quote: 'Quote',
+};
+
+function transformCallouts(doc: Document): void {
+  const blockquotes = Array.from(doc.querySelectorAll('blockquote'));
+  for (const bq of blockquotes) {
+    const firstP = bq.querySelector(':scope > p:first-child');
+    if (!firstP) continue;
+    const text = (firstP.textContent || '').trim();
+    const m = text.match(/^\[!(\w+)\]\s*(.*)$/);
+    if (!m) continue;
+    const type = m[1].toLowerCase();
+    const rest = m[2].trim();
+    const icon = CALLOUT_ICONS[type];
+    if (!icon) continue;
+
+    const label = CALLOUT_LABELS[type] || type;
+    const title = rest || label;
+
+    firstP.remove();
+
+    const callout = doc.createElement('div');
+    callout.className = `callout callout-${type}`;
+
+    const iconSpan = doc.createElement('span');
+    iconSpan.className = 'callout-icon';
+    iconSpan.innerHTML = icon;
+    callout.appendChild(iconSpan);
+
+    const titleDiv = doc.createElement('div');
+    titleDiv.className = 'callout-title';
+    titleDiv.textContent = title;
+    callout.appendChild(titleDiv);
+
+    while (bq.firstChild) {
+      callout.appendChild(bq.firstChild);
+    }
+
+    const parent = bq.parentNode;
+    if (parent) {
+      parent.replaceChild(callout, bq);
+    }
+  }
+}
+
+function highlightCodeBlocks(doc: Document): void {
+  for (const code of Array.from(doc.querySelectorAll('pre > code'))) {
+    const className = code.className || '';
+    const lm = className.match(/language-(\w+)/);
+    const lang = lm ? lm[1] : '';
+    if (!lang || !hljs.getLanguage(lang)) continue;
+    try {
+      const raw = code.textContent || '';
+      const result = hljs.highlight(raw, { language: lang, ignoreIllegals: true });
+      code.innerHTML = result.value;
+      code.className = `${className} hljs`;
+    } catch (_) { /* leave unhighlighted */ }
+  }
+}
+
+function enhanceCodeBlocks(doc: Document): void {
+  for (const pre of Array.from(doc.querySelectorAll('pre'))) {
+    const code = pre.querySelector(':scope > code');
+    const className = code?.className || '';
+    const lm = className.match(/language-(\w+)/);
+    const lang = lm ? lm[1] : '';
+    if (!lang) continue;
+
+    const header = doc.createElement('div');
+    header.className = 'code-block-header';
+
+    const label = doc.createElement('span');
+    label.className = 'code-lang-label';
+    label.textContent = lang;
+    header.appendChild(label);
+
+    const copyBtn = doc.createElement('button');
+    copyBtn.className = 'code-copy-btn';
+    copyBtn.setAttribute('type', 'button');
+    copyBtn.setAttribute('data-code-copy', '');
+    copyBtn.textContent = 'Copy';
+    header.appendChild(copyBtn);
+
+    const parent = pre.parentNode;
+    if (parent) {
+      parent.insertBefore(header, pre);
+    }
+  }
 }
 
 export default function MarkdownEditor({
@@ -246,6 +350,9 @@ export default function MarkdownEditor({
       const parser = new DOMParser();
       const doc = parser.parseFromString(clean, 'text/html');
       convertScriptOnlyKatexToHtml(doc);
+      transformCallouts(doc);
+      highlightCodeBlocks(doc);
+      enhanceCodeBlocks(doc);
       const rewriteAttr = async (el: Element, key: 'src' | 'href') => {
         const raw = el.getAttribute(key);
         if (!raw) return;
@@ -277,6 +384,25 @@ export default function MarkdownEditor({
       await Promise.all(Array.from(doc.querySelectorAll('a')).map((el) => rewriteAttr(el, 'href')));
       const notes = findReaderNoteRanges(text);
       let noteIdx = 0;
+      // Primary: matched callouts that were transformed from [!NOTE] Reader Note
+      for (const callout of Array.from(doc.querySelectorAll('.callout-note'))) {
+        const titleEl = callout.querySelector('.callout-title');
+        const titleText = String(titleEl?.textContent || '').trim();
+        if (titleText !== 'Reader Note') continue;
+        const idx = noteIdx;
+        const noteId = notes[idx]?.id || '';
+        noteIdx += 1;
+        callout.setAttribute('data-reader-note-idx', String(idx));
+        callout.setAttribute('style', 'position:relative;');
+        const delBtn = doc.createElement('button');
+        delBtn.textContent = '删除笔记';
+        delBtn.setAttribute('type', 'button');
+        delBtn.setAttribute('data-reader-note-delete', String(idx));
+        if (noteId) delBtn.setAttribute('data-reader-note-id', noteId);
+        delBtn.setAttribute('style', 'position:absolute;top:6px;right:6px;font-size:11px;padding:2px 6px;border:1px solid #94a3b8;border-radius:6px;background:#fff;cursor:pointer;');
+        callout.appendChild(delBtn);
+      }
+      // Fallback: blockquotes that were not transformed (e.g. malformed callout syntax)
       for (const bq of Array.from(doc.querySelectorAll('blockquote'))) {
         const t = String(bq.textContent || '');
         if (!t.includes('[!NOTE] Reader Note')) continue;
@@ -287,7 +413,7 @@ export default function MarkdownEditor({
         wrapper.setAttribute('data-reader-note-idx', String(idx));
         wrapper.setAttribute('style', 'position:relative;');
         const delBtn = doc.createElement('button');
-        delBtn.textContent = '鍒犻櫎绗旇';
+        delBtn.textContent = '删除笔记';
         delBtn.setAttribute('type', 'button');
         delBtn.setAttribute('data-reader-note-delete', String(idx));
         if (noteId) delBtn.setAttribute('data-reader-note-id', noteId);
@@ -770,6 +896,19 @@ export default function MarkdownEditor({
               onClick={(evt) => {
                 const rawTarget = evt.target;
                 const elem = rawTarget instanceof Element ? rawTarget : ((rawTarget as Node | null)?.parentElement || null);
+                const copyBtn = elem?.closest('[data-code-copy]') as HTMLElement | null;
+                if (copyBtn) {
+                  const pre = copyBtn.closest('.code-block-header')?.nextElementSibling;
+                  const code = pre?.querySelector('code');
+                  if (code) {
+                    navigator.clipboard.writeText(code.textContent || '').then(() => {
+                      copyBtn.textContent = 'Copied!';
+                      copyBtn.classList.add('copied');
+                      setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('copied'); }, 2000);
+                    }).catch(() => {});
+                  }
+                  return;
+                }
                 const btn = elem?.closest('[data-reader-note-delete]') as HTMLElement | null;
                 if (!btn) return;
                 const idx = Number(btn.getAttribute('data-reader-note-delete') || '-1');
@@ -793,6 +932,19 @@ export default function MarkdownEditor({
                 onClick={(evt) => {
                   const rawTarget = evt.target;
                   const elem = rawTarget instanceof Element ? rawTarget : ((rawTarget as Node | null)?.parentElement || null);
+                  const copyBtn = elem?.closest('[data-code-copy]') as HTMLElement | null;
+                  if (copyBtn) {
+                    const pre = copyBtn.closest('.code-block-header')?.nextElementSibling;
+                    const code = pre?.querySelector('code');
+                    if (code) {
+                      navigator.clipboard.writeText(code.textContent || '').then(() => {
+                        copyBtn.textContent = 'Copied!';
+                        copyBtn.classList.add('copied');
+                        setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('copied'); }, 2000);
+                      }).catch(() => {});
+                    }
+                    return;
+                  }
                   const btn = elem?.closest('[data-reader-note-delete]') as HTMLElement | null;
                   if (!btn) return;
                   const idx = Number(btn.getAttribute('data-reader-note-delete') || '-1');

@@ -172,7 +172,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
             <div key={rowId} className="p-2 rounded-lg border border-outline-variant/50 hover:bg-surface-container transition-colors">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-outline"><StickyNote className="w-3.5 h-3.5" /></span>
-                <span className="text-[10px] font-mono text-outline">Pg {rn.page_index + 1}</span>
+                <span className="text-xs font-mono text-outline">Pg {rn.page_index + 1}</span>
                 <button className="ml-auto text-outline hover:text-error" onClick={async () => { await readerNotesManager.remove(rn.id); await removeNoteBlockFromMarkdownById(rn.id, rn.selected_text, rn.note_text, rn.markdown_path_at_write); window.dispatchEvent(new CustomEvent('reader-note-md-deleted', { detail: { paperId, noteId: rn.id } })); window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } })); refresh(); }}>
                   <Trash2 className="w-3 h-3" />
                 </button>
@@ -182,8 +182,8 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
                 <div className="mt-1">
                   <textarea className="w-full text-xs p-1 border border-outline-variant rounded bg-surface-container" rows={2} value={editComment} onChange={(e) => setEditComment(e.target.value)} />
                   <div className="flex gap-1 mt-1">
-                    <button className="text-[10px] px-2 py-0.5 bg-primary-container text-on-primary-container rounded" onClick={() => handle保存(rowId)}>保存</button>
-                    <button className="text-[10px] px-2 py-0.5 text-outline" onClick={() => setEditingId(null)}>取消</button>
+                    <button className="text-xs px-2 py-0.5 bg-primary-container text-on-primary-container rounded" onClick={() => handle保存(rowId)}>保存</button>
+                    <button className="text-xs px-2 py-0.5 text-outline" onClick={() => setEditingId(null)}>取消</button>
                   </div>
                 </div>
               ) : (
@@ -202,7 +202,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
           >
             <div className="flex items-center gap-2 mb-1">
               <span className="text-outline">{typeIcons[ann.type]}</span>
-              <span className="text-[10px] font-mono text-outline">Pg {ann.page_index + 1}</span>
+              <span className="text-xs font-mono text-outline">Pg {ann.page_index + 1}</span>
               <span
                 className="w-3 h-3 rounded-full border border-outline-variant"
                 style={{ backgroundColor: ann.color }}
@@ -226,15 +226,15 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
                   onChange={(e) => setEditComment(e.target.value)}
                 />
                 <div className="flex gap-1 mt-1">
-                  <button className="text-[10px] px-2 py-0.5 bg-primary-container text-on-primary-container rounded" onClick={() => handle保存(ann.id)}>保存</button>
-                  <button className="text-[10px] px-2 py-0.5 text-outline" onClick={() => setEditingId(null)}>取消</button>
+                  <button className="text-xs px-2 py-0.5 bg-primary-container text-on-primary-container rounded" onClick={() => handle保存(ann.id)}>保存</button>
+                  <button className="text-xs px-2 py-0.5 text-outline" onClick={() => setEditingId(null)}>取消</button>
                 </div>
               </div>
             ) : ann.comment ? (
               <p className="text-xs text-secondary mt-1 italic">{ann.comment}</p>
             ) : (
               <button
-                className="text-[10px] text-outline hover:text-secondary mt-1"
+                className="text-xs text-outline hover:text-secondary mt-1"
                 onClick={(e) => { e.stopPropagation(); setEditingId(ann.id); setEditComment(ann.comment); }}
               >
                 添加笔记...

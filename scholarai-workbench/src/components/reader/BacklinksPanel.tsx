@@ -110,7 +110,7 @@ export default function BacklinksPanel({ paperId, libraryId, currentMarkdownPath
                 <ExternalLink className="w-3 h-3" />
               </button>
             </div>
-            <pre className="text-[10px] text-on-surface-variant mt-0.5 whitespace-pre-wrap break-all">{entry.snippet}</pre>
+            <pre className="text-xs text-on-surface-variant mt-0.5 whitespace-pre-wrap break-all">{entry.snippet}</pre>
           </div>
         ))}
       </div>

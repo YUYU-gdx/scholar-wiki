@@ -326,7 +326,7 @@ export default function LibraryView() {
       <div className="flex items-center gap-3">
         <Library className="w-5 h-5 text-secondary" />
         <h2 className="text-2xl font-medium tracking-tight text-on-surface">文献库</h2>
-        <span className="text-[10px] font-mono font-bold text-outline-variant bg-surface-container px-2 py-0.5 rounded">已选: {selectedLibraryIds.join(', ')}</span>
+        <span className="text-xs font-mono font-bold text-outline-variant bg-surface-container px-2 py-0.5 rounded">已选: {selectedLibraryIds.join(', ')}</span>
       </div>
 
       <div className="flex items-center gap-2 p-1 bg-surface-container-low w-fit rounded-xl border border-outline-variant">
@@ -403,7 +403,7 @@ export default function LibraryView() {
                     {p.variables.map((v) => (
                       <button key={`${p.scopedKey}-${v.id}`} onClick={(e) => (e.stopPropagation(), setSelectedNodeId(v.id), setSelectedNodeLibraryId(String(v.library_id || p.libraryId)), setCurrentView('graph'))} className="text-left p-2 bg-surface-container border border-outline-variant rounded-lg hover:border-secondary">
                         <div className="text-xs font-semibold text-on-surface truncate">{v.label || v.name || v.id}</div>
-                        <div className="text-[11px] text-on-surface-variant truncate">{String(v.latest_concept || '').slice(0, 60) || '暂无概念'}</div>
+                        <div className="text-[13px] text-on-surface-variant truncate">{String(v.latest_concept || '').slice(0, 60) || '暂无概念'}</div>
                       </button>
                     ))}
                   </div>
@@ -507,7 +507,7 @@ export default function LibraryView() {
           </div>
           <div className="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden">
             <table className="w-full text-left border-collapse">
-              <thead className="bg-surface-container-low border-b border-outline-variant"><tr><th className="px-4 py-3 text-[11px] font-mono uppercase text-outline">变量</th><th className="px-4 py-3 text-[11px] font-mono uppercase text-outline">概念</th><th className="px-4 py-3 text-[11px] font-mono uppercase text-outline">来源论文</th><th className="px-4 py-3" /></tr></thead>
+              <thead className="bg-surface-container-low border-b border-outline-variant"><tr><th className="px-4 py-3 text-[13px] font-mono uppercase text-outline">变量</th><th className="px-4 py-3 text-[13px] font-mono uppercase text-outline">概念</th><th className="px-4 py-3 text-[13px] font-mono uppercase text-outline">来源论文</th><th className="px-4 py-3" /></tr></thead>
               <tbody className="divide-y divide-outline-variant">
                 {variableRows.map((row) => (
                   <tr key={`${row.libraryId}-${row.id}`} className="hover:bg-surface-container-low transition-colors">

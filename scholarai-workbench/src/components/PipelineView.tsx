@@ -470,28 +470,40 @@ export default function PipelineView() {
           <CloudUpload className="w-5 h-5 text-secondary" />
           <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono">上传 PDF</h3>
         </div>
-        <div className="p-6">
+        <div className="p-6 space-y-3">
+          <div
+            className="flex items-center gap-4 p-4 border-2 border-dashed border-outline-variant rounded-xl bg-surface-container-low/30 hover:border-secondary transition-all cursor-pointer"
+            onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-secondary', 'bg-secondary-container/10'); }}
+            onDragLeave={(e) => { e.currentTarget.classList.remove('border-secondary', 'bg-secondary-container/10'); }}
+            onDrop={(e) => { e.currentTarget.classList.remove('border-secondary', 'bg-secondary-container/10'); }}
+            onClick={() => document.getElementById('pdf-upload')?.click()}
+          >
+            <FileText className="w-8 h-8 text-outline shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-on-surface">
+                {uploadFile ? uploadFile.name : '点击选择 PDF 文件，或拖拽 PDF 到此窗口进行批量导入'}
+              </p>
+              <p className="text-xs text-outline font-mono mt-0.5">
+                {uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : '支持单文件选择或多文件拖拽'}
+              </p>
+            </div>
+          </div>
+          <p className="text-xs text-on-surface-variant text-center">
+            建议单次拖拽不超过 10 个文件，超大批量导入可能造成卡顿
+          </p>
           <div className="flex items-center gap-4">
-            <label className="flex-1 min-w-0 relative">
-              <input
-                type="file"
-                accept=".pdf"
-                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                className="hidden"
-                id="pdf-upload"
-              />
-              <label htmlFor="pdf-upload" className="flex items-center gap-3 p-4 border-2 border-dashed border-outline-variant rounded-xl cursor-pointer hover:border-secondary transition-all bg-surface-container-low/30">
-                <FileText className="w-6 h-6 text-outline shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-on-surface truncate">{uploadFile ? uploadFile.name : '选择 PDF 文件'}</p>
-                  <p className="text-[10px] text-outline font-mono">{uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : '点击浏览'}</p>
-                </div>
-              </label>
-            </label>
+            <input
+              type="file"
+              accept=".pdf"
+              onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+              className="hidden"
+              id="pdf-upload"
+            />
+            <label htmlFor="pdf-upload" className="flex-1 min-w-0 relative" />
             <button
               onClick={submitJob}
               disabled={!uploadFile || uploading}
-              className="shrink-0 bg-secondary text-on-secondary px-6 py-4 rounded-xl text-sm font-bold hover:opacity-90 transition-all shadow-lg shadow-secondary/10 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
+              className="shrink-0 bg-secondary text-on-secondary px-6 py-3 rounded-xl text-sm font-bold hover:opacity-90 transition-all shadow-lg shadow-secondary/10 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
             >
               {uploading ? (
                 <>
@@ -501,7 +513,7 @@ export default function PipelineView() {
               ) : (
                 <>
                   <CloudUpload className="w-4 h-4" />
-                  导入
+                  导入选中文件
                 </>
               )}
             </button>
@@ -511,7 +523,7 @@ export default function PipelineView() {
 
       <div className="flex items-center gap-3 mb-4">
         <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono flex-1">导入任务</h3>
-        <span className="text-[11px] text-on-surface-variant font-mono">已选: {selectedJobs.length}</span>
+        <span className="text-[13px] text-on-surface-variant font-mono">已选: {selectedJobs.length}</span>
         <button
           onClick={() => batchOperate('cancel')}
           disabled={selectedJobs.length === 0}
@@ -553,7 +565,7 @@ export default function PipelineView() {
         <div className="max-h-[50vh] overflow-y-auto">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="bg-surface-container-low/10 text-[10px] font-mono font-black text-outline uppercase tracking-widest border-b border-outline-variant/10">
+              <tr className="bg-surface-container-low/10 text-xs font-mono font-black text-outline uppercase tracking-widest border-b border-outline-variant/10">
                 <th className="px-4 py-4 w-[44px] text-center">
                   <input type="checkbox" checked={allVisibleSelected} onChange={() => toggleSelectAllVisible()} />
                 </th>
@@ -581,7 +593,7 @@ export default function PipelineView() {
                       onChange={(e) => toggleSelectJob(job.job_id, e.target.checked)}
                     />
                   </td>
-                  <td className="px-6 py-4 font-mono text-[11px] font-bold text-on-surface-variant">{job.job_id?.slice(0, 12)}...</td>
+                  <td className="px-6 py-4 font-mono text-[13px] font-bold text-on-surface-variant">{job.job_id?.slice(0, 12)}...</td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center text-red-500 border border-red-100 group-hover:scale-110 transition-transform">
@@ -591,7 +603,7 @@ export default function PipelineView() {
                     </div>
                   </td>
                   <td className="px-6 py-4 shrink-0">
-                    <span className={`text-[10px] font-mono font-black uppercase px-2 py-0.5 rounded-full whitespace-nowrap ${statusBadge(job.status || '')}`}>
+                    <span className={`text-xs font-mono font-black uppercase px-2 py-0.5 rounded-full whitespace-nowrap ${statusBadge(job.status || '')}`}>
                       {job.stage_label || job.stage || '-'}
                     </span>
                   </td>
@@ -603,7 +615,7 @@ export default function PipelineView() {
                           style={{ width: `${job.progress ?? (job.status === 'completed' ? 100 : 0)}%` }}
                         />
                       </div>
-                      <span className="text-[11px] font-mono font-bold text-on-surface-variant">{job.progress ?? (job.status === 'completed' ? 100 : 0)}%</span>
+                      <span className="text-[13px] font-mono font-bold text-on-surface-variant">{job.progress ?? (job.status === 'completed' ? 100 : 0)}%</span>
                     </div>
                   </td>
                   <td className="px-6 py-4 text-center">
@@ -664,8 +676,8 @@ export default function PipelineView() {
                     onClick={() => setExpandedLogItems((prev) => ({ ...prev, [`${r.time}-${idx}`]: !prev[`${r.time}-${idx}`] }))}
                     className="w-full flex items-center gap-3 p-2 text-left hover:bg-surface-container-low transition-colors"
                   >
-                    <span className="text-[10px] font-mono text-outline w-44 shrink-0">{r.time}</span>
-                    <span className={`text-[11px] font-mono shrink-0 ${r.level === 'error' ? 'text-error' : r.level === 'warn' ? 'text-amber-600' : 'text-secondary'}`}>
+                    <span className="text-xs font-mono text-outline w-44 shrink-0">{r.time}</span>
+                    <span className={`text-[13px] font-mono shrink-0 ${r.level === 'error' ? 'text-error' : r.level === 'warn' ? 'text-amber-600' : 'text-secondary'}`}>
                       [{r.level.toUpperCase()}]
                     </span>
                     <span className="text-sm text-on-surface break-all flex-1">{r.text}</span>

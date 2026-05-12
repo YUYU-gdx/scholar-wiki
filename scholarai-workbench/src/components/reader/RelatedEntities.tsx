@@ -147,7 +147,7 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
     const has = !!raw;
     return (
       <details className="rounded-lg border border-outline-variant/70 bg-surface-container-lowest">
-        <summary className="cursor-pointer list-none px-2 py-1.5 text-[11px] text-on-surface flex items-center justify-between">
+        <summary className="cursor-pointer list-none px-2 py-1.5 text-[13px] text-on-surface flex items-center justify-between">
           <span className="font-medium">{label}</span>
           <span className="text-outline">{has ? compactPreview(raw, 36) : '暂无'}</span>
         </summary>

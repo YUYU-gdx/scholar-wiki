@@ -280,13 +280,13 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tighter text-on-surface leading-none">Scholar Wiki</h1>
-              <p className="text-[10px] font-mono uppercase tracking-widest text-on-surface-variant mt-1">学术知识图谱</p>
+              <p className="text-xs font-mono uppercase tracking-widest text-on-surface-variant mt-1">学术知识图谱</p>
             </div>
           </div>
 
           <div className="px-2 mb-2">
             <div className="flex items-center justify-between mb-1">
-              <label className="text-[10px] font-mono text-outline uppercase tracking-widest">文献库（可多选）</label>
+              <label className="text-xs font-mono text-outline uppercase tracking-widest">文献库（可多选）</label>
               <button
                 type="button"
                 title="创建文献库"
@@ -327,7 +327,7 @@ export default function App() {
                 />
                 <button
                   type="button"
-                  className="px-2 py-1 text-[11px] rounded border border-outline-variant hover:border-secondary"
+                  className="px-2 py-1 text-[13px] rounded border border-outline-variant hover:border-secondary"
                   onClick={async () => {
                     const libraryId = newLibraryId.trim();
                     if (!libraryId) return;
@@ -345,7 +345,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className="px-2 py-1 text-[11px] rounded border border-outline-variant hover:border-secondary"
+                  className="px-2 py-1 text-[13px] rounded border border-outline-variant hover:border-secondary"
                   onClick={() => {
                     setCreatingLibrary(false);
                     setNewLibraryId('');
@@ -425,15 +425,15 @@ export default function App() {
             <div className="grid grid-cols-3 gap-2 text-center">
               <div className="p-2 bg-surface-container rounded-lg">
                 <p className="text-sm font-bold text-on-surface">{nodeCount}</p>
-                <p className="text-[9px] text-outline font-mono uppercase">节点</p>
+                <p className="text-[13px] text-outline font-mono uppercase">节点</p>
               </div>
               <div className="p-2 bg-surface-container rounded-lg">
                 <p className="text-sm font-bold text-on-surface">{edgeCount}</p>
-                <p className="text-[9px] text-outline font-mono uppercase">边</p>
+                <p className="text-[13px] text-outline font-mono uppercase">边</p>
               </div>
               <div className="p-2 bg-surface-container rounded-lg">
                 <p className="text-sm font-bold text-on-surface">{paperCount}</p>
-                <p className="text-[9px] text-outline font-mono uppercase">论文</p>
+                <p className="text-[13px] text-outline font-mono uppercase">论文</p>
               </div>
             </div>
           </div>
@@ -463,7 +463,7 @@ export default function App() {
             <div className="electron-no-drag flex items-center gap-4">
               <button className="electron-no-drag text-on-surface-variant hover:text-secondary transition-all flex items-center gap-1.5 focus:outline-none">
                 <Zap className="w-4 h-4" />
-                <span className="text-[11px] font-mono uppercase tracking-wider">活跃</span>
+                <span className="text-[13px] font-mono uppercase tracking-wider">活跃</span>
               </button>
               <button className="electron-no-drag text-on-surface-variant hover:text-secondary transition-all relative focus:outline-none">
                 <Bell className="w-4 h-4" />

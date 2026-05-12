@@ -212,7 +212,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
       {(document.type === 'pdf' || document.type === 'markdown') && (
         <div className="absolute left-1/2 bottom-3 -translate-x-1/2 z-20 md:hidden flex items-center gap-1.5 rounded-2xl border border-outline-variant bg-surface-container-lowest/95 backdrop-blur px-2 py-1.5 shadow-lg">
           <button
-            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[13px] ${
               sidebarOpen ? 'bg-secondary-container/20 border-secondary/40 text-secondary' : 'border-outline-variant text-on-surface-variant'
             }`}
             onClick={() => setSidebarOpen((v) => !v)}
@@ -220,7 +220,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
             <StickyNote className="w-3.5 h-3.5" /> 笔记
           </button>
           <button
-            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[13px] ${
               backlinksOpen ? 'bg-secondary-container/20 border-secondary/40 text-secondary' : 'border-outline-variant text-on-surface-variant'
             }`}
             onClick={() => setBacklinksOpen((v) => !v)}
@@ -228,7 +228,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
             <Link2 className="w-3.5 h-3.5" /> 链接
           </button>
           <button
-            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[13px] ${
               entitiesOpen ? 'bg-secondary-container/20 border-secondary/40 text-secondary' : 'border-outline-variant text-on-surface-variant'
             }`}
             onClick={() => setEntitiesOpen((v) => !v)}
@@ -236,7 +236,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
             <Network className="w-3.5 h-3.5" /> 实体
           </button>
           <button
-            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] ${
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[13px] ${
               chatOpen ? 'bg-secondary-container/20 border-secondary/40 text-secondary' : 'border-outline-variant text-on-surface-variant'
             }`}
             onClick={() => setChatOpen((v) => !v)}
