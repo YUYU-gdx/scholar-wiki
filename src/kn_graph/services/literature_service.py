@@ -357,7 +357,7 @@ class ChromaDBClient:
         self._cdb = chromadb.PersistentClient(path=str(self._persist_dir))
 
         fts_path = str(self._persist_dir / "fts_index.db")
-        self._fts = sqlite3.connect(fts_path)
+        self._fts = sqlite3.connect(fts_path, check_same_thread=False)
         self._fts.execute("PRAGMA journal_mode=WAL")
         self._fts.row_factory = sqlite3.Row
         self._fts_ready = False
@@ -547,8 +547,13 @@ class ChromaDBClient:
 
 # Module-level cache: share ChromaDBClient instances across all LiteratureService
 # instances to prevent concurrent PersistentClient conflicts on the same directory.
+# Keyed by (thread_id, library_id) to avoid cross-thread SQLite errors.
 _chroma_client_cache: dict[str, ChromaDBClient] = {}
 _chroma_client_lock = threading.Lock()
+
+
+def _chroma_cache_key(library_id: str) -> str:
+    return f"{threading.get_ident()}:{library_id}"
 
 
 class LiteratureService:
@@ -906,18 +911,19 @@ class LiteratureService:
         # Fast path: instance cache
         if lib in self._chroma_clients:
             return self._chroma_clients[lib]
-        # Thread-safe module-level cache: prevent multiple PersistentClient instances
-        # from opening the same chromadb directory concurrently.
+        # Thread-safe module-level cache keyed by (thread, library) to avoid
+        # "SQLite objects created in a thread can only be used in that same thread"
         with _chroma_client_lock:
-            if lib in _chroma_client_cache:
-                client = _chroma_client_cache[lib]
+            ck = _chroma_cache_key(lib)
+            if ck in _chroma_client_cache:
+                client = _chroma_client_cache[ck]
             else:
                 workspace = self._resolve_workspace_root(lib)
                 if workspace is None:
                     raise RuntimeError(f"workspace_not_found:{lib}")
                 chroma_dir = workspace / "chromadb"
                 client = ChromaDBClient(str(chroma_dir))
-                _chroma_client_cache[lib] = client
+                _chroma_client_cache[ck] = client
         self._chroma_clients[lib] = client
         return client
 
