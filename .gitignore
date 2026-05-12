@@ -33,12 +33,23 @@ prompt_structure_probe.py
 # Local copied references (not project source)
 docs/GitNexus/
 docs/mineru_api_docs/
-skills/
+skills/*
+!skills/templates/
 
 # Frontend
 scholarai-workbench/node_modules/
 scholarai-workbench/dist/
+scholarai-workbench/e2e/screenshots/
+scholarai-workbench/test-results/
 frontend_legacy/**/node_modules/
 frontend_legacy/**/dist/
 .tmp/
 scripts/
+
+# PyInstaller build artifacts
+build_pyi/
+dist_exe/
+
+# Electron packaging artifacts
+scholarai-workbench/dist-electron-pkg/
+scholarai-workbench/dist-electron/

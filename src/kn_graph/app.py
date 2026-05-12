@@ -1,6 +1,10 @@
 import logging
+import sys
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 
 from kn_graph.config import Settings, ensure_data_dirs
 from kn_graph.migration import migrate_legacy_data
@@ -15,6 +19,19 @@ from kn_graph.services.pipeline_stage_runtime import start_pipeline_stage_worker
 from kn_graph.routers import graph, chat, literature, pipeline, workspace, settings as settings_router
 
 logger = logging.getLogger(__name__)
+
+
+def _get_frontend_dir() -> Path | None:
+    """Locate the built frontend dist directory."""
+    if getattr(sys, 'frozen', False):
+        candidate = Path(sys._MEIPASS) / "frontend"
+        if (candidate / "index.html").exists():
+            return candidate
+    project_root = Path(__file__).resolve().parents[2]
+    candidate = project_root / "scholarai-workbench" / "dist"
+    if (candidate / "index.html").exists():
+        return candidate
+    return None
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -35,7 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     migrate_legacy_data(settings.data_dir)
 
     app = FastAPI(
-        title="KN Graph API",
+        title="Scholar Wiki API",
         version="0.1.0",
     )
 
@@ -80,5 +97,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     async def healthz():
         return {"status": "ok"}
+
+    # Serve frontend static files (must be after all API routes so they take priority)
+    frontend_dir = _get_frontend_dir()
+    if frontend_dir:
+        assets_dir = frontend_dir / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend_assets")
+        legacy_dir = frontend_dir / "frontend_legacy"
+        if legacy_dir.is_dir():
+            app.mount("/frontend_legacy", StaticFiles(directory=str(legacy_dir), html=True), name="frontend_legacy")
+
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            file_path = frontend_dir / full_path
+            if file_path.is_file():
+                return FileResponse(file_path)
+            return FileResponse(frontend_dir / "index.html")
+    else:
+        logger.warning("Frontend dist not found; running API-only mode.")
 
     return app

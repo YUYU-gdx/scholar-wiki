@@ -9,6 +9,7 @@ def main():
     serve_parser = sub.add_parser("serve", help="Start the API server")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8013)
+    serve_parser.add_argument("--data-dir", default="", help="Data directory for libraries, runs, chat store etc. (default: %%LOCALAPPDATA%%/KNGraphApp on Windows, ~/.kn_graph elsewhere)")
     serve_parser.add_argument("--reload", action="store_true", help="Enable auto-reload on code changes")
 
     sub.add_parser("worker", help="Start the Celery worker")
@@ -17,12 +18,13 @@ def main():
 
     if args.command == "serve":
         import uvicorn
+        from pathlib import Path
         from kn_graph.config import Settings
 
-        settings = Settings(
-            host=args.host,
-            port=args.port,
-        )
+        kwargs = dict(host=args.host, port=args.port)
+        if args.data_dir:
+            kwargs["data_dir"] = Path(args.data_dir)
+        settings = Settings(**kwargs)
         from kn_graph.app import create_app
         app = create_app(settings)
         uvicorn.run(app, host=settings.host, port=settings.port, reload=args.reload)

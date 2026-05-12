@@ -24,8 +24,8 @@
       "id": "deepseek",
       "type": "openai_compatible",
       "api_key_env": "DEEPSEEK_API_KEY",
-      "default_model": "deepseek-chat",
-      "models": ["deepseek-chat", "deepseek-reasoner"],
+      "default_model": "deepseek-v4-flash",
+      "models": ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
       "base_url": "https://api.deepseek.com/v1/chat/completions",
       "timeout_seconds": 90
     }

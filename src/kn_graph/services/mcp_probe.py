@@ -8,6 +8,8 @@ import sys
 import time
 from typing import Any
 
+from kn_graph._compat import bundle_root
+
 
 def _decode(raw: bytes | str | None) -> str:
     if raw is None:
@@ -71,7 +73,7 @@ def main() -> int:
     args = parser.parse_args()
 
     mcp_server_path = (
-        Path(__file__).resolve().parents[3]
+        bundle_root()
         / "scripts"
         / "smj_pipeline"
         / "kn_mcp_server.py"

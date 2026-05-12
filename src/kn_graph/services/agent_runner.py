@@ -8,8 +8,10 @@ import shutil
 import subprocess
 from typing import Any, Callable
 
+from kn_graph._compat import bundle_root
+
 # Directory containing the vendored codex_app_server package
-_CODEX_APP_SERVER_DIR = str(Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline")
+_CODEX_APP_SERVER_DIR = str(bundle_root() / "scripts" / "smj_pipeline")
 
 
 def _normalize_codex_effort(raw: Any) -> str:

@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Any
 
 from kn_graph.config import Settings
+from kn_graph._compat import bundle_root
 
 _PLUGIN_IDS = ("superpowers@openai-curated", "github@openai-curated")
 
 
 def _default_mcp_server(workspace_path: str, library_id: str = "") -> dict[str, Any]:
-    mcp_script = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline" / "kn_mcp_server.py"
+    mcp_script = bundle_root() / "scripts" / "smj_pipeline" / "kn_mcp_server.py"
     env: dict[str, str] = {}
     if str(library_id or "").strip():
         env["KN_DEFAULT_LIBRARY_ID"] = str(library_id or "").strip()

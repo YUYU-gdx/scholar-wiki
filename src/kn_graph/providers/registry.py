@@ -11,8 +11,8 @@ from kn_graph.providers.zhipu import ZhipuChatCompletionsClient
 from kn_graph.providers.nvidia import NvidiaChatCompletionsClient
 
 _SUPPORTED_PROVIDER_TYPES = {"zhipu", "nvidia", "openai_compatible"}
-_ROOT_DIR = Path(__file__).resolve().parents[3]
-_DEFAULT_CONFIG_PATH = _ROOT_DIR / "config" / "llm_providers.json"
+from kn_graph._compat import get_data_path
+_DEFAULT_CONFIG_PATH = get_data_path("config/llm_providers.json")
 
 
 def _as_int(raw: Any, default: int) -> int:

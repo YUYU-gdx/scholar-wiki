@@ -279,8 +279,8 @@ export default function App() {
               <Share2 className="w-4 h-4" />
             </div>
             <div>
-              <h1 className="text-lg font-bold tracking-tighter text-on-surface leading-none">ScholarAI</h1>
-              <p className="text-[10px] font-mono uppercase tracking-widest text-on-surface-variant mt-1">KN Graph Workbench</p>
+              <h1 className="text-lg font-bold tracking-tighter text-on-surface leading-none">Scholar Wiki</h1>
+              <p className="text-[10px] font-mono uppercase tracking-widest text-on-surface-variant mt-1">Academic Knowledge Graph</p>
             </div>
           </div>
 

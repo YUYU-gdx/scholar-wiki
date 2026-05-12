@@ -73,7 +73,9 @@ def _get_configured_workspace_root() -> Path | None:
 
 
 def _legacy_workspace_root_default() -> Path:
-    return (Path(__file__).resolve().parents[2] / "outputs" / "libraries" / "workspaces").resolve()
+    # This file is at src/kn_graph/services/library_registry.py,
+    # so parents[3] is the project root.
+    return (Path(__file__).resolve().parents[3] / "outputs" / "libraries" / "workspaces").resolve()
 
 
 def _home_workspace_root_default() -> Path:

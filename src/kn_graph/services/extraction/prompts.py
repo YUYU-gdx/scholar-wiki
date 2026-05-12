@@ -6,7 +6,8 @@ import re
 from typing import Iterable
 
 
-_PROMPT_ROOT = Path(__file__).resolve().parents[3] / "prompt"
+from kn_graph._compat import get_data_path
+_PROMPT_ROOT = get_data_path("prompt")
 _SYSTEM_PROMPT_PATH = _PROMPT_ROOT / "extraction_system_prompt.md"
 _REFERENCE_HEADINGS = (
     "references",

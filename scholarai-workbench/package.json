@@ -1,8 +1,8 @@
 {
-  "name": "kn-graph-workbench",
+  "name": "scholar-wiki",
   "private": true,
   "version": "0.1.0",
-  "description": "KN Graph Workbench - Desktop app for knowledge graph exploration and AI-powered research",
+  "description": "Scholar Wiki - Desktop app for academic knowledge graph exploration and AI-powered research",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -23,8 +23,8 @@
     "dist": "electron-builder"
   },
   "build": {
-    "appId": "com.kn.graph.workbench",
-    "productName": "KN Graph Workbench",
+    "appId": "com.scholar.wiki",
+    "productName": "Scholar Wiki",
     "directories": {
       "output": "dist-electron"
     },
@@ -35,11 +35,8 @@
     ],
     "extraResources": [
       {
-        "from": "../scripts",
-        "to": "scripts",
-        "filter": [
-          "**/*"
-        ]
+        "from": "../dist_exe/kn_graph.exe",
+        "to": "."
       }
     ],
     "win": {
@@ -68,6 +65,7 @@
     "@codemirror/search": "^6.7.0",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.41.1",
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "@vscode/markdown-it-katex": "^1.1.2",

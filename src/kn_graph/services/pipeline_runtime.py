@@ -9,9 +9,11 @@ import re
 from typing import Any, Protocol
 
 from kn_graph.providers.registry import ProviderRegistry
+from kn_graph._compat import bundle_root
 from kn_graph.services.extraction_pipeline import run as run_extraction_mvp, NullLLMClient
 from kn_graph.services.graph_builder import _build_artifact_from_sqlite, run_build_from_artifact
 from kn_graph.services.import_sqlite import main_inline as _import_sqlite_main_inline
+from kn_graph.services.locking import LibraryLock, file_write_lock, atomic_write_json
 from kn_graph.services.mineru_runner import parse_single_pdf
 from kn_graph.services.sqlite_repo import SqliteRepo
 
@@ -458,7 +460,7 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     runner = factory.build(backend)
 
     # Build runtime_overrides
-    mcp_server_script = Path(__file__).resolve().parents[3] / "scripts" / "smj_pipeline" / "kn_mcp_server.py"
+    mcp_server_script = bundle_root() / "scripts" / "smj_pipeline" / "kn_mcp_server.py"
     runtime_overrides = {
         "mcp_servers": [
             {
@@ -657,6 +659,22 @@ def _run_extract_entities_fast(job_id: str, parse_meta: dict[str, Any], run_dir:
     return payload
 
 
+def _resolve_workspace_for_library(library_id: str) -> str:
+    """Resolve a library id to its workspace path, or '' if not found."""
+    lid = str(library_id or "").strip()
+    if not lid:
+        return ""
+    try:
+        from kn_graph.services.library_registry import ensure_registry, resolve_workspace_root
+        reg = ensure_registry()
+        ws = resolve_workspace_root(reg, lid)
+        if ws:
+            return str(ws)
+    except Exception:
+        pass
+    return ""
+
+
 def _run_materialize_import(
     job_id: str,
     input_pdf: Path,
@@ -672,9 +690,14 @@ def _run_materialize_import(
 
     library_id = str(options.get("library_id", "") or "").strip()
     workspace_path = str(options.get("_workspace_path", "") or "").strip()
+    if not workspace_path:
+        workspace_path = _resolve_workspace_for_library(library_id)
     import_result: dict[str, Any] = {}
 
     if library_id:
+        lib_lock = LibraryLock(workspace_path) if workspace_path else None
+        if lib_lock:
+            lib_lock.acquire()
         try:
             _stage_update(store, job_id, "materialize_paper", 53, "stage_progress", status="running")
             from kn_graph.services.literature_service import LiteratureService
@@ -700,6 +723,9 @@ def _run_materialize_import(
             workspace_path = str(import_result.get("workspace_path", "") or workspace_path)
         except Exception as exc:
             raise RuntimeError(f"import_failed:{exc}") from exc
+        finally:
+            if lib_lock:
+                lib_lock.release()
     else:
         raise RuntimeError("import_failed:library_id_missing")
 
@@ -824,7 +850,7 @@ def _run_finalize_after_import(
             if graph_updated:
                 graph_output_size = views_out.stat().st_size
         except Exception as exc:
-            graph_warning = str(exc)
+            raise RuntimeError(f"finalize_failed:{exc}") from exc
 
     keep_intermediates = bool(options.get("retain_job_intermediates", False))
     cleanup = _cleanup_redundant_job_files(
@@ -876,6 +902,25 @@ def _run_finalize_after_import(
     return result
 
 
+def _run_finalize_after_import_locked(
+    job_id: str, input_pdf: Path, parse_meta: dict[str, Any], extract_result: dict[str, Any],
+    run_dir: Path, store: JobStore, options: dict[str, Any],
+    import_result: dict[str, Any], workspace_path: str, library_id: str, imported_count: int,
+) -> dict[str, Any]:
+    """Wrapper that acquires library lock for _run_finalize_after_import."""
+    lib_lock = LibraryLock(workspace_path) if workspace_path else None
+    if lib_lock:
+        lib_lock.acquire()
+    try:
+        return _run_finalize_after_import(
+            job_id, input_pdf, parse_meta, extract_result, run_dir, store, options,
+            import_result, workspace_path, library_id, imported_count,
+        )
+    finally:
+        if lib_lock:
+            lib_lock.release()
+
+
 def _run_finalize(
     job_id: str,
     input_pdf: Path,
@@ -892,6 +937,9 @@ def _run_finalize(
 
     library_id = str(options.get("library_id", "") or "").strip()
     workspace_path = str(options.get("_workspace_path", "") or "").strip()
+    if not workspace_path:
+        workspace_path = _resolve_workspace_for_library(library_id)
+    lib_lock = LibraryLock(workspace_path) if workspace_path else None
     import_result: dict[str, Any] = {}
     import_warning = ""
     graph_output_path = ""
@@ -1018,7 +1066,7 @@ def _run_finalize(
             if graph_updated:
                 graph_output_size = views_out.stat().st_size
         except Exception as exc:
-            graph_warning = str(exc)
+            raise RuntimeError(f"finalize_failed:{exc}") from exc
 
     keep_intermediates = bool(options.get("retain_job_intermediates", False))
     cleanup = _cleanup_redundant_job_files(
@@ -1120,17 +1168,17 @@ def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
         out["llm_timeout_seconds"] = 300
 
     # Whether to keep duplicated job-level parse/input intermediates after success.
-    # Default false: keep corpus/papers as the single long-term source of files.
+    # Default true: keep job intermediates for debugging and checkpoint resume.
     if "retain_job_intermediates" not in out:
         out["retain_job_intermediates"] = str(
-            os.getenv("KN_PIPELINE_RETAIN_JOB_INTERMEDIATES", "0")
+            os.getenv("KN_PIPELINE_RETAIN_JOB_INTERMEDIATES", "1")
         ).strip().lower() in {"1", "true", "yes", "on"}
 
     # Whether to remove whole runs/<job_id> after successful finalize.
-    # Default on: jobs are transient runtime state, corpus/papers is the sole long-term asset.
+    # Default off: keep runs for checkpoint resume and raw output inspection.
     if "purge_job_workspace" not in out:
         out["purge_job_workspace"] = str(
-            os.getenv("KN_PIPELINE_PURGE_JOB_WORKSPACE", "1")
+            os.getenv("KN_PIPELINE_PURGE_JOB_WORKSPACE", "0")
         ).strip().lower() in {"1", "true", "yes", "on"}
 
     # extraction_mode
@@ -1204,7 +1252,7 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
             options["_workspace_path"] = workspace_path
             options["_materialized_md_path"] = materialized_md_path
             extract_result = _run_agent_extraction(job_id, parse_meta, run_dir, job_store, options)
-            _run_finalize_after_import(
+            _run_finalize_after_import_locked(
                 job_id=job_id,
                 input_pdf=input_pdf,
                 parse_meta=parse_meta,
@@ -1219,7 +1267,15 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
             )
         else:
             extract_result = _run_extract_entities(job_id, parse_meta, run_dir, job_store, options)
-            _run_finalize(job_id, input_pdf, parse_meta, extract_result, run_dir, job_store, options)
+            _finalize_ws = str(options.get("_workspace_path", "") or "").strip() or _resolve_workspace_for_library(str(options.get("library_id", "") or "").strip())
+            _finalize_lock = LibraryLock(_finalize_ws) if _finalize_ws else None
+            if _finalize_lock:
+                _finalize_lock.acquire()
+            try:
+                _run_finalize(job_id, input_pdf, parse_meta, extract_result, run_dir, job_store, options)
+            finally:
+                if _finalize_lock:
+                    _finalize_lock.release()
     except Exception as exc:
         if "job_cancelled" in str(exc):
             job_store.update_job(

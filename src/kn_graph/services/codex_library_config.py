@@ -26,8 +26,10 @@ def _safe_library_id(raw: str) -> str:
     return "".join(out)
 
 
+from kn_graph._compat import bundle_root
+
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    return bundle_root()
 
 
 def _skills_template_root() -> Path:

@@ -13,6 +13,32 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _mask_api_key(value: str) -> str:
+    """Replace API key bodies with asterisks, showing only the last 4 chars."""
+    if not value:
+        return value
+    if len(value) <= 4:
+        return "****"
+    return "****" + value[-4:]
+
+
+def _mask_sensitive_fields(obj: Any) -> Any:
+    """Recursively mask any dict value whose key contains 'api_key'."""
+    if isinstance(obj, dict):
+        result = {}
+        for key, val in obj.items():
+            if "api_key" in key.lower():
+                result[key] = _mask_api_key(str(val) if val else "")
+            elif isinstance(val, (dict, list)):
+                result[key] = _mask_sensitive_fields(val)
+            else:
+                result[key] = val
+        return result
+    if isinstance(obj, list):
+        return [_mask_sensitive_fields(item) for item in obj]
+    return obj
+
+
 class SettingsService:
     def __init__(self, settings: Settings, chat_service: ChatService) -> None:
         self._settings = settings
@@ -52,11 +78,14 @@ class SettingsService:
         if not isinstance(provider_data, dict):
             provider_data = {}
         defaults_base = (provider_map().get(active, {})).get("base_url", "")
+        fast_model = str(provider_data.get("model", "") or "")
+        if not fast_model and active == "deepseek":
+            fast_model = "deepseek-v4-flash"
         return {
             "extraction_mode": mode,
             "mineru_api_key": str(saved.get("mineru_api_key", "") or ""),
             "fast_provider": active,
-            "fast_model": str(provider_data.get("model", "") or ""),
+            "fast_model": fast_model,
             "fast_api_key": str(provider_data.get("api_key", "") or ""),
             "fast_base_url": str(provider_data.get("base_url", "") or defaults_base),
             "fast_endpoint_url": str(provider_data.get("endpoint_url", "") or default_endpoint_url(defaults_base)),
@@ -123,11 +152,18 @@ class SettingsService:
         provider = str(saved.get("provider", "") or "deepseek").strip()
         base_url = str(saved.get("base_url", "") or "").strip()
         if not base_url:
-            base_url = (provider_map().get(provider, {})).get("base_url", "")
+            catalog = provider_map().get(provider, {})
+            if backend == "claude_code" and catalog.get("anthropic_base_url", "").strip():
+                base_url = catalog["anthropic_base_url"].strip()
+            else:
+                base_url = catalog.get("base_url", "")
+        model = str(saved.get("model", "") or "")
+        if not model and provider == "deepseek":
+            model = "deepseek-v4-flash"
         return {
             "backend": backend,
             "provider": provider,
-            "model": str(saved.get("model", "") or ""),
+            "model": model,
             "api_key": str(saved.get("api_key", "") or ""),
             "base_url": base_url,
             "reasoning_effort": str(saved.get("reasoning_effort", "") or ""),
@@ -169,9 +205,11 @@ class SettingsService:
         provider = str(saved.get("provider", "") or "deepseek").strip()
         base_url = str(saved.get("base_url", "") or "").strip()
         if not base_url:
-            base_url = (provider_map().get(provider, {})).get("base_url", "")
-            if base_url:
-                saved["base_url"] = base_url
+            catalog = provider_map().get(provider, {})
+            if backend == "claude_code" and catalog.get("anthropic_base_url", "").strip():
+                saved["base_url"] = catalog["anthropic_base_url"].strip()
+            elif catalog.get("base_url", ""):
+                saved["base_url"] = catalog["base_url"]
         # Keep only one URL field for agent settings.
         saved.pop("endpoint_url", None)
         categories["pipeline_agent"] = saved
@@ -231,11 +269,16 @@ class SettingsService:
         if not isinstance(provider_data, dict):
             provider_data = {}
         endpoint_url = str(provider_data.get("endpoint_url", "") or "").strip()
-        if not endpoint_url:
+        if not endpoint_url and provider == "zhipu":
+            endpoint_url = "https://open.bigmodel.cn/api/paas/v4/embeddings"
+        elif not endpoint_url:
             endpoint_url = default_embedding_endpoint_url("")
+        model = str(provider_data.get("model", "") or "")
+        if not model and provider == "zhipu":
+            model = "embedding-3"
         return {
             "provider": provider,
-            "model": str(provider_data.get("model", "") or ""),
+            "model": model,
             "api_key": str(provider_data.get("api_key", "") or ""),
             "endpoint_url": endpoint_url,
             "provider_presets": provider_presets(),
@@ -302,7 +345,7 @@ class SettingsService:
     def get_all(self) -> dict[str, Any]:
         pipeline = attach_provider_meta(self._get_pipeline_category())
         translation = attach_provider_meta(self._get_translation_category())
-        return {
+        raw = {
             "schema": self.get_schema(),
             "settings": {
                 "pipeline": pipeline,
@@ -313,18 +356,20 @@ class SettingsService:
             },
             "updated_at": self._read_store().get("updated_at", ""),
         }
+        # Mask API keys in the response so raw secrets are never exposed over HTTP.
+        return _mask_sensitive_fields(raw)
 
     def update_category(self, category: str, body: dict[str, Any]) -> dict[str, Any]:
         key = str(category or "").strip().lower()
         payload = body if isinstance(body, dict) else {}
         if key == "pipeline":
-            return self._save_pipeline_category(payload)
+            return _mask_sensitive_fields(self._save_pipeline_category(payload))
         if key == "pipeline_agent":
-            return self._save_pipeline_agent_category(payload)
+            return _mask_sensitive_fields(self._save_pipeline_agent_category(payload))
         if key == "embedding":
-            return self._save_embedding_category(payload)
+            return _mask_sensitive_fields(self._save_embedding_category(payload))
         if key == "translation":
-            return self._save_translation_category(payload)
+            return _mask_sensitive_fields(self._save_translation_category(payload))
         if key == "agent_settings":
-            return self._chat_service.save_agent_settings(payload)
+            return _mask_sensitive_fields(self._chat_service.save_agent_settings(payload))
         raise KeyError(f"unknown_settings_category:{key}")
