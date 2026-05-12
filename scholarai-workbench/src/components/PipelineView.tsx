@@ -705,7 +705,7 @@ export default function PipelineView() {
           </div>
         </div>
       )}
-      <ZoteroImportModal open={showZoteroModal} onClose={() => setShowZoteroModal(false)} />
+      <ZoteroImportModal open={showZoteroModal} onClose={() => setShowZoteroModal(false)} onImportDone={fetchJobs} />
     </div>
   );
 }

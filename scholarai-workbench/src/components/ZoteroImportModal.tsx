@@ -7,9 +7,10 @@ import type { ZoteroItemInfo, ZoteroScanResponse, ZoteroCollectionInfo } from '.
 interface Props {
   open: boolean;
   onClose: () => void;
+  onImportDone?: () => void;
 }
 
-export default function ZoteroImportModal({ open, onClose }: Props) {
+export default function ZoteroImportModal({ open, onClose, onImportDone }: Props) {
   const { libraries, activeLibraryId } = useApp();
 
   const [dataDir, setDataDir] = useState('');
@@ -134,6 +135,7 @@ export default function ZoteroImportModal({ open, onClose }: Props) {
     try {
       const result = await api.zotero.importItems(dataDir.trim(), [...selectedIds], targetLibrary);
       setImportResult(`成功导入 ${result.count} 篇论文`);
+      onImportDone?.();
     } catch (err) {
       setImportResult(`导入失败: ${String((err as Error)?.message || err)}`);
     } finally {
