@@ -519,3 +519,32 @@
   background: var(--color-outline-variant);
   opacity: 0.35;
 }
+
+/* ---- Live Preview (CM6 decorations) ---- */
+.cm-live-code-line {
+  background: #111318 !important;
+}
+
+.katex-inline-block {
+  font-size: 1em;
+  vertical-align: middle;
+}
+
+.katex-display-block {
+  display: block;
+  text-align: center;
+  margin: 0.8em 0;
+  overflow-x: auto;
+}
+
+.code-lang-label-cm {
+  display: inline-block;
+  padding: 2px 10px;
+  font-size: 10px;
+  font-family: "Inter", sans-serif;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: #1a1d26;
+  border-radius: 4px 4px 0 0;
+}

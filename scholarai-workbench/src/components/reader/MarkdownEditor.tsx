@@ -25,6 +25,7 @@ import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter,
 import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { wikiLinkCompletionSource, wikiLinkPlugin, setWikiLinkNodeCache } from './WikiLink';
+import { livePreviewPlugin } from './LivePreviewPlugin';
 import { convertScriptOnlyKatexToHtml } from './katexScriptAlignment';
 import { useApp } from '../../app-context';
 import { isSelectionInside } from './selectionScope';
@@ -741,8 +742,8 @@ export default function MarkdownEditor({
 
   // ---- CM6 setup ----
 
-  // CM6 theme matching existing surface-container-lowest styling
-  const cm6Theme = useMemo(() => EditorView.theme({
+  // CM6 theme for source editing
+  const cm6EditTheme = useMemo(() => EditorView.theme({
     '&': {
       backgroundColor: 'transparent',
       height: '100%',
@@ -768,42 +769,81 @@ export default function MarkdownEditor({
     },
   }), []);
 
+  // CM6 theme for live preview — matches Read mode typography
+  const cm6LivePreviewTheme = useMemo(() => EditorView.theme({
+    '&': {
+      backgroundColor: 'transparent',
+      height: '100%',
+    },
+    '.cm-scroller': {
+      overflow: 'auto',
+    },
+    '.cm-content': {
+      fontFamily: '"Newsreader", ui-serif, Georgia, serif',
+      fontSize: '16px',
+      lineHeight: '1.78',
+      padding: '24px 48px',
+      maxWidth: '720px',
+      margin: '0 auto',
+      caretColor: 'var(--on-surface)',
+      color: 'var(--color-on-surface)',
+      overflowWrap: 'break-word',
+    },
+    '.cm-gutters': {
+      backgroundColor: 'transparent',
+      borderRight: '1px solid var(--outline-variant)',
+    },
+    '.cm-activeLineGutter': {
+      backgroundColor: 'rgba(0,0,0,0.05)',
+    },
+    '&.cm-focused': {
+      outline: 'none',
+    },
+  }), []);
+
   // Memoized CodeMirror extensions
-  const cmExtensions = useMemo(() => [
-    lineNumbers(),
-    highlightActiveLineGutter(),
-    highlightSpecialChars(),
-    history(),
-    foldGutter(),
-    drawSelection(),
-    highlightActiveLine(),
-    rectangularSelection(),
-    crosshairCursor(),
-    bracketMatching(),
-    closeBrackets(),
-    autocompletion({ override: [wikiLinkCompletionSource] }),
-    wikiLinkPlugin(handleWikiLinkNavigate),
-    indentOnInput(),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-    markdown({ base: markdownLanguage, codeLanguages: languages }),
-    keymap.of([
-      ...defaultKeymap,
-      ...historyKeymap,
-      ...completionKeymap,
-      ...closeBracketsKeymap,
-      ...searchKeymap,
-    ]),
-    highlightSelectionMatches(),
-    cm6Theme,
-    EditorView.updateListener.of((update) => {
-      if (update.docChanged) {
-        const newText = update.state.doc.toString();
-        currentContentRef.current = newText;
-        setText(newText);
-        onContentChangeRef.current?.(newText);
-      }
-    }),
-  ], [cm6Theme]);
+  const cmExtensions = useMemo(() => {
+    const exts = [
+      lineNumbers(),
+      highlightActiveLineGutter(),
+      highlightSpecialChars(),
+      history(),
+      foldGutter(),
+      drawSelection(),
+      highlightActiveLine(),
+      rectangularSelection(),
+      crosshairCursor(),
+      bracketMatching(),
+      closeBrackets(),
+      autocompletion({ override: [wikiLinkCompletionSource] }),
+      wikiLinkPlugin(handleWikiLinkNavigate),
+      indentOnInput(),
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      keymap.of([
+        ...defaultKeymap,
+        ...historyKeymap,
+        ...completionKeymap,
+        ...closeBracketsKeymap,
+        ...searchKeymap,
+      ]),
+      highlightSelectionMatches(),
+      mode === 'live-preview' ? cm6LivePreviewTheme : cm6EditTheme,
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          const newText = update.state.doc.toString();
+          currentContentRef.current = newText;
+          setText(newText);
+          onContentChangeRef.current?.(newText);
+        }
+      }),
+    ];
+    if (mode === 'live-preview') {
+      exts.push(livePreviewPlugin);
+      exts.push(EditorView.lineWrapping);
+    }
+    return exts;
+  }, [cm6EditTheme, cm6LivePreviewTheme, mode]);
 
   // Create/destroy CM6 editor based on mode
   useEffect(() => {
@@ -857,7 +897,7 @@ export default function MarkdownEditor({
       <div className="flex items-center justify-between px-4 py-2 border-b border-outline-variant bg-surface-container-lowest">
         <span className="text-xs font-mono text-on-surface-variant truncate max-w-[300px]">{fileName}</span>
         <div className="flex items-center gap-1 bg-surface-container rounded-lg p-0.5">
-          {(['edit', 'live-preview', 'read'] as ViewerMode[]).map((m) => (
+          {(['edit', 'read'] as ViewerMode[]).map((m) => (
             <button
               key={m}
               className={`px-3 py-1 text-xs rounded-md transition-colors ${
@@ -867,14 +907,14 @@ export default function MarkdownEditor({
               }`}
               onClick={() => handleModeChange(m)}
             >
-              {m === 'edit' ? 'Edit' : m === 'live-preview' ? 'Preview' : 'Read'}
+              {m === 'edit' ? 'Edit' : m === 'live-preview' ? 'Live' : 'Read'}
             </button>
           ))}
         </div>
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {mode === 'edit' && (
+        {(mode === 'edit' || mode === 'live-preview') && (
           <div
             ref={editorContainerRef}
             className="w-full h-full bg-surface-container-lowest"
@@ -921,41 +961,6 @@ export default function MarkdownEditor({
           </div>
         )}
 
-        {mode === 'live-preview' && (
-          <div className="flex h-full">
-            <div
-              ref={editorContainerRef}
-              className="flex-1 bg-surface-container-lowest border-r border-outline-variant"
-            />
-            <div className="flex-1 overflow-y-auto p-4">
-              <div
-                onClick={(evt) => {
-                  const rawTarget = evt.target;
-                  const elem = rawTarget instanceof Element ? rawTarget : ((rawTarget as Node | null)?.parentElement || null);
-                  const copyBtn = elem?.closest('[data-code-copy]') as HTMLElement | null;
-                  if (copyBtn) {
-                    const pre = copyBtn.closest('.code-block-header')?.nextElementSibling;
-                    const code = pre?.querySelector('code');
-                    if (code) {
-                      navigator.clipboard.writeText(code.textContent || '').then(() => {
-                        copyBtn.textContent = 'Copied!';
-                        copyBtn.classList.add('copied');
-                        setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('copied'); }, 2000);
-                      }).catch(() => {});
-                    }
-                    return;
-                  }
-                  const btn = elem?.closest('[data-reader-note-delete]') as HTMLElement | null;
-                  if (!btn) return;
-                  const idx = Number(btn.getAttribute('data-reader-note-delete') || '-1');
-                  if (idx >= 0) handleDeleteNoteByIndex(idx);
-                }}
-              >
-                {renderedMarkdownNode}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
       <SelectionActionPopover
         visible={selectionUI.visible}
