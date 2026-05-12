@@ -1085,6 +1085,18 @@ class PipelineService:
                 pass
         return None
 
+    @property
+    def runs_root(self) -> Path:
+        return self._runs_root
+
+    @property
+    def store(self):
+        return self._store
+
+    def resolve_run_dir(self, row: dict[str, Any]) -> Path | None:
+        """Return the run directory path for a job row, or None."""
+        return self._resolve_run_dir_from_row(row)
+
     @staticmethod
     def _resolve_run_dir_from_row(row: dict[str, Any]) -> Path | None:
         options_raw = str(row.get("options_json", "") or "").strip()

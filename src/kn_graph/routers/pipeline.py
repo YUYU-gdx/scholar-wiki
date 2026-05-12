@@ -254,6 +254,34 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             row = pipeline_service.get_job(job_id)
             if row is None:
                 return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
+
+            # Check if old run_dir still exists — if so, resume in-place (checkpoint restart)
+            run_dir = pipeline_service.resolve_run_dir(row)
+            if run_dir and (run_dir / "parse_meta.json").exists():
+                # In-place resume: reuse same job_id + run_dir, checkpoints auto-skip
+                source_path = pipeline_service.resolve_retry_source_pdf(row)
+                if source_path is None:
+                    return JSONResponse(status_code=404, content={"error": "retry_source_pdf_missing", "job_id": job_id})
+                raw_options = str(row.get("options_json", "") or "").strip()
+                parsed_options: dict[str, Any] = {}
+                if raw_options:
+                    try:
+                        parsed = json.loads(raw_options)
+                        if isinstance(parsed, dict):
+                            parsed_options = parsed
+                    except Exception:
+                        parsed_options = {}
+                parsed_options["_job_root"] = str(run_dir.parent)
+                parsed_options["library_id"] = str(row.get("library_id", "") or "").strip()
+                pipeline_service.update_job(job_id, {"status": "running", "stage": "accepted", "error_code": "", "error_detail": "", "progress": 0, "last_event": "retry_resume"})
+                from kn_graph.services.pipeline_runtime import dispatch_inline
+                dispatch_inline(
+                    pipeline_service.store, job_id,
+                    str(source_path.resolve()), parsed_options,
+                    pipeline_service.runs_root,
+                )
+                return JSONResponse(status_code=202, content={"job_id": job_id, "resumed": True})
+
             source_path = pipeline_service.resolve_retry_source_pdf(row)
             if source_path is None:
                 return JSONResponse(status_code=404, content={"error": "retry_source_pdf_missing", "job_id": job_id})

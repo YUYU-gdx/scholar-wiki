@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -19,6 +20,50 @@ from kn_graph.services.sqlite_repo import SqliteRepo
 
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 AGENT_EVENT_LOG_FILENAME = "agent_events.jsonl"
+
+_RETRY_MAX = int(os.getenv("KN_PIPELINE_STAGE_RETRY_MAX", "3"))
+_RETRY_BACKOFF_BASE = float(os.getenv("KN_PIPELINE_STAGE_RETRY_BACKOFF", "5"))
+
+_TRANSIENT_KEYWORDS = (
+    "database is locked", "sqlite_busy", "busy",
+    "RustBindingsAPI", "connection", "timeout",
+    "temporary", "try again",
+)
+
+
+def _touch_marker(run_dir: Path, stage: str) -> None:
+    (run_dir / f"{stage}.ok").write_text("", encoding="utf-8")
+
+
+def _detect_checkpoint(run_dir: Path) -> set[str]:
+    """Return set of completed stage names based on disk artifacts."""
+    done: set[str] = set()
+    if (run_dir / "parse").exists() and any((run_dir / "parse").iterdir()):
+        done.add("parse_pdf")
+    if (run_dir / "materialize.ok").exists():
+        done.add("materialize_paper")
+    if (run_dir / "extract" / "extract_result.json").exists():
+        done.add("extract_entities")
+    return done
+
+
+def _retry_on_transient(fn, store=None, job_id="", stage=""):
+    """Call *fn* up to _RETRY_MAX times, retrying on transient errors."""
+    last_exc = None
+    for attempt in range(_RETRY_MAX + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            msg = str(exc).lower()
+            is_transient = any(kw in msg for kw in _TRANSIENT_KEYWORDS)
+            if not is_transient or attempt >= _RETRY_MAX:
+                raise
+            wait = _RETRY_BACKOFF_BASE * (attempt + 1)
+            if store and job_id and stage:
+                _stage_update(store, job_id, stage, None, f"retry_{attempt + 1}", status="running")
+            time.sleep(wait)
+    raise last_exc
 
 
 class JobStore(Protocol):
@@ -334,6 +379,8 @@ def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore,
             raise RuntimeError(f"{code}:{getattr(exc, 'detail', str(exc))}")
         raise
     _stage_update(store, job_id, "parse_pdf", 45, "stage_done", status="running")
+    _touch_marker(run_dir, "parse_pdf")
+    (run_dir / "parse_meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     return meta
 
 
@@ -609,6 +656,7 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     # Overwrite extract_result.json with the pipeline-compatible payload format
     (extract_dir / "extract_result.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     _stage_update(store, job_id, "extract_entities", 90, "stage_done", status="running")
+    _touch_marker(run_dir, "extract_entities")
     return payload
 
 
@@ -656,6 +704,7 @@ def _run_extract_entities_fast(job_id: str, parse_meta: dict[str, Any], run_dir:
     }
     (extract_dir / "extract_result.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     _stage_update(store, job_id, "extract_entities", 90, "stage_done", status="running")
+    _touch_marker(run_dir, "extract_entities")
     return payload
 
 
@@ -719,7 +768,10 @@ def _run_materialize_import(
                 "preparsed_mineru_dir": str((run_dir / "parse" / "mineru_zip_unpacked").resolve()),
             }
             manifest_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-            import_result = literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id})
+            import_result = _retry_on_transient(
+                lambda: literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id}),
+                store=store, job_id=job_id, stage="materialize_paper",
+            )
             workspace_path = str(import_result.get("workspace_path", "") or workspace_path)
         except Exception as exc:
             raise RuntimeError(f"import_failed:{exc}") from exc
@@ -730,6 +782,11 @@ def _run_materialize_import(
         raise RuntimeError("import_failed:library_id_missing")
 
     _stage_update(store, job_id, "materialize_paper", 54, "stage_done", status="running")
+    _touch_marker(run_dir, "materialize_paper")
+    _checkpoint_meta = run_dir / "checkpoint_meta.json"
+    _prev = json.loads(_checkpoint_meta.read_text(encoding="utf-8")) if _checkpoint_meta.exists() else {}
+    _prev.update({"workspace_path": workspace_path, "library_id": library_id})
+    _checkpoint_meta.write_text(json.dumps(_prev, ensure_ascii=False), encoding="utf-8")
     return import_result, workspace_path, library_id
 
 
@@ -791,13 +848,13 @@ def _run_finalize_after_import(
                             fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
                     raw_jsonl = fixed_path
                 _stage_update(store, job_id, "finalize", 98, "importing_to_sqlite", status="running")
-                _import_sqlite_main_inline(
-                    db_path=str(db_path),
-                    raw_output_jsonl=raw_jsonl,
-                    apply_schema=False,
-                    source_pdf_path=mat_pdf_path,
-                    source_md_path=mat_md_path,
-                    source_html_path=mat_html_path,
+                _retry_on_transient(
+                    lambda: _import_sqlite_main_inline(
+                        db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False,
+                        source_pdf_path=mat_pdf_path, source_md_path=mat_md_path,
+                        source_html_path=mat_html_path,
+                    ),
+                    store=store, job_id=job_id, stage="finalize",
                 )
                 sqlite_import_succeeded = True
             if sqlite_import_succeeded:
@@ -844,7 +901,10 @@ def _run_finalize_after_import(
             _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
             artifact = _build_artifact_from_sqlite(db_path)
             views_out = Path(workspace_path) / "graph_views.json"
-            run_build_from_artifact(artifact, views_out)
+            _retry_on_transient(
+                lambda: run_build_from_artifact(artifact, views_out),
+                store=store, job_id=job_id, stage="finalize",
+            )
             graph_output_path = str(views_out.resolve())
             graph_updated = views_out.exists()
             if graph_updated:
@@ -965,7 +1025,10 @@ def _run_finalize(
                 "source_path": str(input_pdf.resolve()),
             }
             manifest_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-            import_result = literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id})
+            import_result = _retry_on_transient(
+                lambda: literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id}),
+                store=store, job_id=job_id, stage="finalize",
+            )
             workspace_path = str(import_result.get("workspace_path", "") or workspace_path)
         except Exception as exc:
             import_warning = str(exc)
@@ -1014,7 +1077,10 @@ def _run_finalize(
                             fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
                     raw_jsonl = fixed_path
                 _stage_update(store, job_id, "finalize", 98, "importing_to_sqlite", status="running")
-                _import_sqlite_main_inline(db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False)
+                _retry_on_transient(
+                    lambda: _import_sqlite_main_inline(db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False),
+                    store=store, job_id=job_id, stage="finalize",
+                )
                 sqlite_import_succeeded = True
             if sqlite_import_succeeded:
                 concept_index_result, concept_index_warning = _sync_variable_concept_index(
@@ -1060,7 +1126,10 @@ def _run_finalize(
             _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
             artifact = _build_artifact_from_sqlite(db_path)
             views_out = Path(workspace_path) / "graph_views.json"
-            run_build_from_artifact(artifact, views_out)
+            _retry_on_transient(
+                lambda: run_build_from_artifact(artifact, views_out),
+                store=store, job_id=job_id, stage="finalize",
+            )
             graph_output_path = str(views_out.resolve())
             graph_updated = views_out.exists()
             if graph_updated:
@@ -1230,28 +1299,49 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
     run_dir = (Path(job_root_raw).resolve() / "run") if job_root_raw else (runs_root / job_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     input_pdf = Path(input_path).resolve()
+    checkpoint = _detect_checkpoint(run_dir)
+    cp_meta: dict[str, Any] = {}
+    cp_meta_path = run_dir / "checkpoint_meta.json"
+    if cp_meta_path.exists():
+        try:
+            cp_meta = json.loads(cp_meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            cp_meta = {}
     try:
-        parse_meta = _run_parse_pdf(job_id, input_pdf, run_dir, job_store, options)
+        if "parse_pdf" in checkpoint:
+            pm_path = run_dir / "parse_meta.json"
+            parse_meta = json.loads(pm_path.read_text(encoding="utf-8")) if pm_path.exists() else {}
+        else:
+            parse_meta = _run_parse_pdf(job_id, input_pdf, run_dir, job_store, options)
         mode = str(options.get("extraction_mode", "fast") or "fast").strip().lower()
         if mode == "agent":
-            import_result, workspace_path, library_id = _run_materialize_import(
-                job_id=job_id,
-                input_pdf=input_pdf,
-                parse_meta=parse_meta,
-                run_dir=run_dir,
-                store=job_store,
-                options=options,
-            )
-            imported_count = int(import_result.get("imported_count", 0) or 0)
-            if imported_count <= 0:
-                raise RuntimeError("import_noop:imported_count_is_zero")
+            if "materialize_paper" in checkpoint:
+                workspace_path = str(cp_meta.get("workspace_path", "") or "").strip()
+                library_id = str(cp_meta.get("library_id", "") or "").strip()
+                import_result = {"imported_count": 1, "workspace_path": workspace_path, "library_id": library_id, "materialized_papers": []}
+                imported_count = 1
+            else:
+                import_result, workspace_path, library_id = _run_materialize_import(
+                    job_id=job_id,
+                    input_pdf=input_pdf,
+                    parse_meta=parse_meta,
+                    run_dir=run_dir,
+                    store=job_store,
+                    options=options,
+                )
+                imported_count = int(import_result.get("imported_count", 0) or 0)
+                if imported_count <= 0:
+                    raise RuntimeError("import_noop:imported_count_is_zero")
             mats = import_result.get("materialized_papers", []) or []
             mat0 = mats[0] if isinstance(mats, list) and mats else {}
             materialized_md_path = _resolve_materialized_md_path(mat0 if isinstance(mat0, dict) else {})
             options = dict(options)
             options["_workspace_path"] = workspace_path
             options["_materialized_md_path"] = materialized_md_path
-            extract_result = _run_agent_extraction(job_id, parse_meta, run_dir, job_store, options)
+            if "extract_entities" in checkpoint:
+                extract_result = json.loads((run_dir / "extract" / "extract_result.json").read_text(encoding="utf-8"))
+            else:
+                extract_result = _run_agent_extraction(job_id, parse_meta, run_dir, job_store, options)
             _run_finalize_after_import_locked(
                 job_id=job_id,
                 input_pdf=input_pdf,
@@ -1266,7 +1356,10 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
                 imported_count=imported_count,
             )
         else:
-            extract_result = _run_extract_entities(job_id, parse_meta, run_dir, job_store, options)
+            if "extract_entities" in checkpoint:
+                extract_result = json.loads((run_dir / "extract" / "extract_result.json").read_text(encoding="utf-8"))
+            else:
+                extract_result = _run_extract_entities(job_id, parse_meta, run_dir, job_store, options)
             _finalize_ws = str(options.get("_workspace_path", "") or "").strip() or _resolve_workspace_for_library(str(options.get("library_id", "") or "").strip())
             _finalize_lock = LibraryLock(_finalize_ws) if _finalize_ws else None
             if _finalize_lock:

@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from typing import Any
@@ -544,6 +545,12 @@ class ChromaDBClient:
         return out
 
 
+# Module-level cache: share ChromaDBClient instances across all LiteratureService
+# instances to prevent concurrent PersistentClient conflicts on the same directory.
+_chroma_client_cache: dict[str, ChromaDBClient] = {}
+_chroma_client_lock = threading.Lock()
+
+
 class LiteratureService:
     def __init__(
         self,
@@ -896,13 +903,23 @@ class LiteratureService:
         lib = str(library_id or "").strip()
         if not lib:
             raise RuntimeError("library_id_required")
-        if lib not in self._chroma_clients:
-            workspace = self._resolve_workspace_root(lib)
-            if workspace is None:
-                raise RuntimeError(f"workspace_not_found:{lib}")
-            chroma_dir = workspace / "chromadb"
-            self._chroma_clients[lib] = ChromaDBClient(str(chroma_dir))
-        return self._chroma_clients[lib]
+        # Fast path: instance cache
+        if lib in self._chroma_clients:
+            return self._chroma_clients[lib]
+        # Thread-safe module-level cache: prevent multiple PersistentClient instances
+        # from opening the same chromadb directory concurrently.
+        with _chroma_client_lock:
+            if lib in _chroma_client_cache:
+                client = _chroma_client_cache[lib]
+            else:
+                workspace = self._resolve_workspace_root(lib)
+                if workspace is None:
+                    raise RuntimeError(f"workspace_not_found:{lib}")
+                chroma_dir = workspace / "chromadb"
+                client = ChromaDBClient(str(chroma_dir))
+                _chroma_client_cache[lib] = client
+        self._chroma_clients[lib] = client
+        return client
 
     def _build_default_embedding(self) -> OpenAICompatibleEmbeddingClient:
         provider = (getattr(self._settings, "embedding_provider", "") or "").strip() or "zhipu"
@@ -1030,15 +1047,17 @@ class LiteratureService:
         deleted_workspace = False
         deleted_workspace_paths: list[str] = []
         if bool(delete_workspace_data) and ws.exists() and ws.is_dir():
-            shutil.rmtree(ws, ignore_errors=True)
-            if not ws.exists():
-                deleted_workspace = True
-                deleted_workspace_paths.append(str(ws))
+            client = self._chroma_clients.pop(lib, None)
+            if client is not None:
+                client.close()
+            shutil.rmtree(ws)
+            deleted_workspace = True
+            deleted_workspace_paths.append(str(ws))
 
         if index_path.exists() and index_path.is_file():
             index_path.unlink(missing_ok=True)
 
-        deleted = (not ws.exists()) or (not index_path.exists())
+        deleted = not ws.exists() and not index_path.exists()
         return {
             "library_id": lib,
             "deleted": bool(deleted),
