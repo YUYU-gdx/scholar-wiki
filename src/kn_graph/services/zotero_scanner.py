@@ -306,6 +306,125 @@ def get_zotero_item_full(data_dir: str, item_id: int) -> dict[str, Any] | None:
         _cleanup_temp_db(tmp_path)
 
 
+def get_zotero_items_batch(data_dir: str, item_ids: list[int]) -> list[dict[str, Any]]:
+    """Like ``get_zotero_item_full`` but copies the database only once for
+    multiple items.  Items that can't be found are silently skipped."""
+    if not item_ids:
+        return []
+    data_dir = os.path.expanduser(data_dir)
+    conn, tmp_path = _safe_open_zotero_db(data_dir)
+    try:
+        conn.row_factory = sqlite3.Row
+        results: list[dict[str, Any]] = []
+        for item_id in item_ids:
+            row = conn.execute(
+                "SELECT i.*, it.typeName FROM items i "
+                "JOIN itemTypes it ON i.itemTypeID = it.itemTypeID "
+                "WHERE i.itemID = ?",
+                (item_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            result = {
+                "item_id": row["itemID"],
+                "key": row["key"],
+                "item_type": row["typeName"],
+                "date_added": row["dateAdded"],
+                "date_modified": row["dateModified"],
+                "library_id": row["libraryID"],
+                "metadata": {},
+                "creators": [],
+                "pdf_paths": [],
+                "notes": [],
+                "annotations": [],
+                "collections": [],
+            }
+            field_map = _dict_from(conn, "SELECT fieldID, fieldName FROM fields")
+            base_dir = _read_setting(conn, "baseDir", "baseDir")
+            # Metadata
+            for r2 in conn.execute(
+                "SELECT id.fieldID, idv.value FROM itemData id "
+                "JOIN itemDataValues idv ON id.valueID = idv.valueID "
+                "WHERE id.itemID = ?",
+                (item_id,),
+            ):
+                name = field_map.get(r2["fieldID"], f"field_{r2['fieldID']}")
+                result["metadata"][name] = r2["value"]
+            # Creators
+            for r2 in conn.execute(
+                "SELECT cr.firstName, cr.lastName, cr.fieldMode, ct.creatorType "
+                "FROM itemCreators ic "
+                "JOIN creators cr ON ic.creatorID = cr.creatorID "
+                "JOIN creatorTypes ct ON ic.creatorTypeID = ct.creatorTypeID "
+                "WHERE ic.itemID = ? ORDER BY ic.orderIndex",
+                (item_id,),
+            ):
+                result["creators"].append({
+                    "first_name": r2["firstName"] or "",
+                    "last_name": r2["lastName"] or "",
+                    "field_mode": r2["fieldMode"],
+                    "creator_type": r2["creatorType"],
+                })
+            # Attachments
+            for r2 in conn.execute(
+                "SELECT ia.itemID AS attachment_id, ia.linkMode, ia.contentType, "
+                "       ia.path, i2.key AS attachment_key "
+                "FROM itemAttachments ia "
+                "JOIN items i2 ON ia.itemID = i2.itemID "
+                "WHERE ia.parentItemID = ?",
+                (item_id,),
+            ):
+                resolved = _resolve_attachment_path(r2["path"], r2["attachment_key"], data_dir, base_dir)
+                result["pdf_paths"].append({
+                    "attachment_id": r2["attachment_id"],
+                    "content_type": r2["contentType"],
+                    "path": r2["path"],
+                    "resolved_path": resolved,
+                    "file_exists": resolved is not None and os.path.isfile(resolved),
+                })
+            # Notes
+            for r2 in conn.execute(
+                "SELECT itemID, title, note FROM itemNotes WHERE parentItemID = ? ORDER BY itemID",
+                (item_id,),
+            ):
+                result["notes"].append({
+                    "note_id": r2["itemID"], "title": r2["title"], "content": r2["note"],
+                })
+            # Annotations
+            ann_targets = [item_id]
+            for r2 in conn.execute(
+                "SELECT itemID FROM itemAttachments WHERE parentItemID = ?", (item_id,),
+            ):
+                ann_targets.append(r2["itemID"])
+            target_ph = ",".join("?" * len(ann_targets))
+            for r2 in conn.execute(
+                f"SELECT itemID, type, authorName, text, comment, color, "
+                f"       pageLabel, sortIndex, position "
+                f"FROM itemAnnotations "
+                f"WHERE parentItemID IN ({target_ph}) ORDER BY sortIndex",
+                ann_targets,
+            ):
+                result["annotations"].append({
+                    "annotation_id": r2["itemID"], "type": r2["type"],
+                    "author_name": r2["authorName"], "text": r2["text"],
+                    "comment": r2["comment"], "color": r2["color"],
+                    "page_label": r2["pageLabel"], "sort_index": r2["sortIndex"],
+                    "position": r2["position"],
+                })
+            # Collections
+            for r2 in conn.execute(
+                "SELECT c.collectionName FROM collectionItems ci "
+                "JOIN collections c ON ci.collectionID = c.collectionID "
+                "WHERE ci.itemID = ?",
+                (item_id,),
+            ):
+                result["collections"].append(r2["collectionName"])
+            results.append(result)
+        return results
+    finally:
+        _cleanup_temp_db(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

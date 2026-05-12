@@ -140,7 +140,7 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
     async def zotero_import(body: ZoteroImportRequest):
         import uuid, hashlib, json, shutil, os
         from pathlib import Path
-        from kn_graph.services.zotero_scanner import get_zotero_item_full
+        from kn_graph.services.zotero_scanner import get_zotero_items_batch
         from kn_graph.services.pipeline_runtime import dispatch_inline
 
         data_dir = str(body.data_dir or "").strip()
@@ -171,14 +171,8 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
                           os.path.join(getattr(settings_obj, 'data_dir', 'outputs'), 'runs')))
 
         job_ids = []
-        for item_id in item_ids:
-            try:
-                zotero_data = get_zotero_item_full(data_dir, item_id)
-            except Exception:
-                continue
-
-            if zotero_data is None:
-                continue
+        all_items = get_zotero_items_batch(data_dir, item_ids)
+        for zotero_data in all_items:
 
             # Find first PDF path that exists
             pdf_paths = [a for a in zotero_data.get("pdf_paths", []) if a.get("file_exists")]

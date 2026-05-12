@@ -634,83 +634,101 @@ export default function MarkdownEditor({
   };
 
   const handleSaveNote = async (note: string) => {
+    const noteId = crypto.randomUUID();
+    const noteText = String(note || '').trim();
+    const picked = String(selectionUI.text || '').trim();
+    if (!noteText || !picked) return;
+
+    const sh = window.desktopShell;
+    // eslint-disable-next-line no-console
+    console.log('[notes] save start', { noteId, absolutePath, hasShell: !!sh, runtime: sh?.runtime, pickedLen: picked.length, noteLen: noteText.length });
+
+    // ── Step 1: IndexedDB (fire-and-forget, don't block on it) ──
+    readerNotesManager.add({
+      paper_id: paperId,
+      library_id: libraryId,
+      doc_type: 'markdown',
+      page_index: 0,
+      selected_text: picked,
+      note_text: noteText,
+      md_anchor: readerNotesManager.makeAnchor(text, picked),
+      markdown_path_at_write: absolutePath,
+    }).then((saved) => {
+      // eslint-disable-next-line no-console
+      console.log('[notes] indexdb saved', { id: saved.id });
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn('[notes] indexdb save failed (non-fatal)', err);
+    });
+
+    // ── Step 2: Direct file write ──
+    if (!sh || sh.runtime !== 'electron' || !absolutePath) {
+      window.alert('笔记已保存到本地数据库，但文件写入不可用（非Electron环境）');
+      setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 }));
+      return;
+    }
+
     try {
-      const noteText = String(note || '').trim();
-      const picked = String(selectionUI.text || '').trim();
-      if (!noteText || !picked) return;
+      // Read current file content
+      // eslint-disable-next-line no-console
+      console.log('[notes] reading file...', absolutePath);
+      let read = await sh.readLocalText(absolutePath);
+      // eslint-disable-next-line no-console
+      console.log('[notes] read result', { ok: read.ok, dataLen: read.data?.length, error: read.error });
+
+      if (!read.ok) {
+        // File doesn't exist or can't be read — create new
+        const init = `## Reader Notes\n\n`;
+        const created = await sh.writeLocalText(absolutePath, init);
+        // eslint-disable-next-line no-console
+        console.log('[notes] create new file', { ok: created.ok, error: created.error });
+        if (!created.ok) {
+          throw new Error(`创建文件失败: ${created.error || 'unknown'}`);
+        }
+        read = { ok: true, data: init };
+      }
+
+      // Build note block and insert
+      const now = new Date().toISOString();
+      const block = `\n\n> [!NOTE] Reader Note\n> Note ID: ${noteId}\n> Quote:\n> ${picked}\n>\n> Note:\n> ${noteText}\n>\n> Time:\n> ${now}\n`;
+      const src = String(read.data || '').replace(/\r\n/g, '\n');
+      const next = src.includes('## Reader Notes')
+        ? `${src}${block}`
+        : `${src}\n\n## Reader Notes${block}`;
+
+      // eslint-disable-next-line no-console
+      console.log('[notes] writing file...', { srcLen: src.length, nextLen: next.length });
+      const wr = await sh.writeLocalText(absolutePath, next);
+      // eslint-disable-next-line no-console
+      console.log('[notes] write result', { ok: wr.ok, error: wr.error });
+
+      if (!wr.ok) {
+        throw new Error(`写入文件失败: ${wr.error || 'unknown'}`);
+      }
+
+      // Verify
+      const verify = await sh.readLocalText(absolutePath);
+      const markerFound = verify.ok && String(verify.data || '').includes(`> Note ID: ${noteId}`);
+      // eslint-disable-next-line no-console
+      console.log('[notes] verify', { ok: verify.ok, markerFound });
+
+      if (!markerFound) {
+        throw new Error('写入验证失败：回读文件未找到笔记标记');
+      }
+
+      // Update state
+      const latest = String(verify.data || '').replace(/\r\n/g, '\n');
+      setText(latest);
+      onContentChange?.(latest);
       if (absolutePath) setRecordedNotesMarkdownPath(libraryId, paperId, absolutePath);
-      // eslint-disable-next-line no-console
-      console.log('[notes] markdown save path alignment', {
-        absolutePath,
-        cachedPaths: listRecordedNotesMarkdownPaths(libraryId, paperId),
-        paperId,
-        libraryId,
-      });
-      // Quick pre-check before attempting write
-      const sh = window.desktopShell;
-      if (!sh || sh.runtime !== 'electron' || !absolutePath) {
-        throw new Error(`文件写入不可用：runtime=${sh?.runtime || 'none'}, path=${absolutePath || 'none'}`);
-      }
-
-      const saved = await readerNotesManager.add({
-        paper_id: paperId,
-        library_id: libraryId,
-        doc_type: 'markdown',
-        page_index: 0,
-        selected_text: picked,
-        note_text: noteText,
-        md_anchor: readerNotesManager.makeAnchor(text, picked),
-        markdown_path_at_write: absolutePath,
-      });
-
-      // Probe read first to confirm file is accessible
-      const probe = await sh.readLocalText(absolutePath);
-      if (!probe.ok) {
-        throw new Error(`文件读取失败: ${probe.error || 'unknown'} (path: ${absolutePath})`);
-      }
-
-      const atomic = selectionUI.lineEnd >= 0
-        ? await addNoteToMarkdownAtomicByLine(absolutePath, saved.id, picked, noteText, selectionUI.lineEnd)
-        : await addNoteToMarkdownAtomic(absolutePath, saved.id, picked, noteText);
-      if (!atomic.ok) throw new Error(`写入验证失败: marker未在回读中找到 (path: ${absolutePath})`);
-      // eslint-disable-next-line no-console
-      console.log('[notes] markdown save atomic result', { noteId: saved.id, rawLen: atomic.raw.length, hasMarker: atomic.raw.includes(`> Note ID: ${saved.id}`) });
-      setText(atomic.raw);
-      onContentChange?.(atomic.raw);
-      if (window.desktopShell?.runtime === 'electron' && absolutePath) {
-        const marker = `> Note ID: ${saved.id}`;
-        window.setTimeout(async () => {
-          const r = await window.desktopShell?.readLocalText(absolutePath);
-          const stillExists = !!(r?.ok && String(r.data || '').includes(marker));
-          // eslint-disable-next-line no-console
-          console.log('[notes] markdown delayed verify 1s', { noteId: saved.id, stillExists, absolutePath });
-          if (!stillExists && r?.ok) {
-            const repair = await addNoteToMarkdownAtomic(absolutePath, saved.id, picked, noteText);
-            // eslint-disable-next-line no-console
-            console.warn('[notes] markdown repaired after overwrite (1s)', { noteId: saved.id, ok: repair.ok });
-          }
-        }, 1000);
-        window.setTimeout(async () => {
-          const r = await window.desktopShell?.readLocalText(absolutePath);
-          const stillExists = !!(r?.ok && String(r.data || '').includes(marker));
-          // eslint-disable-next-line no-console
-          console.log('[notes] markdown delayed verify 3s', { noteId: saved.id, stillExists, absolutePath });
-        }, 3000);
-      }
       window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
       setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 }));
+      // eslint-disable-next-line no-console
+      console.log('[notes] save complete', { noteId });
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.error('[notes] markdown save failed', {
-        error: (e as Error).message,
-        absolutePath,
-        hasShell: !!window.desktopShell,
-        runtime: window.desktopShell?.runtime,
-        lineEnd: selectionUI.lineEnd,
-        pickedLen: String(selectionUI.text || '').trim().length,
-        noteLen: String(note || '').trim().length,
-      });
-      window.alert(`保存笔记失败：${(e as Error).message}`);
+      console.error('[notes] file write failed', e);
+      window.alert(`笔记已保存到本地数据库，但写入MD文件失败：${(e as Error).message}`);
     }
   };
 

@@ -295,5 +295,44 @@ class TestZoteroImportFlowReal(unittest.TestCase):
         print(f"  extraction_mode: {parsed['extraction_mode']}")
 
 
+class TestZoteroBatchRealData(unittest.TestCase):
+    """Test get_zotero_items_batch against the real Zotero database."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.data_dir = _get_zotero_dir()
+        from kn_graph.services.zotero_scanner import scan_zotero
+        result = scan_zotero(cls.data_dir)
+        if result["total_count"] < 3:
+            raise unittest.SkipTest("Need at least 3 items with PDFs")
+        cls.item_ids = [it["item_id"] for it in result["items"][:3]]
+
+    def test_batch_returns_same_count(self):
+        """Batch should return results for all requested item IDs."""
+        from kn_graph.services.zotero_scanner import get_zotero_items_batch
+        results = get_zotero_items_batch(self.data_dir, self.item_ids)
+        self.assertEqual(len(results), len(self.item_ids),
+                         f"Expected {len(self.item_ids)} results, got {len(results)}")
+        for r in results:
+            self.assertIn("metadata", r)
+            self.assertIn("pdf_paths", r)
+            self.assertIn("notes", r)
+            self.assertIn("annotations", r)
+        print(f"\n[OK] Batch returned {len(results)} items in one DB copy")
+
+    def test_batch_results_match_single(self):
+        """Batch results should match get_zotero_item_full for each item."""
+        from kn_graph.services.zotero_scanner import get_zotero_item_full, get_zotero_items_batch
+        batch_results = get_zotero_items_batch(self.data_dir, self.item_ids)
+        for batch_item in batch_results:
+            single = get_zotero_item_full(self.data_dir, batch_item["item_id"])
+            self.assertIsNotNone(single)
+            self.assertEqual(batch_item["metadata"], single["metadata"])
+            self.assertEqual(len(batch_item["pdf_paths"]), len(single["pdf_paths"]))
+            self.assertEqual(len(batch_item["notes"]), len(single["notes"]))
+            self.assertEqual(len(batch_item["annotations"]), len(single["annotations"]))
+        print(f"\n[OK] Batch results match individual calls for {len(batch_results)} items")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,11 +20,10 @@ def _frozen_root() -> Path:
 
 def _project_root() -> Path:
     # _compat.py lives at src/kn_graph/_compat.py
-    # parents[0] = src/kn_graph/_compat.py
-    # parents[1] = src/kn_graph/
-    # parents[2] = src/
-    # parents[3] = project root
-    return Path(__file__).resolve().parents[3]
+    # parents[0] = src/kn_graph/   (dir containing this file)
+    # parents[1] = src/
+    # parents[2] = project root
+    return Path(__file__).resolve().parents[2]
 
 
 def bundle_root() -> Path:
