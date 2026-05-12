@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { CloudUpload, FileText, RefreshCw, XCircle, Info, Terminal, Trash2, ChevronDown } from 'lucide-react';
+import { CloudUpload, FileText, RefreshCw, XCircle, Info, Terminal, Trash2, ChevronDown, Database } from 'lucide-react';
+import ZoteroImportModal from './ZoteroImportModal';
 import { useApp } from '../app-context';
 import { api } from '../api';
 import type { PipelineAgentEvent, PipelineJob } from '../types';
@@ -143,6 +144,7 @@ export default function PipelineView() {
   const [refreshing, setRefreshing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [showZoteroModal, setShowZoteroModal] = useState(false);
   const [sseLog, setSseLog] = useState<Array<{ time: string; type: string; msg: string }>>([]);
   const [sseConnected, setSseConnected] = useState(false);
   const sseRef = useRef<EventSource | null>(null);
@@ -501,6 +503,13 @@ export default function PipelineView() {
             />
             <label htmlFor="pdf-upload" className="flex-1 min-w-0 relative" />
             <button
+              onClick={() => setShowZoteroModal(true)}
+              className="shrink-0 flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-bold border-2 border-secondary text-secondary hover:bg-secondary-container/10 transition-all whitespace-nowrap"
+            >
+              <Database className="w-4 h-4" />
+              从 Zotero 导入
+            </button>
+            <button
               onClick={submitJob}
               disabled={!uploadFile || uploading}
               className="shrink-0 bg-secondary text-on-secondary px-6 py-3 rounded-xl text-sm font-bold hover:opacity-90 transition-all shadow-lg shadow-secondary/10 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
@@ -696,6 +705,7 @@ export default function PipelineView() {
           </div>
         </div>
       )}
+      <ZoteroImportModal open={showZoteroModal} onClose={() => setShowZoteroModal(false)} />
     </div>
   );
 }
