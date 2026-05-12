@@ -21,6 +21,8 @@ import type {
   TranslationProviderConfig,
   TranslateResponse,
   GlobalSettingsPayload,
+  ZoteroScanResponse,
+  ZoteroImportResponse,
 } from './types';
 
 // In Electron (file:// protocol), API_BASE must point to the backend.
@@ -231,6 +233,21 @@ export const api = {
       return jsonFetch('/literature/import', {
         method: 'POST',
         body: JSON.stringify({ manifest_path: manifestPath, library_id: libraryId, options: options || {} }),
+      });
+    },
+  },
+
+  zotero: {
+    scan(dataDir: string): Promise<ZoteroScanResponse> {
+      return jsonFetch('/literature/zotero/scan', {
+        method: 'POST',
+        body: JSON.stringify({ data_dir: dataDir }),
+      });
+    },
+    importItems(dataDir: string, itemIds: number[], libraryId: string): Promise<ZoteroImportResponse> {
+      return jsonFetch('/literature/zotero/import', {
+        method: 'POST',
+        body: JSON.stringify({ data_dir: dataDir, item_ids: itemIds, library_id: libraryId }),
       });
     },
   },

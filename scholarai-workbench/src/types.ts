@@ -475,3 +475,48 @@ export interface GlobalSettingsPayload {
 }
 
 export type View = 'library' | 'graph' | 'chat' | 'reader' | 'pipeline' | 'settings';
+
+// ── Zotero import types ──────────────────────────────────────────────
+
+export interface ZoteroCreatorInfo {
+  first_name: string;
+  last_name: string;
+  creator_type: string;
+}
+
+export interface ZoteroItemInfo {
+  item_id: number;
+  key: string;
+  item_type: string;
+  title: string;
+  date: string;
+  publication_title: string;
+  volume: string;
+  issue: string;
+  pages: string;
+  doi: string;
+  abstract: string;
+  url: string;
+  creators: ZoteroCreatorInfo[];
+  pdf_paths: string[];
+  note_count: number;
+  annotation_count: number;
+  collections: string[];
+}
+
+export interface ZoteroCollectionInfo {
+  collection_id: number;
+  name: string;
+  parent_id: number | null;
+}
+
+export interface ZoteroScanResponse {
+  items: ZoteroItemInfo[];
+  total_count: number;
+  collections: ZoteroCollectionInfo[];
+}
+
+export interface ZoteroImportResponse {
+  job_ids: string[];
+  count: number;
+}
