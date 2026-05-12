@@ -138,7 +138,7 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
 
     @router.post("/zotero/import")
     async def zotero_import(body: ZoteroImportRequest):
-        import uuid, hashlib, shutil, os
+        import uuid, hashlib, json, shutil, os
         from pathlib import Path
         from kn_graph.services.zotero_scanner import get_zotero_item_full
         from kn_graph.services.pipeline_runtime import dispatch_inline
@@ -218,8 +218,8 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
                 "error_detail": "",
                 "input_path": str(dest_pdf),
                 "output_path": "",
-                "options": zotero_options,
-                "result": {},
+                "options_json": json.dumps(zotero_options, ensure_ascii=False),
+                "result_json": "{}",
                 "requested_cancel": False,
                 "idempotency_key": "",
                 "last_event": "accepted",
@@ -229,7 +229,6 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
                 "workspace_path": str(workspace_path),
                 "source_job_id": "",
                 "file_name": file_name,
-                "display_name": zotero_data.get("metadata", {}).get("title", "") or file_name,
             }
             pipeline_service.create_job(payload)
 
