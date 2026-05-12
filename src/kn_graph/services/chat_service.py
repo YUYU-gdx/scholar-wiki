@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from kn_graph.config import Settings
+from kn_graph._compat import bundle_root
 
 from kn_graph.services.chat_legacy import ChatService as LegacyChatService
 from kn_graph.services.agent_runner import AgentRunnerFactory
@@ -146,7 +147,7 @@ class ChatService:
                         "run",
                         "python",
                         str(
-                            Path(__file__).resolve().parents[3]
+                            bundle_root()
                             / "scripts"
                             / "smj_pipeline"
                             / "kn_mcp_server.py"
@@ -208,12 +209,12 @@ class ChatService:
     def _default_agent_provider_config(self, agent_id: str) -> dict[str, str]:
         from kn_graph.services.cherry_provider_catalog import provider_map  # noqa: F811
         agent_defaults: dict[str, dict[str, str]] = {
-            "codex":       {"provider": "deepseek", "model": ""},
+            "codex":       {"provider": "deepseek", "model": "deepseek-v4-flash"},
             "claude_code": {"provider": "anthropic", "model": ""},
             "gemini_cli":  {"provider": "gemini", "model": ""},
-            "hermes":      {"provider": "deepseek", "model": ""},
-            "opencode":    {"provider": "deepseek", "model": ""},
-            "openclaw":    {"provider": "deepseek", "model": ""},
+            "hermes":      {"provider": "deepseek", "model": "deepseek-v4-flash"},
+            "opencode":    {"provider": "deepseek", "model": "deepseek-v4-flash"},
+            "openclaw":    {"provider": "deepseek", "model": "deepseek-v4-flash"},
         }
         defaults = agent_defaults.get(agent_id, {"provider": "deepseek", "model": ""})
         provider_id = defaults["provider"]
@@ -237,7 +238,11 @@ class ChatService:
         provider_id = str(config.get("provider", "") or defaults["provider"]).strip()
         base_url = str(config.get("base_url", "") or "").strip()
         if not base_url:
-            base_url = (provider_map().get(provider_id, {})).get("base_url", "")
+            catalog = provider_map().get(provider_id, {})
+            if current_agent == "claude_code" and catalog.get("anthropic_base_url", "").strip():
+                base_url = catalog["anthropic_base_url"].strip()
+            else:
+                base_url = catalog.get("base_url", "")
         return {
             "current_agent": current_agent,
             "available_agents": sorted(known),
@@ -272,9 +277,11 @@ class ChatService:
         # Auto-fill base_url from provider if switching
         new_provider = str(updates.get("provider", "") or "").strip()
         if new_provider and "base_url" not in updates:
-            catalog_base = (provider_map().get(new_provider, {})).get("base_url", "")
-            if catalog_base:
-                updates["base_url"] = catalog_base
+            catalog = provider_map().get(new_provider, {})
+            if current_agent == "claude_code" and catalog.get("anthropic_base_url", "").strip():
+                updates["base_url"] = catalog["anthropic_base_url"].strip()
+            elif catalog.get("base_url", ""):
+                updates["base_url"] = catalog["base_url"]
         if updates:
             self._write_agent_config(current_agent, updates)
 
@@ -362,6 +369,178 @@ class ChatService:
         saved["config_path"] = str(registry.config_path)
         return saved
 
+    # ------------------------------------------------------------------
+    # Agent install info & test
+    # ------------------------------------------------------------------
+
+    _INSTALL_INFO: dict[str, dict[str, Any]] = {
+        "claude_code": {
+            "command": "npm install -g @anthropic-ai/claude-code",
+            "binary": "claude",
+            "verify": "claude --version",
+            "display_name": "Claude Code",
+        },
+        "codex": {
+            "command": "npm install -g @openai/codex",
+            "binary": "codex",
+            "verify": "codex --version",
+            "display_name": "Codex",
+        },
+        "gemini_cli": {
+            "command": "npm install -g @google/gemini-cli",
+            "binary": "gemini",
+            "verify": "gemini --version",
+            "display_name": "Gemini CLI",
+        },
+        "opencode": {
+            "command": "npm install -g opencode-ai@latest",
+            "binary": "opencode",
+            "verify": "opencode --version",
+            "display_name": "OpenCode",
+        },
+        "openclaw": {
+            "command": "npm install -g openclaw@latest",
+            "binary": "openclaw",
+            "verify": "openclaw --version",
+            "display_name": "OpenClaw",
+        },
+        "hermes": {
+            "command": "",
+            "binary": "",
+            "verify": "",
+            "display_name": "Hermes",
+            "not_available": True,
+        },
+    }
+
+    def get_agent_install_info(self, agent_id: str) -> dict[str, Any]:
+        known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
+        agent_id = str(agent_id or "").strip().lower()
+        if agent_id not in known:
+            raise ValueError(f"unknown_agent:{agent_id}")
+        info = dict(self._INSTALL_INFO.get(agent_id, {}))
+        info["agent_id"] = agent_id
+        return info
+
+    def test_agent(self, agent_id: str) -> dict[str, Any]:
+        import shutil
+        import subprocess as _sp
+        from datetime import datetime, timezone
+
+        known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
+        agent_id = str(agent_id or "").strip().lower()
+        if agent_id not in known:
+            raise ValueError(f"unknown_agent:{agent_id}")
+
+        info = self._INSTALL_INFO.get(agent_id, {})
+        binary = str(info.get("binary", "") or "").strip()
+        checks: list[dict[str, Any]] = []
+
+        # Stage 1: CLI check
+        if binary:
+            resolved = shutil.which(binary)
+            if resolved:
+                try:
+                    proc = _sp.run(
+                        [resolved, "--version"],
+                        capture_output=True, text=True, timeout=30, check=False,
+                    )
+                    version_text = ((proc.stdout or proc.stderr or "").strip().splitlines())[:1]
+                    checks.append({
+                        "name": "cli_installed",
+                        "passed": proc.returncode == 0,
+                        "binary": resolved,
+                        "version": version_text[0] if version_text else "",
+                        "stage": "cli_check",
+                    })
+                except Exception as exc:
+                    checks.append({
+                        "name": "cli_installed",
+                        "passed": False,
+                        "binary": resolved,
+                        "error": str(exc),
+                        "stage": "cli_check",
+                    })
+            else:
+                checks.append({
+                    "name": "cli_installed",
+                    "passed": False,
+                    "binary": binary,
+                    "error": "binary_not_found",
+                    "suggestion": f"请点击安装按钮安装 {info.get('display_name', agent_id)} CLI",
+                    "stage": "cli_check",
+                })
+        else:
+            checks.append({
+                "name": "cli_installed",
+                "passed": False,
+                "error": "agent_not_installable",
+                "suggestion": f"Agent '{agent_id}' 暂不支持安装",
+                "stage": "cli_check",
+            })
+
+        # Stage 2: Workspace config
+        root_ws = self._settings.workspaces_dir.resolve()
+        claude_md = root_ws / "CLAUDE.md"
+        checks.append({
+            "name": "workspace_claude_md",
+            "passed": claude_md.exists(),
+            "path": str(claude_md),
+            "stage": "workspace_config",
+            "suggestion": "" if claude_md.exists() else "工作区缺少 CLAUDE.md，Agent 可能缺少项目上下文",
+        })
+
+        mcp_json = root_ws / ".mcp.json"
+        mcp_ok = False
+        if mcp_json.exists():
+            try:
+                mcp_data = json.loads(mcp_json.read_text(encoding="utf-8"))
+                mcp_ok = isinstance(mcp_data, dict) and "mcpServers" in mcp_data
+            except Exception:
+                pass
+        checks.append({
+            "name": "workspace_mcp_json",
+            "passed": mcp_ok,
+            "path": str(mcp_json),
+            "stage": "workspace_config",
+            "suggestion": "" if mcp_ok else "工作区缺少有效的 .mcp.json，Agent 无法使用 MCP 工具",
+        })
+
+        # Stage 3: Agent config file
+        agent_cfg_path = self._agent_config_path(agent_id)
+        cfg_exists = agent_cfg_path.exists()
+        checks.append({
+            "name": "agent_config_file",
+            "passed": cfg_exists,
+            "path": str(agent_cfg_path),
+            "stage": "agent_config",
+            "suggestion": "" if cfg_exists else "请先在 Agent 设置中保存 provider/model/api_key 配置",
+        })
+
+        # Stage 4: claude_code SDK
+        if agent_id == "claude_code":
+            try:
+                import claude_agent_sdk  # noqa: F401
+                checks.append({"name": "claude_agent_sdk", "passed": True, "stage": "sdk_check"})
+            except ImportError:
+                checks.append({
+                    "name": "claude_agent_sdk",
+                    "passed": False,
+                    "stage": "sdk_check",
+                    "suggestion": "claude-agent-sdk 未安装，请运行: pip install claude-agent-sdk",
+                })
+
+        passed = [c for c in checks if c["passed"]]
+        failed = [c for c in checks if not c["passed"]]
+        return {
+            "agent_id": agent_id,
+            "ok": len(failed) == 0,
+            "passed_count": len(passed),
+            "failed_count": len(failed),
+            "checks": checks,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     def _translation_config_path(self) -> Path:
         return self._settings.data_dir / "chat" / "translation_provider_config.json"
 
@@ -385,10 +564,13 @@ class ChatService:
         if not isinstance(provider_data, dict):
             provider_data = {}
         defaults_base = (provider_map().get(active, {})).get("base_url", "")
+        model = str(provider_data.get("model", "") or "")
+        if not model and active == "deepseek":
+            model = "deepseek-v4-flash"
         return {
             "active_provider": active,
             "provider": active,
-            "model": str(provider_data.get("model", "") or ""),
+            "model": model,
             "api_key": str(provider_data.get("api_key", "") or ""),
             "base_url": str(provider_data.get("base_url", "") or defaults_base),
             "endpoint_url": str(provider_data.get("endpoint_url", "") or default_endpoint_url(defaults_base)),

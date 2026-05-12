@@ -370,6 +370,30 @@ def create_router(chat_service: ChatService) -> APIRouter:
         except Exception as exc:
             return JSONResponse(status_code=400, content={"error": "provider_test_failed", "detail": str(exc)})
 
+    @router.post("/agent/install-info")
+    async def agent_install_info(body: dict[str, Any]):
+        agent_id = str(body.get("agent_id", "") or "").strip()
+        if not agent_id:
+            return JSONResponse(status_code=400, content={"error": "agent_id_required"})
+        try:
+            result = await run_in_threadpool(chat_service.get_agent_install_info, agent_id)
+            return result
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+
+    @router.post("/agent/test")
+    async def test_agent(body: dict[str, Any]):
+        agent_id = str(body.get("agent_id", "") or "").strip()
+        if not agent_id:
+            return JSONResponse(status_code=400, content={"error": "agent_id_required"})
+        try:
+            result = await run_in_threadpool(chat_service.test_agent, agent_id)
+            return result
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": "agent_test_failed", "detail": str(exc)})
+
     @router.get("/translation-provider-config")
     async def get_translation_provider_config():
         return chat_service.get_translation_provider_config()

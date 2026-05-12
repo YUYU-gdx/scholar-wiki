@@ -50,6 +50,16 @@ export default function SettingsView() {
   const [payload, setPayload] = useState<GlobalSettingsPayload | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [sectionState, setSectionState] = useState<Record<string, SectionState>>({});
+  const [agentTestResult, setAgentTestResult] = useState<{
+    agent_id: string;
+    ok: boolean;
+    passed_count: number;
+    failed_count: number;
+    checks: Array<{ name: string; passed: boolean; stage: string; suggestion?: string; binary?: string; version?: string; path?: string; error?: string }>;
+    checked_at: string;
+  } | null>(null);
+  const [agentTesting, setAgentTesting] = useState(false);
+  const [agentInstalling, setAgentInstalling] = useState(false);
 
   const categories = useMemo(() => {
     const raw = payload?.schema?.categories ?? [];
@@ -134,6 +144,73 @@ export default function SettingsView() {
     }
   };
 
+  const handleAgentInstall = async () => {
+    const agentId = str(asRecord(drafts['agent_settings']).current_agent) || 'codex';
+    setAgentInstalling(true);
+    try {
+      const info = await api.agent.installInfo(agentId);
+      if (info.not_available) {
+        setAgentTestResult({
+          agent_id: agentId,
+          ok: false,
+          passed_count: 0,
+          failed_count: 1,
+          checks: [{ name: 'install_available', passed: false, stage: 'install', suggestion: info.display_name + ' 暂不支持安装' }],
+          checked_at: new Date().toISOString(),
+        });
+        return;
+      }
+      const w = window as unknown as { desktopShell?: { runInTerminal?: (pkg: string, bin: string, name: string) => Promise<{ ok: boolean; error?: string }> } };
+      const shell = w.desktopShell?.runInTerminal;
+      if (!shell) return;
+      // Extract package name from "npm install -g <pkg>"
+      const pkg = info.command.replace(/^npm\s+install\s+-g\s+/, '').trim();
+      const result = await shell(pkg, info.binary, info.display_name);
+      if (!result.ok) {
+        setAgentTestResult({
+          agent_id: agentId,
+          ok: false,
+          passed_count: 0,
+          failed_count: 1,
+          checks: [{ name: 'install_launch', passed: false, stage: 'install', error: result.error || '无法打开终端' }],
+          checked_at: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      setAgentTestResult({
+        agent_id: agentId,
+        ok: false,
+        passed_count: 0,
+        failed_count: 1,
+        checks: [{ name: 'install_error', passed: false, stage: 'install', error: (err as Error).message }],
+        checked_at: new Date().toISOString(),
+      });
+    } finally {
+      setAgentInstalling(false);
+    }
+  };
+
+  const handleAgentTest = async () => {
+    const agentId = str(asRecord(drafts['agent_settings']).current_agent) || 'codex';
+    setAgentTesting(true);
+    setAgentTestResult(null);
+    try {
+      const result = await api.agent.test(agentId);
+      setAgentTestResult(result);
+    } catch (err) {
+      setAgentTestResult({
+        agent_id: agentId,
+        ok: false,
+        passed_count: 0,
+        failed_count: 1,
+        checks: [{ name: 'test_error', passed: false, stage: 'system', error: (err as Error).message }],
+        checked_at: new Date().toISOString(),
+      });
+    } finally {
+      setAgentTesting(false);
+    }
+  };
+
   if (loading) return <div className="flex-1 overflow-auto p-8 bg-surface-container-low">正在加载设置...</div>;
   if (loadError) return <div className="flex-1 overflow-auto p-8 bg-surface-container-low text-error">设置加载失败: {loadError}</div>;
 
@@ -155,9 +232,31 @@ export default function SettingsView() {
                   <div className="text-base font-semibold text-on-surface">{category.title}</div>
                   {category.restart_required ? <div className="text-xs text-on-surface-variant">该配置保存后需要重启生效。</div> : null}
                 </div>
-                <button disabled={state.saving} onClick={() => saveCategory(id)} className="px-4 py-2 rounded bg-secondary text-on-secondary disabled:opacity-50">
-                  {state.saving ? '保存中...' : '保存'}
-                </button>
+                <div className="flex items-center gap-2">
+                  {id === 'agent_settings' && (
+                    <>
+                      <button
+                        disabled={agentInstalling}
+                        onClick={handleAgentInstall}
+                        className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50 border border-outline-variant"
+                        title="打开终端安装当前选中的 Agent CLI"
+                      >
+                        {agentInstalling ? '安装中...' : '安装'}
+                      </button>
+                      <button
+                        disabled={agentTesting}
+                        onClick={handleAgentTest}
+                        className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50 border border-outline-variant"
+                        title="测试当前 Agent 是否正确配置"
+                      >
+                        {agentTesting ? '测试中...' : '测试'}
+                      </button>
+                    </>
+                  )}
+                  <button disabled={state.saving} onClick={() => saveCategory(id)} className="px-4 py-2 rounded bg-secondary text-on-secondary disabled:opacity-50">
+                    {state.saving ? '保存中...' : '保存'}
+                  </button>
+                </div>
               </div>
 
               {id === 'pipeline' && (
@@ -265,6 +364,36 @@ export default function SettingsView() {
                 </div>
               )}
 
+              {id === 'agent_settings' && agentTestResult && (
+                <div className={`rounded-lg border p-3 text-sm space-y-2 ${agentTestResult.ok ? 'border-green-300 bg-green-50' : 'border-amber-300 bg-amber-50'}`}>
+                  <div className="flex items-center justify-between">
+                    <span className={`font-semibold ${agentTestResult.ok ? 'text-green-700' : 'text-amber-700'}`}>
+                      {agentTestResult.ok ? '验证通过' : '发现问题'} ({agentTestResult.passed_count}/{agentTestResult.passed_count + agentTestResult.failed_count})
+                    </span>
+                    <button
+                      onClick={() => setAgentTestResult(null)}
+                      className="text-xs text-on-surface-variant hover:text-on-surface"
+                    >
+                      关闭
+                    </button>
+                  </div>
+                  {agentTestResult.checks.map((check, i) => (
+                    <div key={i} className="flex items-start gap-2 text-xs">
+                      <span className="mt-0.5">{check.passed ? '✅' : '❌'}</span>
+                      <div>
+                        <span className="font-medium">{check.name}</span>
+                        {check.version ? <span className="ml-2 text-on-surface-variant">v{check.version}</span> : null}
+                        {check.binary ? <div className="text-on-surface-variant truncate max-w-md">{check.binary}</div> : null}
+                        {check.path ? <div className="text-on-surface-variant truncate max-w-md">{check.path}</div> : null}
+                        {!check.passed && (check.suggestion || check.error) ? (
+                          <div className="text-amber-700 mt-0.5">{check.suggestion || check.error}</div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="text-xs text-on-surface-variant">检查时间: {agentTestResult.checked_at}</div>
+                </div>
+              )}
               {state.message ? <div className="text-sm text-on-surface-variant">{state.message}</div> : null}
             </div>
           );

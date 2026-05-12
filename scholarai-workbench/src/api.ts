@@ -326,4 +326,42 @@ export const api = {
       });
     },
   },
+
+  agent: {
+    installInfo(agentId: string): Promise<{
+      agent_id: string;
+      command: string;
+      binary: string;
+      verify: string;
+      display_name: string;
+      not_available?: boolean;
+    }> {
+      return jsonFetch('/chat/agent/install-info', {
+        method: 'POST',
+        body: JSON.stringify({ agent_id: agentId }),
+      });
+    },
+    test(agentId: string): Promise<{
+      agent_id: string;
+      ok: boolean;
+      passed_count: number;
+      failed_count: number;
+      checks: Array<{
+        name: string;
+        passed: boolean;
+        stage: string;
+        suggestion?: string;
+        binary?: string;
+        version?: string;
+        path?: string;
+        error?: string;
+      }>;
+      checked_at: string;
+    }> {
+      return jsonFetch('/chat/agent/test', {
+        method: 'POST',
+        body: JSON.stringify({ agent_id: agentId }),
+      });
+    },
+  },
 };

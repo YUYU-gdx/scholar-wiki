@@ -25,4 +25,5 @@ contextBridge.exposeInMainWorld("desktopShell", {
     ipcRenderer.on("file-changed", handler);
     return () => ipcRenderer.removeListener("file-changed", handler);
   },
+  runInTerminal: (packageName, binary, displayName) => ipcRenderer.invoke("run-in-terminal", packageName, binary, displayName),
 });
