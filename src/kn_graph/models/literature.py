@@ -81,3 +81,24 @@ class LiteratureSearchResponse(BaseModel):
     merged_hits: list[Any] = []
     degraded: bool = False
     degraded_reason: str = ""
+
+
+# ── Zotero import models ──────────────────────────────────────────────
+
+
+class ZoteroScanRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    data_dir: str = ""
+
+
+class ZoteroImportRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    data_dir: str = ""
+    item_ids: list[int] = []
+    library_id: str = ""
+
+
+class ZoteroImportResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    job_ids: list[str] = []
+    count: int = 0
