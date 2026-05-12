@@ -12,8 +12,7 @@ import type { ViewerMode } from './types';
 import SelectionActionPopover from './SelectionActionPopover';
 import { api } from '../../api';
 import Outline from './Outline';
-import { readerNotesManager } from './ReaderNotesManager';
-import { addNoteToMarkdownAtomic, addNoteToMarkdownAtomicByLine, deleteNoteFromMarkdownAny, extractNoteBlocks, listRecordedNotesMarkdownPaths, readMarkdownText, setRecordedNotesMarkdownPath } from './NoteMarkdownSync';
+import { deleteNoteFromMarkdownAny, extractNoteBlocks, listRecordedNotesMarkdownPaths, readMarkdownText, setRecordedNotesMarkdownPath } from './NoteMarkdownSync';
 
 // CodeMirror 6 imports
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, rectangularSelection, crosshairCursor, highlightActiveLine } from '@codemirror/view';
@@ -643,25 +642,7 @@ export default function MarkdownEditor({
     // eslint-disable-next-line no-console
     console.log('[notes] save start', { noteId, absolutePath, hasShell: !!sh, runtime: sh?.runtime, pickedLen: picked.length, noteLen: noteText.length });
 
-    // ── Step 1: IndexedDB (fire-and-forget, don't block on it) ──
-    readerNotesManager.add({
-      paper_id: paperId,
-      library_id: libraryId,
-      doc_type: 'markdown',
-      page_index: 0,
-      selected_text: picked,
-      note_text: noteText,
-      md_anchor: readerNotesManager.makeAnchor(text, picked),
-      markdown_path_at_write: absolutePath,
-    }).then((saved) => {
-      // eslint-disable-next-line no-console
-      console.log('[notes] indexdb saved', { id: saved.id });
-    }).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.warn('[notes] indexdb save failed (non-fatal)', err);
-    });
-
-    // ── Step 2: Direct file write ──
+    // ── Direct file write ──
     if (!sh || sh.runtime !== 'electron' || !absolutePath) {
       window.alert('笔记已保存到本地数据库，但文件写入不可用（非Electron环境）');
       setTimeout(() => {
@@ -741,9 +722,6 @@ export default function MarkdownEditor({
   const handleDeleteNoteByIndex = async (index: number) => {
     if (!Number.isInteger(index) || index < 0 || index >= noteRanges.length) return;
     const range = noteRanges[index];
-    if (range.id) {
-      readerNotesManager.remove(range.id).catch(() => {});
-    }
     const candidates = Array.from(new Set([
       String(absolutePath || '').trim(),
       ...listRecordedNotesMarkdownPaths(libraryId, paperId),

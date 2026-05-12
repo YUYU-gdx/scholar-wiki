@@ -7,7 +7,6 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 import SelectionActionPopover from './SelectionActionPopover';
 import { api } from '../../api';
-import { readerNotesManager } from './ReaderNotesManager';
 import { ensureMarkdownPathForNotes, mergeNotesIntoMarkdown, setRecordedNotesMarkdownPath, upsertNoteInMarkdown } from './NoteMarkdownSync';
 import type { PaperFiles } from '../../types';
 import { isSelectionInside } from './selectionScope';
@@ -193,29 +192,18 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   };
 
   const handleSaveNote = async (note: string) => {
+    const noteText = String(note || '').trim();
+    const picked = String(selectionUI.text || '').trim();
+    if (!noteText || !picked) return;
+
+    const noteId = crypto.randomUUID();
+    // eslint-disable-next-line no-console
+    console.log('[notes] pdf save start', { noteId, paperId, libraryId, pickedLen: picked.length, noteLen: noteText.length });
+
     try {
-      const noteText = String(note || '').trim();
-      const picked = String(selectionUI.text || '').trim();
-      if (!noteText || !picked) return;
-      const anchor = readerNotesManager.makeAnchor(picked, picked);
-      const saved = await readerNotesManager.add({
-        paper_id: paperId,
-        library_id: libraryId,
-        doc_type: 'pdf',
-        page_index: currentPage - 1,
-        selected_text: picked,
-        note_text: noteText,
-        md_anchor: anchor,
-        markdown_path_at_write: markdownPath || '',
-      });
+      const ensuredPath = await appendMdNoteByAnchor(noteId, picked, noteText);
       // eslint-disable-next-line no-console
-      console.log('[notes] pdf save created db row', { id: saved.id, markdownPath, sourcePath, paperId, libraryId });
-      const ensuredPath = await appendMdNoteByAnchor(saved.id, picked, noteText);
-      // eslint-disable-next-line no-console
-      console.log('[notes] pdf save ensured markdown path', { ensuredPath });
-      if (ensuredPath && ensuredPath !== saved.markdown_path_at_write) {
-        await readerNotesManager.setMarkdownPath(saved.id, ensuredPath);
-      }
+      console.log('[notes] pdf save done', { ensuredPath });
       window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
       setSelectionUI((p) => ({ ...p, visible: false }));
     } catch (e) {
