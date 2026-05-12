@@ -84,7 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(graph.create_router(graph_service))
     app.include_router(graph.create_paper_router(graph_service))
     app.include_router(chat.create_router(chat_service))
-    app.include_router(literature.create_router(literature_service))
+    app.include_router(literature.create_router(literature_service, pipeline_service))
     app.include_router(pipeline.create_router(pipeline_service))
     app.include_router(workspace.create_router(workspace_service))
     app.include_router(settings_router.create_router(settings_service))
