@@ -185,7 +185,7 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
             if not pdf_paths:
                 continue
 
-            src_pdf = pdf_paths[0]["path"]
+            src_pdf = pdf_paths[0]["resolved_path"]
             job_id = f"job_{uuid.uuid4().hex}"
             run_dir = runs_root / job_id
             input_dir = run_dir / "input"
