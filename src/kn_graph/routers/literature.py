@@ -201,6 +201,8 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
             # Build Zotero options for the pipeline runtime
             zotero_options = {
                 "extraction_mode": "agent",
+                "library_id": library_id,
+                "_workspace_path": str(workspace_path),
                 "zotero_metadata": zotero_data.get("metadata", {}),
                 "zotero_creators": zotero_data.get("creators", []),
                 "zotero_notes": zotero_data.get("notes", []),
