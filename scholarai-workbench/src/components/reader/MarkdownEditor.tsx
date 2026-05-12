@@ -664,7 +664,9 @@ export default function MarkdownEditor({
     // ── Step 2: Direct file write ──
     if (!sh || sh.runtime !== 'electron' || !absolutePath) {
       window.alert('笔记已保存到本地数据库，但文件写入不可用（非Electron环境）');
-      setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 }));
+      setTimeout(() => {
+        setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 }));
+      }, 600);
       return;
     }
 
@@ -722,9 +724,13 @@ export default function MarkdownEditor({
       onContentChange?.(latest);
       if (absolutePath) setRecordedNotesMarkdownPath(libraryId, paperId, absolutePath);
       window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
-      setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 }));
       // eslint-disable-next-line no-console
       console.log('[notes] save complete', { noteId });
+      // Brief success feedback before closing popover
+      setTranslationText('已保存');
+      setTimeout(() => {
+        setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 }));
+      }, 600);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[notes] file write failed', e);
