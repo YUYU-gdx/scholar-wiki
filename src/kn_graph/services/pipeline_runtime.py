@@ -31,6 +31,76 @@ _TRANSIENT_KEYWORDS = (
 )
 
 
+def _build_zotero_appendix(options: dict | None = None) -> str:
+    """Build a markdown appendix section with Zotero notes and annotations."""
+    opts = options or {}
+    notes = opts.get("zotero_notes", []) or []
+    annotations = opts.get("zotero_annotations", []) or []
+    parts: list[str] = []
+    if notes:
+        parts.append("## Zotero Notes\n")
+        for n in notes:
+            title = (n.get("title") or "").strip()
+            note_text = (n.get("content") or "").strip()
+            if title:
+                parts.append(f"### {title}\n")
+            if note_text:
+                parts.append(f"> {note_text}\n")
+            parts.append("")
+    if annotations:
+        parts.append("## Zotero Annotations\n")
+        # Group by page_label
+        by_page: dict[str, list[dict]] = {}
+        for ann in annotations:
+            page = str(ann.get("page_label") or "Unknown")
+            by_page.setdefault(page, []).append(ann)
+        for page in sorted(by_page.keys(), key=lambda x: int(x) if x.isdigit() else 0):
+            parts.append(f"### Page {page}\n")
+            for ann in by_page[page]:
+                text = (ann.get("text") or "").strip()
+                comment = (ann.get("comment") or "").strip()
+                color = (ann.get("color") or "").strip()
+                ann_type = {1: "highlight", 2: "underline", 3: "note", 4: "text", 5: "ink"}.get(ann.get("type"), "annotation")
+                if text:
+                    parts.append(f"> {text}  ({ann_type}, {color})\n")
+                if comment:
+                    parts.append(f"**Comment:** {comment}\n")
+                if text or comment:
+                    parts.append("")
+    return "\n".join(parts)
+
+
+def _merge_zotero_into_paper_record(record: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    """Merge Zotero metadata into a paper record dict, filling in empty extraction fields."""
+    zotero_fields = options.get("zotero_metadata", {}) or {}
+    zotero_creators = options.get("zotero_creators", []) or []
+    if not zotero_fields and not zotero_creators:
+        return record
+
+    FIELD_MAP = {
+        "title": "title",
+        "doi": "DOI",
+        "abstract": "abstractNote",
+        "journal": "publicationTitle",
+        "publication_date": "date",
+        "article_url": "url",
+    }
+    for extract_key, zotero_key in FIELD_MAP.items():
+        existing = record.get(extract_key, "")
+        zotero_val = (zotero_fields.get(zotero_key) or "").strip()
+        if not existing and zotero_val:
+            record[extract_key] = zotero_val
+
+    existing_authors = record.get("authors_json", []) or []
+    if not existing_authors and zotero_creators:
+        record["authors_json"] = [
+            {"name": f"{c.get('last_name', '')}, {c.get('first_name', '')}".strip(", ")}
+            for c in zotero_creators
+            if c.get("last_name") or c.get("first_name")
+        ]
+    return record
+
+
 def _touch_marker(run_dir: Path, stage: str) -> None:
     (run_dir / f"{stage}.ok").write_text("", encoding="utf-8")
 
@@ -381,6 +451,19 @@ def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore,
     _stage_update(store, job_id, "parse_pdf", 45, "stage_done", status="running")
     _touch_marker(run_dir, "parse_pdf")
     (run_dir / "parse_meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    # Append Zotero notes/annotations appendix to the markdown file when source is Zotero
+    if merged.get("_zotero_source"):
+        appendix = _build_zotero_appendix(merged)
+        if appendix:
+            main_md_path = meta.get("markdown_path", "")
+            if main_md_path and os.path.exists(main_md_path):
+                with open(main_md_path, "a", encoding="utf-8") as f:
+                    f.write("\n\n")
+                    f.write(appendix)
+                meta["zotero_appendix_added"] = True
+                meta["zotero_note_count"] = len(merged.get("zotero_notes", []) or [])
+                meta["zotero_annotation_count"] = len(merged.get("zotero_annotations", []) or [])
+                (run_dir / "parse_meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     return meta
 
 
@@ -629,6 +712,9 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
         "article_url": extracted_meta.get("article_url", ""),
         "raw_response": json.dumps(agent_bundle, ensure_ascii=False),
     }
+    # Merge Zotero metadata into the extraction record (fills in empty fields)
+    if options.get("_zotero_source"):
+        _merge_zotero_into_paper_record(raw_record, options)
     raw_output_path.write_text(json.dumps(raw_record, ensure_ascii=False) + "\n", encoding="utf-8")
 
     # Build compatible payload for _run_finalize
@@ -703,6 +789,19 @@ def _run_extract_entities_fast(job_id: str, parse_meta: dict[str, Any], run_dir:
         "review_queue_jsonl": str(review_queue_path),
     }
     (extract_dir / "extract_result.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Merge Zotero metadata into the raw extraction records
+    if options.get("_zotero_source") and raw_output_path.exists():
+        merged_lines: list[str] = []
+        with open(raw_output_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                _merge_zotero_into_paper_record(rec, options)
+                merged_lines.append(json.dumps(rec, ensure_ascii=False))
+        if merged_lines:
+            raw_output_path.write_text("\n".join(merged_lines) + "\n", encoding="utf-8")
     _stage_update(store, job_id, "extract_entities", 90, "stage_done", status="running")
     _touch_marker(run_dir, "extract_entities")
     return payload
