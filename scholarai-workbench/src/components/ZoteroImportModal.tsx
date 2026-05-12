@@ -128,7 +128,7 @@ export default function ZoteroImportModal({ open, onClose }: Props) {
   };
 
   const handleImport = async () => {
-    if (selectedIds.size === 0 || !dataDir.trim()) return;
+    if (selectedIds.size === 0) return;
     setImporting(true);
     setImportResult('');
     try {

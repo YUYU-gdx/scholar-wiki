@@ -148,6 +148,9 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
         item_ids = list(body.item_ids or [])
 
         if not data_dir:
+            from kn_graph.services.zotero_scanner import _find_data_dir
+            data_dir = _find_data_dir() or ""
+        if not data_dir:
             return JSONResponse(status_code=400, content={"error": "data_dir_required"})
         if not library_id:
             return JSONResponse(status_code=400, content={"error": "library_id_required"})
