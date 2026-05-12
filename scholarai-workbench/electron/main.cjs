@@ -76,7 +76,11 @@ function buildPythonEnv(repoRoot) {
   const prev = String(process.env.PYTHONPATH || "").trim();
   const sep = process.platform === "win32" ? ";" : ":";
   const pythonPath = prev ? `${repoRoot}${sep}${prev}` : repoRoot;
-  const dataDir = process.env.KN_GRAPH_DATA_DIR || (process.platform === "win32" ? "D:\\KNGraphApp" : path.join(process.env.HOME || process.env.USERPROFILE || ".", ".kn_graph"));
+  // Dev uses real config (with keys); packaged gets clean data dir.
+  const suffix = app.isPackaged ? "KNGraphApp-dev" : "KNGraphApp";
+  const dataDir = process.env.KN_GRAPH_DATA_DIR || (process.platform === "win32"
+    ? path.join(process.env.LOCALAPPDATA || process.env.APPDATA || path.join(process.env.HOME || process.env.USERPROFILE || ".", "AppData", "Local"), suffix)
+    : path.join(process.env.HOME || process.env.USERPROFILE || ".", app.isPackaged ? ".kn_graph-dev" : ".kn_graph"));
   return { ...process.env, PYTHONPATH: pythonPath, KN_GRAPH_DATA_DIR: dataDir };
 }
 
@@ -169,34 +173,42 @@ async function startBackendServer() {
   // No backend found — start one
   runtimePort = await pickRuntimePort(BASE_PORT);
   backendStartedByUs = true;
-  const repoRoot = getRepoRoot();
 
-  const args = [
-    "run",
-    "python",
-    "-m",
-    "kn_graph",
-    "serve",
-    "--host",
-    HOST,
-    "--port",
-    String(runtimePort),
-  ];
-  // In development, enable backend hot-reload
-  if (process.env.NODE_ENV === "development" && !process.env.DISABLE_BACKEND_RELOAD) {
-    args.push("--reload");
+  if (app.isPackaged) {
+    // Production: launch the bundled kn_graph.exe
+    const exePath = path.join(process.resourcesPath, "kn_graph.exe");
+    const args = ["serve", "--host", HOST, "--port", String(runtimePort)];
+    console.log(`[desktop] backend_exe=${exePath}`);
+    console.log(`[desktop] backend_port=${runtimePort}`);
+    console.log(`[desktop] cmd: ${exePath} ${args.join(" ")}`);
+
+    backendProc = spawn(exePath, args, {
+      env: { ...process.env },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  } else {
+    // Development: use uv run python
+    const repoRoot = getRepoRoot();
+    const args = [
+      "run", "python", "-m", "kn_graph", "serve",
+      "--host", HOST,
+      "--port", String(runtimePort),
+    ];
+    if (process.env.NODE_ENV === "development" && !process.env.DISABLE_BACKEND_RELOAD) {
+      args.push("--reload");
+    }
+    console.log(`[desktop] repoRoot=${repoRoot}`);
+    console.log(`[desktop] backend_port=${runtimePort}`);
+    console.log(`[desktop] cmd: uv ${args.join(" ")}`);
+
+    backendProc = spawn("uv", args, {
+      cwd: repoRoot,
+      env: buildPythonEnv(repoRoot),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
   }
-
-  console.log(`[desktop] repoRoot=${repoRoot}`);
-  console.log(`[desktop] backend_port=${runtimePort}`);
-  console.log(`[desktop] cmd: uv ${args.join(" ")}`);
-
-  backendProc = spawn("uv", args, {
-    cwd: repoRoot,
-    env: buildPythonEnv(repoRoot),
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
 
   backendProc.stdout.on("data", (chunk) => {
     process.stdout.write(`[backend] ${chunk}`);
@@ -228,7 +240,7 @@ function createMainWindow() {
     minWidth: 1100,
     minHeight: 700,
     autoHideMenuBar: true,
-    title: "KN Graph Workbench",
+    title: "Scholar Wiki",
     backgroundColor: "#eef5ff",
     titleBarStyle: "hidden",
     titleBarOverlay: {
@@ -319,6 +331,103 @@ ipcMain.handle("restart-backend", async () => {
   await waitForBackendReady();
   return runtimePort;
 });
+// Agent install: open a terminal and run a self-contained batch script.
+// The script checks for Node.js first, installs via winget if missing, then npm installs the agent.
+ipcMain.handle("run-in-terminal", async (_evt, packageName, binary, displayName) => {
+  const pkg = String(packageName || "").trim();
+  const bin = String(binary || "").trim();
+  const label = String(displayName || "Agent").trim();
+  if (!pkg || !bin) return { ok: false, error: "invalid_agent_info" };
+
+  const tmpdir = require("node:os").tmpdir();
+  const batPath = path.join(tmpdir, `kn_install_${bin}.bat`);
+
+  const script = [
+    "@echo off",
+    "echo.",
+    "echo   ╔══════════════════════════════════════════╗",
+    `echo   ║   ${label} 一键安装向导              ║`,
+    "echo   ╚══════════════════════════════════════════╝",
+    "echo.",
+    "echo   [1/2] 检查 Node.js ...",
+    "echo.",
+    "where node >nul 2>nul",
+    "if %errorlevel% neq 0 (",
+    "    echo   Node.js 未安装，正在通过 winget 安装，请稍候 ...",
+    "    winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements 2>&1",
+    "    echo.",
+    "    REM winget installs to %%ProgramFiles%%\\nodejs, add it to PATH for this session",
+    "    if exist \"%ProgramFiles%\\nodejs\\node.exe\" set \"PATH=%ProgramFiles%\\nodejs;%PATH%\"",
+    "    if exist \"%SystemDrive%\\Program Files\\nodejs\\node.exe\" set \"PATH=%SystemDrive%\\Program Files\\nodejs;%PATH%\"",
+    "    echo.",
+    "    where node >nul 2>nul",
+    "    if %errorlevel% neq 0 (",
+    "        echo.",
+    "        echo   ╔══════════════════════════════════════════╗",
+    "        echo   ║   Node.js 安装失败                    ║",
+    "        echo   ║                                      ║",
+    "        echo   ║   请检查上面的 winget 报错信息。      ║",
+    "        echo   ║   也可以手动去 nodejs.org 下载安装。  ║",
+    "        echo   ╚══════════════════════════════════════════╝",
+    "        echo.",
+    "        pause",
+    "        exit /b 1",
+    "    )",
+    "    echo   Node.js 安装成功！",
+    ")",
+    "echo   Node.js 版本:",
+    "node --version 2>nul",
+    "echo   npm 版本:",
+    "npm --version 2>nul",
+    "echo.",
+    `echo   [2/2] 安装 ${label} ...`,
+    "echo   正在下载，请耐心等待 ...",
+    "echo.",
+    `npm install -g ${pkg} 2>&1`,
+    "set INSTALL_RESULT=%errorlevel%",
+    "echo.",
+    "if %INSTALL_RESULT% equ 0 (",
+    "    echo.",
+    "    echo   ╔══════════════════════════════════════════╗",
+    "    echo   ║                                      ║",
+    `    echo   ║   ${label} 安装成功！              ║`,
+    "    echo   ║                                      ║",
+    "    echo   ╚══════════════════════════════════════════╝",
+    "    echo.",
+    `    echo   版本：`,
+    `    ${bin} --version 2>nul || echo   (请关闭窗口后重新打开终端验证)`,
+    "    echo.",
+    "    echo   可以关掉这个窗口了。",
+    "    echo   回到设置页面点击【测试】按钮确认配置是否正常。",
+    ") else (",
+    "    echo.",
+    "    echo   ╔══════════════════════════════════════════╗",
+    "    echo   ║                                      ║",
+    `    echo   ║   ${label} 安装失败              ║`,
+    "    echo   ║                                      ║",
+    "    echo   ╚══════════════════════════════════════════╝",
+    "    echo.",
+    "    echo   请查看上面红色报错信息，常见原因：",
+    "    echo     1. 网络不通，无法访问 npm 仓库",
+    "    echo     2. npm 缓存损坏（可运行 npm cache clean --force 后重试）",
+    "    echo     3. 磁盘空间不足或权限不够",
+    "    echo.",
+    "    echo   解决问题后重新点击【安装】按钮即可。",
+    ")",
+    "echo.",
+    "pause",
+  ].join("\r\n");
+
+  try {
+    fs.writeFileSync(batPath, script, "utf-8");
+    // Use cmd /K to keep window open; start to open in a new window
+    execFile("cmd.exe", ["/C", `start "安装 ${label}" cmd.exe /K "${batPath}"`], { windowsHide: false });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
 ipcMain.handle("open-local-path", async (_evt, targetPath) => {
   const p = String(targetPath || "").trim();
   if (!p) return { ok: false, error: "empty_path" };

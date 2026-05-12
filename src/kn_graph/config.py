@@ -1,17 +1,25 @@
 import json
 import os
+import sys
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+
+
+def _is_frozen() -> bool:
+    return getattr(sys, "frozen", False)
 
 
 def _default_data_dir() -> Path:
     env = os.getenv("KN_GRAPH_DATA_DIR", "").strip()
     if env:
         return Path(env)
+    # Dev uses the real config (with keys); packaged exe gets a clean data dir.
+    suffix = "KNGraphApp-dev" if _is_frozen() else "KNGraphApp"
     if os.name == "nt":
-        return Path(r"D:\KNGraphApp")
-    return Path.home() / ".kn_graph"
+        base = os.getenv("LOCALAPPDATA", "") or os.getenv("APPDATA", "") or Path.home() / "AppData" / "Local"
+        return Path(base) / suffix
+    return Path.home() / (".kn_graph-dev" if _is_frozen() else ".kn_graph")
 
 
 class Settings(BaseModel):
