@@ -18,13 +18,14 @@ import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
-def scan_zotero(data_dir=""):
+def scan_zotero(data_dir: str = "") -> dict[str, Any]:
     """Scan a Zotero data directory and return literature items that have at
     least one PDF attachment whose file exists on disk.
 
@@ -121,14 +122,20 @@ def scan_zotero(data_dir=""):
 
         output = []
         for item in result_items:
+            md = item["metadata"]
             output.append({
                 "item_id": item["item_id"],
                 "item_type": item["item_type"],
                 "key": item["key"],
-                "title": item["metadata"].get("title", ""),
-                "doi": item["metadata"].get("DOI", ""),
-                "date_added": item["date_added"],
-                "date_modified": item["date_modified"],
+                "title": md.get("title", ""),
+                "date": md.get("date", ""),
+                "publication_title": md.get("publicationTitle", ""),
+                "volume": md.get("volume", ""),
+                "issue": md.get("issue", ""),
+                "pages": md.get("pages", ""),
+                "doi": md.get("DOI", ""),
+                "abstract": md.get("abstractNote", ""),
+                "url": md.get("url", ""),
                 "creators": item["creators"],
                 "pdf_paths": item["pdf_paths"],
                 "note_count": item["note_count"],
@@ -136,13 +143,16 @@ def scan_zotero(data_dir=""):
                 "collections": item["collections"],
             })
 
-        return {"items": output, "total_count": len(output)}
+        # Also return all collections as a top-level list
+        all_collections = _load_all_collections(conn)
+
+        return {"items": output, "total_count": len(output), "collections": all_collections}
 
     finally:
         _cleanup_temp_db(tmp_path)
 
 
-def get_zotero_item_full(data_dir, item_id):
+def get_zotero_item_full(data_dir: str, item_id: int) -> dict[str, Any] | None:
     """Return full detail for a single Zotero item, including notes content
     and annotation texts (sorted by ``sortIndex``).
 
@@ -559,3 +569,17 @@ def _attach_collections(conn, lit_items, item_ids, id_ph):
         item = lit_items[r["itemID"]]
         if name not in item["collections"]:
             item["collections"].append(name)
+
+
+def _load_all_collections(conn) -> list[dict[str, Any]]:
+    """Load all collections as a flat list with id, name, parent_id."""
+    result = []
+    for r in conn.execute(
+        "SELECT collectionID, collectionName, parentCollectionID FROM collections ORDER BY collectionName"
+    ):
+        result.append({
+            "collection_id": r["collectionID"],
+            "name": r["collectionName"],
+            "parent_id": r["parentCollectionID"],
+        })
+    return result

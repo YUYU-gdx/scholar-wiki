@@ -94,9 +94,16 @@ class TestZoteroScanner(unittest.TestCase):
         from kn_graph.services.zotero_scanner import scan_zotero
         result = scan_zotero(self.tmpdir)
         self.assertEqual(result["total_count"], 1)
+        # top-level collections list
+        self.assertIn("collections", result)
+        top_colls = result["collections"]
+        self.assertEqual(len(top_colls), 1)
+        self.assertEqual(top_colls[0]["name"], "Research Papers")
         item = result["items"][0]
         self.assertEqual(item["item_id"], 1)
         self.assertEqual(item["title"], "A Test Paper Title")
+        self.assertEqual(item["date"], "2024")
+        self.assertEqual(item["publication_title"], "Journal of Testing")
         self.assertEqual(item["doi"], "10.1234/test.1")
         self.assertEqual(item["item_type"], "journalArticle")
         self.assertEqual(item["key"], "ABC12345")
