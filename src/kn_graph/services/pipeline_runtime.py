@@ -85,13 +85,11 @@ def _merge_zotero_into_paper_record(record: dict[str, Any], options: dict[str, A
         "article_url": "url",
     }
     for extract_key, zotero_key in FIELD_MAP.items():
-        existing = record.get(extract_key, "")
         zotero_val = (zotero_fields.get(zotero_key) or "").strip()
-        if not existing and zotero_val:
+        if zotero_val:
             record[extract_key] = zotero_val
 
-    existing_authors = record.get("authors_json", []) or []
-    if not existing_authors and zotero_creators:
+    if zotero_creators:
         record["authors_json"] = [
             {"name": f"{c.get('last_name', '')}, {c.get('first_name', '')}".strip(", ")}
             for c in zotero_creators
@@ -788,7 +786,16 @@ def _run_materialize_import(
             paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
             doi = str(options.get("doi", "") or f"job::{job_id}").strip()
             title = str(options.get("title", "") or input_pdf.stem or job_id).strip()
-            if not options.get("title") and not options.get("doi"):
+            # Zotero metadata takes priority for paper identity fields
+            if options.get("_zotero_source"):
+                zotero_meta = options.get("zotero_metadata", {}) or {}
+                zotero_title = str(zotero_meta.get("title", "") or "").strip()
+                zotero_doi = str(zotero_meta.get("DOI", "") or "").strip()
+                if zotero_title:
+                    title = zotero_title
+                if zotero_doi:
+                    doi = zotero_doi
+            elif not options.get("title") and not options.get("doi"):
                 md_title = _extract_title_from_parsed_md(parse_meta)
                 if md_title:
                     title = md_title
