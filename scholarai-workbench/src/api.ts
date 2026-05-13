@@ -20,6 +20,8 @@ import type {
   WorkspaceLayout,
   TranslationProviderConfig,
   TranslateResponse,
+  TranslateJobSubmitResponse,
+  TranslateJobStatusResponse,
   GlobalSettingsPayload,
   ZoteroScanResponse,
   ZoteroImportResponse,
@@ -168,6 +170,7 @@ export const api = {
     translate(
       text: string,
       options: Partial<TranslationProviderConfig> = {},
+      compareByParagraph: boolean = false,
     ): Promise<TranslateResponse> {
       return jsonFetch('/chat/translate', {
         method: 'POST',
@@ -179,8 +182,29 @@ export const api = {
           api_key: options.api_key || '',
           base_url: options.base_url || '',
           endpoint_url: options.endpoint_url || '',
+          compare_by_paragraph: compareByParagraph,
         }),
       });
+    },
+    submitTranslateJob(
+      text: string,
+      options: Partial<TranslationProviderConfig> = {},
+    ): Promise<TranslateJobSubmitResponse> {
+      return jsonFetch('/chat/translate/jobs', {
+        method: 'POST',
+        body: JSON.stringify({
+          text,
+          target_lang: options.target_lang || 'zh',
+          provider: options.provider || 'deepseek',
+          model: options.model || 'deepseek-v4-flash',
+          api_key: options.api_key || '',
+          base_url: options.base_url || '',
+          endpoint_url: options.endpoint_url || '',
+        }),
+      });
+    },
+    getTranslateJob(jobId: string): Promise<TranslateJobStatusResponse> {
+      return jsonFetch(`/chat/translate/jobs/${encodeURIComponent(jobId)}`);
     },
     getCodexConfig(): Promise<Record<string, unknown>> {
       return jsonFetch('/chat/codex/config');

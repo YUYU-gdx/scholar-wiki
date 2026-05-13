@@ -169,6 +169,7 @@ class TranslateRequest(BaseModel):
     api_key: str = ""
     base_url: str = ""
     endpoint_url: str = ""
+    compare_by_paragraph: bool = False
 
 
 class TranslationProviderConfig(BaseModel):

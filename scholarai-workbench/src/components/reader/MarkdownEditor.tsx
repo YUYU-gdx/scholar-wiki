@@ -222,6 +222,9 @@ export default function MarkdownEditor({
   const [selectionUI, setSelectionUI] = useState({ visible: false, x: 0, y: 0, text: '', lineStart: -1, lineEnd: -1 });
   const [translationLoading, setTranslationLoading] = useState(false);
   const [translationText, setTranslationText] = useState('');
+  const [docTranslationRunning, setDocTranslationRunning] = useState(false);
+  const [docTranslationProgress, setDocTranslationProgress] = useState(0);
+  const [docTranslationStatus, setDocTranslationStatus] = useState('');
   const [noteRanges, setNoteRanges] = useState<Array<{ start: number; end: number; id: string; quote: string; note: string }>>([]);
   const flashTimerRef = useRef<number | null>(null);
 
@@ -389,6 +392,11 @@ export default function MarkdownEditor({
         const titleEl = callout.querySelector('.callout-title');
         const titleText = String(titleEl?.textContent || '').trim();
         if (titleText !== 'Reader Note') continue;
+        // Keep metadata in markdown source, but hide Rect/Quads in rendered reader UI.
+        for (const p of Array.from(callout.querySelectorAll('p'))) {
+          const t = String(p.textContent || '').trim();
+          if (/^(Rect|Quads):/i.test(t)) p.remove();
+        }
         const idx = noteIdx;
         const noteId = notes[idx]?.id || '';
         noteIdx += 1;
@@ -590,52 +598,88 @@ export default function MarkdownEditor({
       setTranslationLoading(true);
       const cfg = await api.chat.getTranslationProviderConfig();
       const selected = String(selectionUI.text || '').trim();
-      const words = selected ? selected.split(/\s+/).filter(Boolean).length : 0;
-      if (words < 10) {
-        const result = await api.chat.translate(selected, cfg);
-        setTranslationText(result.translated_text || '');
-        return;
-      }
-      const lines = text.split('\n');
-      const start = Math.max(0, selectionUI.lineStart);
-      const end = Math.min(lines.length - 1, selectionUI.lineEnd);
-      if (start > end || start < 0 || end < 0) {
-        const result = await api.chat.translate(selected, cfg);
-        setTranslationText(result.translated_text || '');
-        return;
-      }
-      const translatedMap = new Map<number, string>();
-      for (let i = start; i <= end; i += 1) {
-        const paragraph = String(lines[i] || '');
-        if (!paragraph.trim()) continue;
-        const result = await api.chat.translate(paragraph, cfg);
-        translatedMap.set(i, String(result.translated_text || '').trim());
-      }
-      if (translatedMap.size <= 0) {
-        setTranslationText('');
-        return;
-      }
-      const next = [...lines];
-      const touched: string[] = [];
-      for (let i = end; i >= start; i -= 1) {
-        const translated = translatedMap.get(i);
-        if (!translated) continue;
-        next.splice(i + 1, 0, '', `Translation: ${translated}`, '');
-        touched.push(`paragraph ${i + 1}`);
-      }
-      const merged = next.join('\n');
-      setText(merged);
-      currentContentRef.current = merged;
-      onContentChange?.(merged);
-      if (window.desktopShell?.runtime === 'electron' && absolutePath) {
-        await window.desktopShell.writeLocalText(absolutePath, merged);
-      }
-      touched.reverse();
-      setTranslationText(`Inserted paragraph translations: ${touched.join(', ')}`);
+      const result = await api.chat.translate(selected, cfg, false);
+      setTranslationText(result.formatted_text || result.translated_text || '');
     } catch (e) {
       setTranslationText(`Translation failed: ${(e as Error).message}`);
     } finally {
       setTranslationLoading(false);
+    }
+  };
+
+  const handleTranslateWholeDocument = async () => {
+    try {
+      setDocTranslationRunning(true);
+      setDocTranslationProgress(0);
+      setDocTranslationStatus('准备提交翻译任务...');
+      const cfg = await api.chat.getTranslationProviderConfig();
+      const jobsUnsupportedKey = 'reader_translate_jobs_unsupported';
+      const jobsUnsupported = window.sessionStorage.getItem(jobsUnsupportedKey) === '1';
+      try {
+        if (jobsUnsupported) throw new Error('http_405');
+        const submit = await api.chat.submitTranslateJob(currentContentRef.current, cfg);
+        const jobId = String(submit.job_id || '').trim();
+        if (!jobId) throw new Error('translation_job_id_missing');
+        setDocTranslationStatus('翻译中...');
+        const startedAt = Date.now();
+        while (true) {
+          // eslint-disable-next-line no-await-in-loop
+          const row = await api.chat.getTranslateJob(jobId);
+          setDocTranslationProgress(Math.max(0, Math.min(100, Number(row.progress || 0))));
+          if (row.status === 'completed') {
+            const translated = String(row.result?.formatted_text || row.result?.translated_text || '').trim();
+            if (!translated) throw new Error('translation_result_empty');
+            setText(translated);
+            currentContentRef.current = translated;
+            onContentChange?.(translated);
+            if (window.desktopShell?.runtime === 'electron' && absolutePath) {
+              // Single write to avoid multi-insert races.
+              await window.desktopShell.writeLocalText(absolutePath, translated);
+            }
+            setTranslationText('全文对照翻译已完成并写回。');
+            setDocTranslationStatus('已完成');
+            setDocTranslationProgress(100);
+            return;
+          }
+          if (row.status === 'failed') {
+            throw new Error(String(row.error || 'translation_job_failed'));
+          }
+          if (Date.now() - startedAt > 30 * 60 * 1000) {
+            throw new Error('translation_job_timeout');
+          }
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((resolve) => setTimeout(resolve, 700));
+        }
+      } catch (jobErr) {
+        // Fallback path: older backend without /chat/translate/jobs.
+        const emsg = String((jobErr as Error).message || '');
+        if (emsg.includes('http_405')) {
+          window.sessionStorage.setItem(jobsUnsupportedKey, '1');
+        }
+        setDocTranslationStatus('任务接口不可用，回退到同步翻译...');
+        setDocTranslationProgress(20);
+        const syncResult = await api.chat.translate(currentContentRef.current, cfg, true);
+        setDocTranslationProgress(85);
+        const translated = String(syncResult.formatted_text || syncResult.translated_text || '').trim();
+        if (!translated) throw jobErr;
+        setText(translated);
+        currentContentRef.current = translated;
+        onContentChange?.(translated);
+        if (window.desktopShell?.runtime === 'electron' && absolutePath) {
+          await window.desktopShell.writeLocalText(absolutePath, translated);
+        }
+        setDocTranslationProgress(100);
+        setDocTranslationStatus('已完成（同步模式）');
+        setTranslationText('全文对照翻译已完成并写回。');
+        return;
+      }
+    } catch (e) {
+      const msg = String((e as Error).message || 'unknown_error');
+      setDocTranslationStatus(`失败: ${msg}`);
+      setTranslationText(`全文翻译失败: ${msg}`);
+      window.alert(`全文翻译失败：${msg}`);
+    } finally {
+      setDocTranslationRunning(false);
     }
   };
 
@@ -962,6 +1006,29 @@ export default function MarkdownEditor({
               {m === 'edit' ? 'Edit' : m === 'live-preview' ? 'Live' : 'Read'}
             </button>
           ))}
+        </div>
+        <div className="flex items-center gap-2 ml-2">
+          <button
+            className={`px-3 py-1 text-xs rounded-md border ${docTranslationRunning ? 'border-secondary text-secondary' : 'border-outline-variant text-on-surface-variant hover:bg-surface-container-low'}`}
+            onClick={handleTranslateWholeDocument}
+            disabled={docTranslationRunning}
+            title="全文段落对照翻译"
+          >
+            {docTranslationRunning ? '翻译中...' : '全文对照翻译'}
+          </button>
+          {docTranslationRunning && (
+            <div className="w-28 h-2 rounded-full bg-surface-container overflow-hidden border border-outline-variant">
+              <div className="h-full bg-secondary transition-all duration-300" style={{ width: `${docTranslationProgress}%` }} />
+            </div>
+          )}
+          {docTranslationRunning && (
+            <span className="text-[11px] font-mono text-on-surface-variant">{docTranslationProgress}%</span>
+          )}
+          {!!docTranslationStatus && (
+            <span className="text-[11px] text-on-surface-variant max-w-[220px] truncate" title={docTranslationStatus}>
+              {docTranslationStatus}
+            </span>
+          )}
         </div>
       </div>
 

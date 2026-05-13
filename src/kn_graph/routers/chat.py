@@ -417,9 +417,41 @@ def create_router(chat_service: ChatService) -> APIRouter:
                 api_key=str(body.api_key or ""),
                 base_url=str(body.base_url or ""),
                 endpoint_url=str(body.endpoint_url or ""),
+                compare_by_paragraph=bool(body.compare_by_paragraph),
             )
             return result
         except Exception as exc:
             return JSONResponse(status_code=400, content={"error": "translation_failed", "detail": str(exc)})
+
+    @router.post("/translate/jobs")
+    async def submit_translate_job(body: TranslateRequest):
+        text = str(body.text or "").strip()
+        if not text:
+            return JSONResponse(status_code=400, content={"error": "text_required"})
+        try:
+            result = chat_service.submit_markdown_translation_job(
+                markdown_text=text,
+                target_lang=str(body.target_lang or "zh"),
+                provider=str(body.provider or "deepseek"),
+                model=str(body.model or "deepseek-v4-flash"),
+                api_key=str(body.api_key or ""),
+                base_url=str(body.base_url or ""),
+                endpoint_url=str(body.endpoint_url or ""),
+            )
+            return JSONResponse(status_code=202, content=result)
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"error": "translation_job_submit_failed", "detail": str(exc)})
+
+    @router.get("/translate/jobs/{job_id}")
+    async def get_translate_job(job_id: str):
+        try:
+            row = chat_service.get_translation_job(job_id)
+            return row
+        except ValueError as exc:
+            code = str(exc)
+            status = 404 if code == "translation_job_not_found" else 400
+            return JSONResponse(status_code=status, content={"error": code})
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": "translation_job_query_failed", "detail": str(exc)})
 
     return router

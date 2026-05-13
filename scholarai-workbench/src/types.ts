@@ -444,10 +444,29 @@ export interface TranslationProviderConfig {
 
 export interface TranslateResponse {
   translated_text: string;
+  formatted_text?: string;
+  compare_by_paragraph?: boolean;
+  translated_blocks?: number;
   provider: string;
   model: string;
   target_lang: string;
   latency_ms: number;
+}
+
+export interface TranslateJobSubmitResponse {
+  job_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  progress: number;
+}
+
+export interface TranslateJobStatusResponse {
+  job_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  progress: number;
+  created_at?: string;
+  updated_at?: string;
+  error?: string;
+  result?: TranslateResponse | null;
 }
 
 export interface SettingsCategorySchemaField {

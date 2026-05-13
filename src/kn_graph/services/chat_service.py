@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import time
+import threading
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -16,9 +19,13 @@ from kn_graph.services.agent_runner import CodexRunner  # noqa: E402
 
 
 class ChatService:
+    TRANSLATION_LABEL_HTML = '<span style="color:#16a34a;"><strong>译文</strong></span>'
+
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._chat: Any = None
+        self._translation_jobs_lock = threading.Lock()
+        self._translation_jobs: dict[str, dict[str, Any]] = {}
 
     def _ensure_chat(self) -> Any:
         if self._chat is not None:
@@ -628,10 +635,21 @@ class ChatService:
         api_key: str = "",
         base_url: str = "",
         endpoint_url: str = "",
+        compare_by_paragraph: bool = False,
     ) -> dict[str, Any]:
         src = str(text or "").strip()
         if not src:
             raise ValueError("text_required")
+        if bool(compare_by_paragraph):
+            return self.translate_markdown_bilingual(
+                markdown_text=src,
+                target_lang=target_lang,
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                endpoint_url=endpoint_url,
+            )
         cfg = self.get_translation_provider_config()
         resolved_provider = str(provider or cfg.get("provider") or "deepseek").strip()
         resolved_model = str(model or cfg.get("model") or "deepseek-v4-flash").strip()
@@ -662,13 +680,203 @@ class ChatService:
         client = registry.create_message_client(provider=resolved_provider, model=resolved_model, options=options)
         translated = str(client.complete_messages(messages=messages, timeout_seconds=90) or "").strip()
         latency_ms = int((time.perf_counter() - begin) * 1000)
+        decorated = self._decorate_translation_line(translated)
         return {
             "translated_text": translated,
+            "formatted_text": decorated,
             "provider": resolved_provider,
             "model": resolved_model,
             "target_lang": resolved_target,
             "latency_ms": latency_ms,
         }
+
+    def _translate_single_text(
+        self,
+        text: str,
+        target_lang: str,
+        provider: str,
+        model: str,
+        api_key: str,
+        base_url: str,
+        endpoint_url: str,
+    ) -> dict[str, Any]:
+        return self.translate_text(
+            text=text,
+            target_lang=target_lang,
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            endpoint_url=endpoint_url,
+            compare_by_paragraph=False,
+        )
+
+    def _decorate_translation_line(self, translated: str) -> str:
+        return f"{self.TRANSLATION_LABEL_HTML}: {str(translated or '').strip()}".rstrip()
+
+    def translate_markdown_bilingual(
+        self,
+        markdown_text: str,
+        target_lang: str = "zh",
+        provider: str = "deepseek",
+        model: str = "deepseek-v4-flash",
+        api_key: str = "",
+        base_url: str = "",
+        endpoint_url: str = "",
+        progress_cb: Any | None = None,
+    ) -> dict[str, Any]:
+        src = str(markdown_text or "").strip()
+        if not src:
+            raise ValueError("text_required")
+        blocks = self._split_markdown_blocks(str(markdown_text or ""))
+        out: list[str] = []
+        total_latency = 0
+        translated_blocks = 0
+        last_meta: dict[str, Any] = {}
+        total_work = max(1, len([x for x in blocks if x.strip() and not self._is_fenced_code_block(x)]))
+        done_work = 0
+        for block in blocks:
+            out.append(block)
+            if not block.strip():
+                continue
+            if self._is_fenced_code_block(block):
+                continue
+            result = self._translate_single_text(
+                text=block,
+                target_lang=target_lang,
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                endpoint_url=endpoint_url,
+            )
+            translated = str(result.get("translated_text", "") or "").strip()
+            out.append(self._decorate_translation_line(translated))
+            translated_blocks += 1
+            total_latency += int(result.get("latency_ms", 0) or 0)
+            last_meta = result
+            done_work += 1
+            if callable(progress_cb):
+                progress_cb(done_work, total_work)
+        return {
+            "translated_text": "\n\n".join(out).strip(),
+            "formatted_text": "\n\n".join(out).strip(),
+            "compare_by_paragraph": True,
+            "translated_blocks": translated_blocks,
+            "provider": str(last_meta.get("provider", provider) or provider),
+            "model": str(last_meta.get("model", model) or model),
+            "target_lang": str(last_meta.get("target_lang", target_lang) or target_lang),
+            "latency_ms": total_latency,
+        }
+
+    def submit_markdown_translation_job(
+        self,
+        markdown_text: str,
+        target_lang: str = "zh",
+        provider: str = "deepseek",
+        model: str = "deepseek-v4-flash",
+        api_key: str = "",
+        base_url: str = "",
+        endpoint_url: str = "",
+    ) -> dict[str, Any]:
+        src = str(markdown_text or "").strip()
+        if not src:
+            raise ValueError("text_required")
+        job_id = f"tr_{uuid.uuid4().hex[:16]}"
+        now = datetime.now(timezone.utc).isoformat()
+        with self._translation_jobs_lock:
+            self._translation_jobs[job_id] = {
+                "job_id": job_id,
+                "status": "queued",
+                "progress": 0,
+                "created_at": now,
+                "updated_at": now,
+                "result": None,
+                "error": "",
+            }
+
+        def _run() -> None:
+            self._update_translation_job(job_id, status="running", progress=0)
+            try:
+                result = self.translate_markdown_bilingual(
+                    markdown_text=markdown_text,
+                    target_lang=target_lang,
+                    provider=provider,
+                    model=model,
+                    api_key=api_key,
+                    base_url=base_url,
+                    endpoint_url=endpoint_url,
+                    progress_cb=lambda done, total: self._update_translation_job(
+                        job_id,
+                        status="running",
+                        progress=int(max(0, min(100, round((done / max(1, total)) * 100)))),
+                    ),
+                )
+                self._update_translation_job(job_id, status="completed", progress=100, result=result)
+            except Exception as exc:
+                self._update_translation_job(job_id, status="failed", error=str(exc))
+
+        threading.Thread(target=_run, name=f"translation-job-{job_id}", daemon=True).start()
+        return {"job_id": job_id, "status": "queued", "progress": 0}
+
+    def get_translation_job(self, job_id: str) -> dict[str, Any]:
+        jid = str(job_id or "").strip()
+        if not jid:
+            raise ValueError("job_id_required")
+        with self._translation_jobs_lock:
+            row = self._translation_jobs.get(jid)
+            if not isinstance(row, dict):
+                raise ValueError("translation_job_not_found")
+            return dict(row)
+
+    def _update_translation_job(
+        self,
+        job_id: str,
+        *,
+        status: str | None = None,
+        progress: int | None = None,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._translation_jobs_lock:
+            row = self._translation_jobs.get(job_id)
+            if not isinstance(row, dict):
+                return
+            if status is not None:
+                row["status"] = status
+            if progress is not None:
+                row["progress"] = int(max(0, min(100, progress)))
+            if result is not None:
+                row["result"] = result
+            if error is not None:
+                row["error"] = str(error or "")
+            row["updated_at"] = now
+
+    def _split_markdown_blocks(self, text: str) -> list[str]:
+        if not text:
+            return []
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        chunks: list[str] = []
+        current: list[str] = []
+        for line in normalized.split("\n"):
+            if not line.strip():
+                if current:
+                    chunks.append("\n".join(current).strip("\n"))
+                    current = []
+                continue
+            current.append(line)
+        if current:
+            chunks.append("\n".join(current).strip("\n"))
+        return chunks
+
+    def _is_fenced_code_block(self, block: str) -> bool:
+        lines = [x for x in block.splitlines() if x.strip()]
+        if len(lines) < 2:
+            return False
+        start = lines[0].strip()
+        end = lines[-1].strip()
+        return (start.startswith("```") and end.startswith("```")) or (start.startswith("~~~") and end.startswith("~~~"))
 
     def test_provider(self, provider: str, model: str = "", options: dict[str, Any] | None = None, prompt: str = "") -> dict[str, Any]:
         if options is None:
