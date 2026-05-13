@@ -4,6 +4,24 @@ import type { GlobalSettingsPayload } from '../types';
 
 type SectionState = { saving: boolean; message: string };
 type ProviderPreset = { id: string; name: string; base_url: string };
+const IMPORT_SECTION_IDS = new Set(['pipeline', 'pipeline_agent', 'embedding']);
+const PROVIDER_KEY_GUIDE_URLS: Record<string, string> = {
+  deepseek: 'https://platform.deepseek.com/api_keys',
+  openai: 'https://platform.openai.com/api-keys',
+  anthropic: 'https://console.anthropic.com/settings/keys',
+  gemini: 'https://aistudio.google.com/app/apikey',
+  silicon: 'https://cloud.siliconflow.cn/account/ak',
+  dashscope: 'https://dashscope.console.aliyun.com/apiKey',
+  doubao: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+  zhipu: 'https://open.bigmodel.cn/usercenter/apikeys',
+  moonshot: 'https://platform.moonshot.cn/console/api-keys',
+  minimax: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
+  openrouter: 'https://openrouter.ai/keys',
+  groq: 'https://console.groq.com/keys',
+  ollama: 'https://ollama.com/',
+  lmstudio: 'https://lmstudio.ai/',
+  'new-api': 'https://github.com/Calcium-Ion/new-api',
+};
 
 const EMPTY_STATE: SectionState = { saving: false, message: '' };
 const DEFAULT_PROVIDER_PRESETS: ProviderPreset[] = [
@@ -43,6 +61,10 @@ function asPresets(value: unknown): ProviderPreset[] {
   const rows = value.filter((x) => x && typeof x === 'object') as ProviderPreset[];
   return rows.length > 0 ? rows : DEFAULT_PROVIDER_PRESETS;
 }
+function providerKeyGuideUrl(provider: string): string {
+  const normalized = String(provider || '').trim().toLowerCase();
+  return PROVIDER_KEY_GUIDE_URLS[normalized] || 'https://docs.cherry-ai.com/pre-basic/settings/providers';
+}
 
 export default function SettingsView() {
   const [loading, setLoading] = useState(true);
@@ -58,6 +80,7 @@ export default function SettingsView() {
     checks: Array<{ name: string; passed: boolean; stage: string; suggestion?: string; binary?: string; version?: string; path?: string; error?: string }>;
     checked_at: string;
   } | null>(null);
+  const [agentTestScope, setAgentTestScope] = useState<'agent_settings' | 'pipeline_agent'>('agent_settings');
   const [agentTesting, setAgentTesting] = useState(false);
   const [agentInstalling, setAgentInstalling] = useState(false);
 
@@ -65,8 +88,13 @@ export default function SettingsView() {
     const raw = payload?.schema?.categories ?? [];
     return raw
       .map((c) => ({ ...c, id: c.id === 'codex_global' ? 'agent_settings' : c.id }))
+      .map((c) => ({ ...c, title: c.id === 'agent_settings' ? '知识问答 Agent' : c.title }))
       .filter((c) => c.id === 'pipeline' || c.id === 'translation' || c.id === 'agent_settings' || c.id === 'pipeline_agent' || c.id === 'embedding');
   }, [payload]);
+  const otherCategories = useMemo(
+    () => categories.filter((c) => !IMPORT_SECTION_IDS.has(c.id)),
+    [categories],
+  );
 
   useEffect(() => {
     api.settings.getAll()
@@ -140,8 +168,34 @@ export default function SettingsView() {
     }
   };
 
-  const handleAgentInstall = async () => {
-    const agentId = str(asRecord(drafts['agent_settings']).current_agent) || 'codex';
+  const getAgentIdByScope = (scope: 'agent_settings' | 'pipeline_agent'): string => {
+    if (scope === 'pipeline_agent') {
+      return str(asRecord(drafts['pipeline_agent']).backend) || 'codex';
+    }
+    return str(asRecord(drafts['agent_settings']).current_agent) || 'codex';
+  };
+
+  const reuseAgentConfig = (source: 'agent_settings' | 'pipeline_agent', target: 'agent_settings' | 'pipeline_agent') => {
+    const src = asRecord(drafts[source]);
+    const patch = {
+      provider: str(src.provider),
+      model: str(src.model),
+      api_key: str(src.api_key),
+      base_url: str(src.base_url),
+    };
+    setDrafts((prev) => ({
+      ...prev,
+      [target]: { ...asRecord(prev[target]), ...patch },
+    }));
+    setSectionState((prev) => ({
+      ...prev,
+      [target]: { saving: false, message: '已复用对方 Agent 的当前配置，请点击保存生效。' },
+    }));
+  };
+
+  const handleAgentInstall = async (scope: 'agent_settings' | 'pipeline_agent' = 'agent_settings') => {
+    const agentId = getAgentIdByScope(scope);
+    setAgentTestScope(scope);
     setAgentInstalling(true);
     try {
       const info = await api.agent.installInfo(agentId);
@@ -186,8 +240,9 @@ export default function SettingsView() {
     }
   };
 
-  const handleAgentTest = async () => {
-    const agentId = str(asRecord(drafts['agent_settings']).current_agent) || 'codex';
+  const handleAgentTest = async (scope: 'agent_settings' | 'pipeline_agent' = 'agent_settings') => {
+    const agentId = getAgentIdByScope(scope);
+    setAgentTestScope(scope);
     setAgentTesting(true);
     setAgentTestResult(null);
     try {
@@ -214,7 +269,182 @@ export default function SettingsView() {
     <div className="flex-1 overflow-auto p-8 bg-surface-container-low">
       <div className="max-w-5xl mx-auto space-y-4">
         <h2 className="text-lg font-semibold text-on-surface">全局设置</h2>
-        {categories.map((category) => {
+        <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl p-5 space-y-4">
+          <div className="text-base font-semibold text-on-surface">文献导入设置</div>
+          <div className="rounded-xl border border-outline-variant p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-on-surface">PDF 转 Markdown 设置</div>
+              <button
+                disabled={(sectionState.pipeline ?? EMPTY_STATE).saving}
+                onClick={() => saveCategory('pipeline')}
+                className="px-4 py-2 rounded bg-secondary text-on-secondary disabled:opacity-50 text-xs"
+              >
+                {(sectionState.pipeline ?? EMPTY_STATE).saving ? '保存中...' : '保存'}
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <label>
+                <div className="mb-1">MinerU API Key</div>
+                <input className="w-full px-3 py-2 rounded border" type="password" value={str(asRecord(drafts.pipeline).mineru_api_key)} onChange={(e) => updateField('pipeline', 'mineru_api_key', e.target.value)} />
+                <div className="mt-1 text-xs text-on-surface-variant">获取地址：<a className="underline" href="https://mineru.net/apiManage/docs" target="_blank" rel="noreferrer">mineru.net/apiManage/docs</a></div>
+              </label>
+              <label>
+                <div className="mb-1">提取模式</div>
+                <input className="w-full px-3 py-2 rounded border bg-surface-container-low text-on-surface-variant" value="agent" readOnly />
+              </label>
+            </div>
+            {(sectionState.pipeline ?? EMPTY_STATE).message ? <div className="text-sm text-on-surface-variant">{(sectionState.pipeline ?? EMPTY_STATE).message}</div> : null}
+          </div>
+
+          <div className="rounded-xl border border-outline-variant p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-on-surface">文献管理 Agent</div>
+                <div className="text-xs text-on-surface-variant">复用配置仅同步到当前页面草稿，需点击保存后生效。</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => reuseAgentConfig('agent_settings', 'pipeline_agent')}
+                  className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest border border-outline-variant"
+                  title="复用「知识问答 Agent」当前选择的 provider/model/api_key/base_url"
+                >
+                  复用知识问答配置
+                </button>
+                <button
+                  disabled={agentInstalling}
+                  onClick={() => handleAgentInstall('pipeline_agent')}
+                  className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50 border border-outline-variant"
+                  title="打开终端安装当前选中的 Agent CLI"
+                >
+                  {agentInstalling ? '安装中...' : '安装'}
+                </button>
+                <button
+                  disabled={agentTesting}
+                  onClick={() => handleAgentTest('pipeline_agent')}
+                  className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50 border border-outline-variant"
+                  title="测试当前 Agent 是否正确配置"
+                >
+                  {agentTesting ? '测试中...' : '测试'}
+                </button>
+                <button
+                  disabled={(sectionState.pipeline_agent ?? EMPTY_STATE).saving}
+                  onClick={() => saveCategory('pipeline_agent')}
+                  className="px-4 py-2 rounded bg-secondary text-on-secondary disabled:opacity-50 text-xs"
+                >
+                  {(sectionState.pipeline_agent ?? EMPTY_STATE).saving ? '保存中...' : '保存'}
+                </button>
+              </div>
+            </div>
+            {(() => {
+              const values = asRecord(drafts.pipeline_agent);
+              const presets = (((values.provider_presets as ProviderPreset[]) || []).length > 0
+                ? ((values.provider_presets as ProviderPreset[]) || [])
+                : DEFAULT_PROVIDER_PRESETS);
+              const backend = str(values.backend) || 'codex';
+              const effortOptions = getEffortOptions(values, backend);
+              const currentEffort = str(values.reasoning_effort).toLowerCase();
+              const effectiveEffort = effortOptions.includes(currentEffort) ? currentEffort : (effortOptions[0] ?? '');
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                  <label>
+                    <div className="mb-1">Agent 后端</div>
+                    <select className="w-full px-3 py-2 rounded border" value={str(values.backend)} onChange={(e) => {
+                      const nextBackend = e.target.value;
+                      updateField('pipeline_agent', 'backend', nextBackend);
+                      const nextOptions = getEffortOptions(values, nextBackend);
+                      if (nextOptions.length > 0) updateField('pipeline_agent', 'reasoning_effort', nextOptions[0]);
+                    }}>
+                      <option value="codex">Codex</option>
+                      <option value="claude_code">Claude Code</option>
+                      <option value="gemini_cli">Gemini CLI</option>
+                    </select>
+                  </label>
+                  <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('pipeline_agent', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
+                  <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField('pipeline_agent', 'model', e.target.value)} /></label>
+                  <label>
+                    <div className="mb-1">思考深度</div>
+                    <select className="w-full px-3 py-2 rounded border" value={effectiveEffort} onChange={(e) => updateField('pipeline_agent', 'reasoning_effort', e.target.value)} disabled={effortOptions.length === 0}>
+                      {effortOptions.length === 0 ? <option value="">不支持</option> : null}
+                      {effortOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <div className="mb-1">API Key</div>
+                    <input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField('pipeline_agent', 'api_key', e.target.value)} />
+                    <div className="mt-1 text-xs text-on-surface-variant">获取地址：<a className="underline" href={providerKeyGuideUrl(str(values.provider))} target="_blank" rel="noreferrer">{providerKeyGuideUrl(str(values.provider))}</a></div>
+                  </label>
+                  <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField('pipeline_agent', 'base_url', e.target.value)} /></label>
+                </div>
+              );
+            })()}
+            <div className="text-on-surface-variant text-sm">用于文献导入提取任务的 Agent 配置。</div>
+            {agentTestScope === 'pipeline_agent' && agentTestResult && (
+              <div className={`rounded-lg border p-3 text-sm space-y-2 ${agentTestResult.ok ? 'border-green-300 bg-green-50' : 'border-amber-300 bg-amber-50'}`}>
+                <div className="flex items-center justify-between">
+                  <span className={`font-semibold ${agentTestResult.ok ? 'text-green-700' : 'text-amber-700'}`}>
+                    {agentTestResult.ok ? '验证通过' : '发现问题'} ({agentTestResult.passed_count}/{agentTestResult.passed_count + agentTestResult.failed_count})
+                  </span>
+                  <button
+                    onClick={() => setAgentTestResult(null)}
+                    className="text-xs text-on-surface-variant hover:text-on-surface"
+                  >
+                    关闭
+                  </button>
+                </div>
+                {agentTestResult.checks.map((check, i) => (
+                  <div key={i} className="flex items-start gap-2 text-xs">
+                    <span className="mt-0.5">{check.passed ? '✅' : '❌'}</span>
+                    <div>
+                      <span className="font-medium">{check.name}</span>
+                      {check.version ? <span className="ml-2 text-on-surface-variant">v{check.version}</span> : null}
+                      {check.binary ? <div className="text-on-surface-variant truncate max-w-md">{check.binary}</div> : null}
+                      {check.path ? <div className="text-on-surface-variant truncate max-w-md">{check.path}</div> : null}
+                      {!check.passed && (check.suggestion || check.error) ? (
+                        <div className="text-amber-700 mt-0.5">{check.suggestion || check.error}</div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+                <div className="text-xs text-on-surface-variant">检查时间: {agentTestResult.checked_at}</div>
+              </div>
+            )}
+            {(sectionState.pipeline_agent ?? EMPTY_STATE).message ? <div className="text-sm text-on-surface-variant">{(sectionState.pipeline_agent ?? EMPTY_STATE).message}</div> : null}
+          </div>
+
+          <div className="rounded-xl border border-outline-variant p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-on-surface">语义 Embedding 设置</div>
+              <button
+                disabled={(sectionState.embedding ?? EMPTY_STATE).saving}
+                onClick={() => saveCategory('embedding')}
+                className="px-4 py-2 rounded bg-secondary text-on-secondary disabled:opacity-50 text-xs"
+              >
+                {(sectionState.embedding ?? EMPTY_STATE).saving ? '保存中...' : '保存'}
+              </button>
+            </div>
+            {(() => {
+              const values = asRecord(drafts.embedding);
+              const presets = (((values.provider_presets as ProviderPreset[]) || []).length > 0
+                ? ((values.provider_presets as ProviderPreset[]) || [])
+                : DEFAULT_PROVIDER_PRESETS);
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                  <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('embedding', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
+                  <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField('embedding', 'model', e.target.value)} /></label>
+                  <label>
+                    <div className="mb-1">API Key</div>
+                    <input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField('embedding', 'api_key', e.target.value)} />
+                    <div className="mt-1 text-xs text-on-surface-variant">获取地址：<a className="underline" href={providerKeyGuideUrl(str(values.provider))} target="_blank" rel="noreferrer">{providerKeyGuideUrl(str(values.provider))}</a></div>
+                  </label>
+                  <label className="md:col-span-2"><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField('embedding', 'endpoint_url', e.target.value)} /></label>
+                </div>
+              );
+            })()}
+            {(sectionState.embedding ?? EMPTY_STATE).message ? <div className="text-sm text-on-surface-variant">{(sectionState.embedding ?? EMPTY_STATE).message}</div> : null}
+          </div>
+        </div>
+
+        {otherCategories.map((category) => {
           const id = category.id;
           const state = sectionState[id] ?? EMPTY_STATE;
           const values = asRecord(drafts[id]);
@@ -227,13 +457,21 @@ export default function SettingsView() {
                 <div>
                   <div className="text-base font-semibold text-on-surface">{category.title}</div>
                   {category.restart_required ? <div className="text-xs text-on-surface-variant">该配置保存后需要重启生效。</div> : null}
+                  {id === 'agent_settings' ? <div className="text-xs text-on-surface-variant">复用配置仅同步到当前页面草稿，需点击保存后生效。</div> : null}
                 </div>
                 <div className="flex items-center gap-2">
                   {id === 'agent_settings' && (
                     <>
                       <button
+                        onClick={() => reuseAgentConfig('pipeline_agent', 'agent_settings')}
+                        className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest border border-outline-variant"
+                        title="复用「文献管理 Agent」当前选择的 provider/model/api_key/base_url"
+                      >
+                        复用文献管理配置
+                      </button>
+                      <button
                         disabled={agentInstalling}
-                        onClick={handleAgentInstall}
+                        onClick={() => handleAgentInstall('agent_settings')}
                         className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50 border border-outline-variant"
                         title="打开终端安装当前选中的 Agent CLI"
                       >
@@ -241,7 +479,7 @@ export default function SettingsView() {
                       </button>
                       <button
                         disabled={agentTesting}
-                        onClick={handleAgentTest}
+                        onClick={() => handleAgentTest('agent_settings')}
                         className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50 border border-outline-variant"
                         title="测试当前 Agent 是否正确配置"
                       >
@@ -267,7 +505,11 @@ export default function SettingsView() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                   <label><div className="mb-1">翻译提供商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('translation', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
                   <label><div className="mb-1">翻译模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
-                  <label><div className="mb-1">API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} /></label>
+                  <label>
+                    <div className="mb-1">API Key</div>
+                    <input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} />
+                    <div className="mt-1 text-xs text-on-surface-variant">获取地址：<a className="underline" href={providerKeyGuideUrl(str(values.provider))} target="_blank" rel="noreferrer">{providerKeyGuideUrl(str(values.provider))}</a></div>
+                  </label>
                   <label><div className="mb-1">目标语言</div><input className="w-full px-3 py-2 rounded border" value={str(values.target_lang)} onChange={(e) => updateField(id, 'target_lang', e.target.value)} /></label>
                   <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField(id, 'base_url', e.target.value)} /></label>
                   <label><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField(id, 'endpoint_url', e.target.value)} /></label>
@@ -287,75 +529,16 @@ export default function SettingsView() {
                   </label>
                   <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('agent_settings', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
                   <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
-                  <label><div className="mb-1">API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} /></label>
+                  <label>
+                    <div className="mb-1">API Key</div>
+                    <input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} />
+                    <div className="mt-1 text-xs text-on-surface-variant">获取地址：<a className="underline" href={providerKeyGuideUrl(str(values.provider))} target="_blank" rel="noreferrer">{providerKeyGuideUrl(str(values.provider))}</a></div>
+                  </label>
                   <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField(id, 'base_url', e.target.value)} /></label>
                 </div>
               )}
 
-              {id === 'pipeline_agent' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                  {(() => {
-                    const backend = str(values.backend) || 'codex';
-                    const effortOptions = getEffortOptions(values, backend);
-                    const currentEffort = str(values.reasoning_effort).toLowerCase();
-                    const effectiveEffort = effortOptions.includes(currentEffort) ? currentEffort : (effortOptions[0] ?? '');
-                    return (
-                      <>
-                  <label>
-                    <div className="mb-1">Agent 后端</div>
-                    <select
-                      className="w-full px-3 py-2 rounded border"
-                      value={str(values.backend)}
-                      onChange={(e) => {
-                        const nextBackend = e.target.value;
-                        updateField(id, 'backend', nextBackend);
-                        const nextOptions = getEffortOptions(values, nextBackend);
-                        if (nextOptions.length > 0) {
-                          updateField(id, 'reasoning_effort', nextOptions[0]);
-                        }
-                      }}
-                    >
-                      <option value="codex">Codex</option>
-                      <option value="claude_code">Claude Code</option>
-                      <option value="gemini_cli">Gemini CLI</option>
-                    </select>
-                  </label>
-                  <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('pipeline_agent', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
-                  <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
-                  <label>
-                    <div className="mb-1">思考深度</div>
-                    <select
-                      className="w-full px-3 py-2 rounded border"
-                      value={effectiveEffort}
-                      onChange={(e) => updateField(id, 'reasoning_effort', e.target.value)}
-                      disabled={effortOptions.length === 0}
-                    >
-                      {effortOptions.length === 0 ? <option value="">不支持</option> : null}
-                      {effortOptions.map((opt) => (
-                        <option key={opt} value={opt}>{opt}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label><div className="mb-1">API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} /></label>
-                  <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField(id, 'base_url', e.target.value)} /></label>
-                  <div className="md:col-span-2 text-on-surface-variant">Pipeline Agent 配置独立于 Chat Agent，用于论文提取任务。仅当提取模式选择「agent」时生效。</div>
-                      </>
-                    );
-                  })()}
-                </div>
-              )}
-
-              {id === 'embedding' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                  <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('embedding', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
-                  <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
-                  <label><div className="mb-1">API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} /></label>
-                  <label className="md:col-span-2"><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField(id, 'endpoint_url', e.target.value)} /></label>
-                  <div className="md:col-span-2 text-on-surface-variant">文献向量嵌入提供商的配置。支持 OpenAI 兼容的 /embeddings 接口。常用模型：text-embedding-3-small (OpenAI)、embedding-3 (智谱)、BAAI/bge-m3 (SiliconFlow)。</div>
-                </div>
-              )}
-
-              {id === 'agent_settings' && agentTestResult && (
+              {id === 'agent_settings' && agentTestScope === 'agent_settings' && agentTestResult && (
                 <div className={`rounded-lg border p-3 text-sm space-y-2 ${agentTestResult.ok ? 'border-green-300 bg-green-50' : 'border-amber-300 bg-amber-50'}`}>
                   <div className="flex items-center justify-between">
                     <span className={`font-semibold ${agentTestResult.ok ? 'text-green-700' : 'text-amber-700'}`}>
