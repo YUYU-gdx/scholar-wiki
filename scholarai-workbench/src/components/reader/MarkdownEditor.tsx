@@ -12,7 +12,7 @@ import type { ViewerMode } from './types';
 import SelectionActionPopover from './SelectionActionPopover';
 import { api } from '../../api';
 import Outline from './Outline';
-import { deleteNoteFromMarkdownAny, extractNoteBlocks, listRecordedNotesMarkdownPaths, readMarkdownText, setRecordedNotesMarkdownPath } from './NoteMarkdownSync';
+import { deleteNoteFromMarkdownAny, extractNoteBlocks, readMarkdownText } from './NoteMarkdownSync';
 
 // CodeMirror 6 imports
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, rectangularSelection, crosshairCursor, highlightActiveLine } from '@codemirror/view';
@@ -683,28 +683,26 @@ export default function MarkdownEditor({
       const block = `\n\n> [!NOTE] Reader Note\n> Note ID: ${noteId}\n> Quote:\n> ${picked}\n>\n> Note:\n> ${noteText}\n>\n> Time:\n> ${now}\n`;
       const src = String(read.data || '').replace(/\r\n/g, '\n');
 
-      // Find insertion position: right after the selected text's paragraph
+      // Find insertion position: prefer text match (robust), fall back to line-based
       let insertAt = src.length;
       const lineEnd = selectionUI.lineEnd;
-      if (lineEnd >= 0) {
-        // Insert after the line where selection ends
+      // Try exact text match first — works regardless of DOM selection quirks
+      const textIdx = src.indexOf(picked);
+      if (textIdx >= 0) {
+        const after = src.slice(textIdx + picked.length);
+        const nl = after.indexOf('\n');
+        insertAt = nl >= 0 ? textIdx + picked.length + nl : textIdx + picked.length;
+      } else if (lineEnd >= 0) {
+        // Fallback: insert after the line where selection ends
         const lines = src.split('\n');
         const targetLine = Math.max(0, Math.min(lineEnd, lines.length - 1));
         let offset = 0;
         for (let i = 0; i <= targetLine; i++) {
-          offset += lines[i].length + 1; // +1 for newline
+          offset += lines[i].length + 1;
         }
         insertAt = Math.min(offset, src.length);
-      } else {
-        // Fallback: find by matching the selected text
-        const idx = src.indexOf(picked);
-        if (idx >= 0) {
-          const after = src.slice(idx + picked.length);
-          const nl = after.indexOf('\n');
-          insertAt = nl >= 0 ? idx + picked.length + nl : idx + picked.length;
-        }
       }
-      console.log('[notes] insert position', { lineEnd, insertAt, srcLen: src.length });
+      console.log('[notes] insert position', { textIdx, lineEnd, insertAt, srcLen: src.length, method: textIdx >= 0 ? 'text-match' : 'line-based' });
 
       const next = insertAt < src.length
         ? `${src.slice(0, insertAt)}${block}${src.slice(insertAt)}`
@@ -734,7 +732,6 @@ export default function MarkdownEditor({
       const latest = String(verify.data || '').replace(/\r\n/g, '\n');
       setText(latest);
       onContentChange?.(latest);
-      if (absolutePath) setRecordedNotesMarkdownPath(libraryId, paperId, absolutePath);
       window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
       // eslint-disable-next-line no-console
       console.log('[notes] save complete', { noteId });
@@ -753,10 +750,7 @@ export default function MarkdownEditor({
   const handleDeleteNoteByIndex = async (index: number) => {
     if (!Number.isInteger(index) || index < 0 || index >= noteRanges.length) return;
     const range = noteRanges[index];
-    const candidates = Array.from(new Set([
-      String(absolutePath || '').trim(),
-      ...listRecordedNotesMarkdownPaths(libraryId, paperId),
-    ].filter(Boolean)));
+    const candidates = [String(absolutePath || '').trim()].filter(Boolean);
     const res = await deleteNoteFromMarkdownAny(candidates, range.id || '', range.quote || '', range.note || '');
     if (!res.ok) {
       window.alert('删除已执行，但未在任何 MD 文件中找到对应笔记块。');

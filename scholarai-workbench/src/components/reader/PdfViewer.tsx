@@ -7,11 +7,11 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 import SelectionActionPopover from './SelectionActionPopover';
 import { api } from '../../api';
-import { ensureMarkdownPathForNotes, mergeNotesIntoMarkdown, setRecordedNotesMarkdownPath, upsertNoteInMarkdown } from './NoteMarkdownSync';
-import { loadContentList, findTouchedBlocks, getBlocksQuote } from './ContentListResolver';
+import { upsertNoteInMarkdown } from './NoteMarkdownSync';
+import { loadContentList, findTouchedBlocks, getBlocksQuote, computeUnionBbox } from './ContentListResolver';
 import type { ContentBlock } from './ContentListResolver';
-import type { PaperFiles } from '../../types';
 import { isSelectionInside } from './selectionScope';
+import { notesCache } from './NotesCache';
 
 interface PdfViewerProps {
   data: Uint8Array;
@@ -44,6 +44,11 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   const pageTextCacheRef = useRef<Map<number, string>>(new Map());
   const contentListRef = useRef<ContentBlock[][] | null>(null);
   const contentListLoadedRef = useRef(false);
+  const [highlights, setHighlights] = useState<Array<{ pageIndex: number; x0: number; y0: number; x1: number; y1: number; noteId: string }>>([]);
+  const pageDimsRef = useRef<Map<number, { width: number; height: number }>>(new Map());
+  const highlightsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [floatingNote, setFloatingNote] = useState<{ visible: boolean; noteText: string; quote: string; x: number; y: number }>({ visible: false, noteText: '', quote: '', x: 0, y: 0 });
+  const floatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -174,31 +179,62 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     };
   }, []);
 
-  const appendMdNoteByAnchor = async (noteId: string, selectedText: string, noteText: string): Promise<string> => {
-    if (markdownPath) setRecordedNotesMarkdownPath(libraryId, paperId, markdownPath);
-    const filesStub: PaperFiles = {
-      paper_id: paperId,
-      library_id: libraryId,
-      files: {
-        markdown: markdownPath ? { path: markdownPath, name: 'markdown.md', size_bytes: 0 } : undefined,
-        pdf: undefined,
-        html: undefined,
-      },
-      default_view: 'markdown',
-      content_list_v2_path: contentListV2Path,
+  // Load page dimensions and note highlights whenever notes change
+  const loadHighlights = async () => {
+    if (!pdfDocProxy || !markdownPath) return;
+    try {
+      // Fetch page dimensions (lazy, one page at a time)
+      const dims = pageDimsRef.current;
+      if (dims.size === 0) {
+        const firstPage = await pdfDocProxy.getPage(1);
+        const vp = firstPage.getViewport({ scale: 1 });
+        dims.set(1, { width: vp.width, height: vp.height });
+      }
+      // Load notes from the main markdown file
+      const shell = window.desktopShell;
+      if (!shell || shell.runtime !== 'electron' || !markdownPath) return;
+      const res = await shell.readLocalText(markdownPath);
+      if (!res.ok || !res.data) return;
+      const entries = notesCache.load(String(res.data), paperId, libraryId, markdownPath);
+      const hls: Array<{ pageIndex: number; x0: number; y0: number; x1: number; y1: number; noteId: string }> = [];
+      for (const e of entries) {
+        if (!e.rect) continue;
+        const parts = e.rect.split(',').map(Number);
+        if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
+          hls.push({ pageIndex: e.pageIndex, x0: parts[0], y0: parts[1], x1: parts[2], y1: parts[3], noteId: e.id });
+        }
+      }
+      setHighlights(hls);
+      // eslint-disable-next-line no-console
+      console.log('[pdf] highlights loaded', { count: hls.length });
+    } catch {
+      // silent
+    }
+  };
+
+  useEffect(() => {
+    loadHighlights();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfDocProxy, markdownPath]);
+
+  useEffect(() => {
+    const handler = () => {
+      // Debounce — notes might not be written to disk yet
+      if (highlightsTimerRef.current) clearTimeout(highlightsTimerRef.current);
+      highlightsTimerRef.current = setTimeout(() => loadHighlights(), 300);
     };
-    // supply one existing path to derive directory when markdown is missing
-    if (!filesStub.files.markdown && sourcePath) {
-      filesStub.files.pdf = { path: sourcePath, name: fileName, size_bytes: 0 };
-    }
-    const ensured = await ensureMarkdownPathForNotes(filesStub, paperId);
-    if (!ensured) return '';
-    if (markdownPath && ensured && markdownPath !== ensured) {
-      await mergeNotesIntoMarkdown(markdownPath, ensured);
-    }
-    setRecordedNotesMarkdownPath(libraryId, paperId, ensured);
-    await upsertNoteInMarkdown(ensured, noteId, selectedText, noteText);
-    return ensured;
+    window.addEventListener('reader-annotation-changed', handler);
+    return () => {
+      window.removeEventListener('reader-annotation-changed', handler);
+      if (highlightsTimerRef.current) clearTimeout(highlightsTimerRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfDocProxy, markdownPath]);
+
+  const appendMdNoteByAnchor = async (noteId: string, selectedText: string, noteText: string, opts?: { pageIndex?: number; rect?: string }): Promise<string> => {
+    if (!markdownPath) return '';
+    await upsertNoteInMarkdown(markdownPath, noteId, selectedText, noteText, { pageIndex: opts?.pageIndex, rect: opts?.rect });
+    return markdownPath;
   };
 
   const handleTranslate = async () => {
@@ -229,16 +265,20 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
 
       // ── Block-based quote: expand selection to full blocks, clean, then match like case 1 ──
       let quote = picked;
+      let noteOpts: { pageIndex?: number; rect?: string } | undefined;
       if (contentPages && pageIndex >= 0 && pageIndex < contentPages.length) {
         const pageBlocks = contentPages[pageIndex];
         const touched = findTouchedBlocks(pageBlocks, picked);
         if (touched) {
           const full = getBlocksQuote(pageBlocks, touched.startIdx, touched.endIdx);
+          // Compute union bbox of all touched blocks for highlight positioning
+          const unionBbox = computeUnionBbox(pageBlocks, touched.startIdx, touched.endIdx);
           // eslint-disable-next-line no-console
           console.log('[notes] raw quote from blocks', {
             rawLen: full.quote.length,
             rawHead: full.quote.slice(0, 120),
             rawTail: full.quote.slice(-80),
+            unionBbox,
           });
           // Clean: strip leading/trailing whitespace/newlines, normalize inner whitespace
           const cleaned = full.quote.replace(/^[\s\n\r]+|[\s\n\r]+$/g, '').replace(/\s+/g, ' ').trim();
@@ -250,6 +290,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
               cleanedTail: cleaned.slice(-80),
             });
             quote = cleaned;
+            noteOpts = { pageIndex, rect: unionBbox ? `${unionBbox.x0},${unionBbox.y0},${unionBbox.x1},${unionBbox.y1}` : undefined };
           } else {
             // eslint-disable-next-line no-console
             console.log('[notes] cleaned quote was empty, falling back to picked');
@@ -264,9 +305,39 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       }
 
       // ── Standard path: same as case 1 (MD manual selection) ──
-      const ensuredPath = await appendMdNoteByAnchor(noteId, quote, noteText);
+      const ensuredPath = await appendMdNoteByAnchor(noteId, quote, noteText, noteOpts);
       // eslint-disable-next-line no-console
       console.log('[notes] pdf save done', { ensuredPath, quoteLen: quote.length });
+
+      // Show floating note card next to the highlight
+      if (noteOpts?.rect && noteOpts.pageIndex != null) {
+        const host = selectionHostRef.current;
+        if (host) {
+          // Delay to let React render highlights first
+          setTimeout(() => {
+            const pageEl = host.querySelector(`[data-page-number="${noteOpts.pageIndex! + 1}"]`) as HTMLElement | null;
+            if (pageEl) {
+              const highlight = pageEl.querySelector('.kn-pdf-highlight') as HTMLElement | null;
+              if (highlight) {
+                const hr = highlight.getBoundingClientRect();
+                setFloatingNote({
+                  visible: true,
+                  noteText,
+                  quote: quote.slice(0, 200),
+                  x: hr.right + 12,
+                  y: hr.top,
+                });
+                // Auto-dismiss after 6s
+                if (floatingTimerRef.current) clearTimeout(floatingTimerRef.current);
+                floatingTimerRef.current = setTimeout(() => {
+                  setFloatingNote((p) => ({ ...p, visible: false }));
+                }, 6000);
+              }
+            }
+          }, 200);
+        }
+      }
+
       window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
       setSelectionUI((p) => ({ ...p, visible: false }));
     } catch (e) {
@@ -275,6 +346,79 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       window.alert(`保存笔记失败：${(e as Error).message}`);
     }
   };
+
+  // ── Render highlight overlays on PDF pages ──
+  useEffect(() => {
+    const host = selectionHostRef.current;
+    if (!host) return;
+
+    const renderHighlights = () => {
+      // Remove old highlight containers
+      host.querySelectorAll('.kn-pdf-highlight-layer').forEach((el) => el.remove());
+
+      if (highlights.length === 0) return;
+
+      const defaultDims = pageDimsRef.current.get(1) || { width: 612, height: 792 };
+
+      // Group highlights by page
+      const byPage = new Map<number, typeof highlights>();
+      for (const h of highlights) {
+        const list = byPage.get(h.pageIndex) || [];
+        list.push(h);
+        byPage.set(h.pageIndex, list);
+      }
+
+      for (const [pageIdx, hls] of byPage) {
+        const pageEl = host.querySelector(`[data-page-number="${pageIdx + 1}"]`) as HTMLElement | null;
+        if (!pageEl) continue;
+
+        // Get page dimensions for this page (lazy, use default if unknown)
+        let dims = pageDimsRef.current.get(pageIdx + 1);
+        if (!dims) {
+          // Use a reasonable default same as first page
+          dims = defaultDims;
+        }
+
+        const layer = document.createElement('div');
+        layer.className = 'kn-pdf-highlight-layer';
+        layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:5;';
+
+        for (const h of hls) {
+          const el = document.createElement('div');
+          el.className = 'kn-pdf-highlight';
+          const left = (h.x0 / dims.width) * 100;
+          const top = ((dims.height - h.y1) / dims.height) * 100;
+          const w = ((h.x1 - h.x0) / dims.width) * 100;
+          const hgt = ((h.y1 - h.y0) / dims.height) * 100;
+          el.style.cssText = `position:absolute;left:${left}%;top:${top}%;width:${w}%;height:${hgt}%;background:rgba(251,191,36,0.25);border-radius:2px;pointer-events:auto;cursor:pointer;transition:background 0.15s;`;
+          el.title = '笔记标注';
+          el.addEventListener('mouseenter', () => {
+            el.style.background = 'rgba(251,191,36,0.45)';
+          });
+          el.addEventListener('mouseleave', () => {
+            el.style.background = 'rgba(251,191,36,0.25)';
+          });
+          layer.appendChild(el);
+        }
+
+        // Position relative to the page's canvas wrapper
+        const canvasWrapper = pageEl.querySelector('.react-pdf__Page__canvas') as HTMLElement | null;
+        if (canvasWrapper) {
+          canvasWrapper.style.position = 'relative';
+          canvasWrapper.appendChild(layer);
+        } else {
+          // Fallback: append to page element itself, but make it relative
+          const prevPos = pageEl.style.position;
+          if (!prevPos || prevPos === 'static') pageEl.style.position = 'relative';
+          pageEl.appendChild(layer);
+        }
+      }
+    };
+
+    // Delay to allow React to finish rendering pages
+    const timer = setTimeout(renderHighlights, 150);
+    return () => clearTimeout(timer);
+  }, [highlights, scale, pageCount]);
 
   const pdfDocumentNode = useMemo(() => (
     <Document
@@ -338,6 +482,33 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
 
       <div ref={selectionHostRef} className="flex-1 overflow-auto flex justify-center p-4">
         {pdfDocumentNode}
+
+        {/* Floating note card after saving */}
+        {floatingNote.visible && (
+          <div
+            className="fixed z-50 max-w-[320px] rounded-xl border border-outline-variant bg-surface-container-lowest shadow-2xl p-4 space-y-2"
+            style={{ left: `${floatingNote.x}px`, top: `${floatingNote.y}px` }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-secondary">笔记已保存</span>
+              <button
+                className="text-outline hover:text-on-surface text-sm leading-none"
+                onClick={() => {
+                  setFloatingNote((p) => ({ ...p, visible: false }));
+                  if (floatingTimerRef.current) clearTimeout(floatingTimerRef.current);
+                }}
+              >
+                &times;
+              </button>
+            </div>
+            {floatingNote.quote && (
+              <p className="text-xs text-on-surface-variant line-clamp-3 leading-relaxed pl-2 border-l-2 border-secondary/30">
+                {floatingNote.quote}
+              </p>
+            )}
+            <p className="text-xs text-on-surface leading-relaxed">{floatingNote.noteText}</p>
+          </div>
+        )}
       </div>
       <SelectionActionPopover
         visible={selectionUI.visible}

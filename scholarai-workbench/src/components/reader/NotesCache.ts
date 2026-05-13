@@ -8,6 +8,7 @@ export interface NoteEntry {
   libraryId: string;
   docType: 'pdf' | 'markdown';
   pageIndex: number;
+  rect: string;
   selectedText: string;
   noteText: string;
   markdownPath: string;
@@ -17,9 +18,9 @@ export interface NoteEntry {
 
 const cache = new Map<string, NoteEntry[]>();
 
-function parseNoteBlocks(raw: string): Array<{ id: string; quote: string; note: string; time: string }> {
+function parseNoteBlocks(raw: string): Array<{ id: string; pageIndex: number; rect: string; quote: string; note: string; time: string }> {
   const src = String(raw || '').replace(/\r\n/g, '\n');
-  const out: Array<{ id: string; quote: string; note: string; time: string }> = [];
+  const out: Array<{ id: string; pageIndex: number; rect: string; quote: string; note: string; time: string }> = [];
   const marker = '> [!NOTE] Reader Note';
   let pos = 0;
   while (pos < src.length) {
@@ -29,11 +30,15 @@ function parseNoteBlocks(raw: string): Array<{ id: string; quote: string; note: 
     if (end < 0) end = src.length;
     const seg = src.slice(start, end);
     const idMatch = seg.match(/>\s*Note ID:\s*([a-zA-Z0-9-]+)/);
+    const pageMatch = seg.match(/>\s*Page:\s*(\d+)/);
+    const rectMatch = seg.match(/>\s*Rect:\s*([\d.,\s]+)/);
     const quoteMatch = seg.match(/>\s*(?:Quote|引用)：?\s*\n>\s*([\s\S]*?)\n>\s*\n>\s*(?:Note|笔记)：?/);
     const noteMatch = seg.match(/>\s*(?:Note|笔记)：?\s*\n>\s*([\s\S]*?)\n>\s*\n>\s*(?:Time|时间)：?/);
     const timeMatch = seg.match(/>\s*(?:Time|时间)：?\s*(.+)/);
     out.push({
       id: idMatch ? String(idMatch[1]) : '',
+      pageIndex: pageMatch ? parseInt(String(pageMatch[1]), 10) : 0,
+      rect: rectMatch ? String(rectMatch[1]).trim() : '',
       quote: quoteMatch
         ? String(quoteMatch[1] || '').split('\n').map((ln) => ln.replace(/^>\s?/, '')).join('\n').trim()
         : '',
@@ -56,7 +61,8 @@ export const notesCache = {
       paperId,
       libraryId,
       docType: 'markdown' as const,
-      pageIndex: 0,
+      pageIndex: b.pageIndex,
+      rect: b.rect,
       selectedText: b.quote,
       noteText: b.note,
       markdownPath,

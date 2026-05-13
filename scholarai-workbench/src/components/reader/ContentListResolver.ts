@@ -127,6 +127,22 @@ export function findTouchedBlocks(
   return { startIdx: startBlock, endIdx: endBlock };
 }
 
+/** Compute the union bounding box of blocks from startIdx to endIdx. */
+export function computeUnionBbox(
+  pageBlocks: ContentBlock[],
+  startIdx: number,
+  endIdx: number,
+): { x0: number; y0: number; x1: number; y1: number } | null {
+  const sel = pageBlocks.slice(startIdx, endIdx + 1).filter((b) => b.bbox && b.bbox.length === 4);
+  if (sel.length === 0) return null;
+  return {
+    x0: Math.min(...sel.map((b) => b.bbox[0])),
+    y0: Math.min(...sel.map((b) => b.bbox[1])),
+    x1: Math.max(...sel.map((b) => b.bbox[2])),
+    y1: Math.max(...sel.map((b) => b.bbox[3])),
+  };
+}
+
 /** Get concatenated quote text and the anchor (last block's text). */
 export function getBlocksQuote(
   pageBlocks: ContentBlock[],
@@ -140,30 +156,3 @@ export function getBlocksQuote(
   };
 }
 
-/**
- * Count how many times anchorText appears in all pages up to and including
- * the block at (pageIndex, blockIndex).
- */
-export function countOccurrencesUpTo(
-  allPages: ContentBlock[][],
-  pageIndex: number,
-  blockIndex: number,
-  anchorText: string,
-): number {
-  const na = norm(anchorText);
-  if (!na) return 0;
-
-  let count = 0;
-  for (let p = 0; p < allPages.length; p++) {
-    const blocks = allPages[p];
-    for (let b = 0; b < blocks.length; b++) {
-      if (norm(blocks[b].text) === na) {
-        count++;
-      }
-      if (p === pageIndex && b === blockIndex) {
-        return count;
-      }
-    }
-  }
-  return count;
-}

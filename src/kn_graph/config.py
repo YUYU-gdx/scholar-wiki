@@ -89,36 +89,19 @@ class Settings(BaseModel):
         return str(self._cat("pipeline").get("mineru_api_key", "") or "").strip()
 
     @property
-    def pipeline_fast_provider(self) -> str:
-        return str(self._cat("pipeline").get("fast_provider", "") or "deepseek").strip()
-
-    @property
-    def pipeline_fast_model(self) -> str:
-        active = self.pipeline_fast_provider
-        providers = self._cat("pipeline").get("fast_providers", {})
-        if isinstance(providers, dict):
-            p = providers.get(active, {})
-            if isinstance(p, dict):
-                return str(p.get("model", "") or "").strip()
-        return ""
-
-    @property
-    def pipeline_fast_endpoint_url(self) -> str:
-        active = self.pipeline_fast_provider
-        providers = self._cat("pipeline").get("fast_providers", {})
-        if isinstance(providers, dict):
-            p = providers.get(active, {})
-            if isinstance(p, dict):
-                return str(p.get("endpoint_url", "") or "").strip()
-        return ""
-
-    @property
     def pipeline_extraction_mode(self) -> str:
         mode = str(self._cat("pipeline").get("extraction_mode", "") or "agent").strip().lower()
         return mode if mode in ("agent",) else "agent"
 
     def _provider_api_key(self, provider_id: str) -> str:
-        providers = self._cat("pipeline").get("fast_providers", {})
+        provider_id = str(provider_id or "").strip()
+        if not provider_id:
+            return ""
+        pipeline_agent = self._cat("pipeline_agent")
+        if str(pipeline_agent.get("provider", "") or "").strip() == provider_id:
+            return str(pipeline_agent.get("api_key", "") or "").strip()
+        embedding = self._cat("embedding")
+        providers = embedding.get("providers", {})
         if isinstance(providers, dict):
             p = providers.get(provider_id, {})
             if isinstance(p, dict):
