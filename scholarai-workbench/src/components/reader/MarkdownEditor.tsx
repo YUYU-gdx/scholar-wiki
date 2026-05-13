@@ -466,10 +466,17 @@ export default function MarkdownEditor({
       const selectedNewlineCount = (coreRaw.match(/\n/g) || []).length;
       let lineEnd = startLine >= 0 ? (startLine + selectedNewlineCount) : -1;
       if (lineEnd < 0) {
-        lineEnd = anchorBlockEnd >= 0 ? anchorBlockEnd : Math.max(startLine, focusLineEnd);
+        lineEnd = anchorBlockEnd >= 0 ? anchorBlockEnd : focusLineEnd;
       }
+      // Only trust focusLineEnd if it's within or adjacent to the anchor block
+      // (prevents triple-click from overflowing into the next block)
       if (focusLineEnd >= 0) {
-        lineEnd = Math.max(lineEnd, focusLineEnd);
+        if (anchorBlockEnd >= 0 && focusLineEnd > anchorBlockEnd + 2) {
+          // focusLineEnd is in a distant block — ignore, use anchorBlockEnd as cap
+          lineEnd = Math.max(lineEnd, anchorBlockEnd);
+        } else {
+          lineEnd = Math.max(lineEnd, focusLineEnd);
+        }
       }
       setSelectionUI({
         visible: true,

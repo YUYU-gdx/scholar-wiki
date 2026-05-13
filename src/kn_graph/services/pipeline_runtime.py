@@ -293,6 +293,25 @@ def _resolve_materialized_md_path(materialized: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_title_from_parsed_md(parse_meta: dict[str, Any]) -> str:
+    """Extract the first H1 heading from the parsed MD file as a candidate title."""
+    md_path = str(parse_meta.get("markdown_path", "") or "").strip()
+    if not md_path:
+        return ""
+    try:
+        p = Path(md_path)
+        if not p.exists() or not p.is_file():
+            return ""
+        content = p.read_text(encoding="utf-8", errors="ignore")
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("# ") and len(stripped) > 2:
+                return stripped[2:].strip()
+    except OSError:
+        return ""
+    return ""
+
+
 def _sync_variable_concept_index(
     *,
     workspace_path: str,
@@ -854,6 +873,10 @@ def _run_materialize_import(
             paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
             doi = str(options.get("doi", "") or f"job::{job_id}").strip()
             title = str(options.get("title", "") or input_pdf.stem or job_id).strip()
+            if not options.get("title") and not options.get("doi"):
+                md_title = _extract_title_from_parsed_md(parse_meta)
+                if md_title:
+                    title = md_title
             parsed_html = parse_meta.get("html_path", "") or ""
             row = {
                 "paper_id": paper_id,
@@ -1115,13 +1138,22 @@ def _run_finalize(
             paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
             doi = str(options.get("doi", "") or f"job::{job_id}").strip()
             title = str(options.get("title", "") or input_pdf.stem or job_id).strip()
+            if not options.get("title") and not options.get("doi"):
+                md_title = _extract_title_from_parsed_md(parse_meta)
+                if md_title:
+                    title = md_title
             parsed_html = parse_meta.get("html_path", "") or ""
+            preparsed_mineru_dir = str((run_dir / "parse" / "mineru_zip_unpacked").resolve())
             row = {
                 "paper_id": paper_id,
                 "doi": doi,
                 "title": title,
                 "offline_html_path": str(parsed_html),
                 "source_path": str(input_pdf.resolve()),
+                "preparsed_main_md_path": str(parse_meta.get("markdown_path", "") or ""),
+                "preparsed_html_path": str(parse_meta.get("html_path", "") or ""),
+                "preparsed_zip_path": str(parse_meta.get("zip_path", "") or ""),
+                "preparsed_mineru_dir": preparsed_mineru_dir,
             }
             manifest_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
             import_result = _retry_on_transient(
@@ -1154,7 +1186,11 @@ def _run_finalize(
             repo.apply_schema()
 
             mats = import_result.get("materialized_papers", []) or []
-            mat_paper_key = str((mats[0] or {}).get("paper_key", "") if mats else "").strip()
+            mat0 = mats[0] or {} if mats else {}
+            mat_paper_key = str(mat0.get("paper_key", "")).strip()
+            mat_pdf_path = str(mat0.get("source_pdf_path", "") or "")
+            mat_md_path = _resolve_materialized_md_path(mat0)
+            mat_html_path = str(mat0.get("html_path", "") or "")
             sqlite_import_succeeded = False
 
             # Import extraction results into SQLite first (writes paper metadata + variables)
@@ -1177,7 +1213,11 @@ def _run_finalize(
                     raw_jsonl = fixed_path
                 _stage_update(store, job_id, "finalize", 98, "importing_to_sqlite", status="running")
                 _retry_on_transient(
-                    lambda: _import_sqlite_main_inline(db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False),
+                    lambda: _import_sqlite_main_inline(
+                        db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False,
+                        source_pdf_path=mat_pdf_path, source_md_path=mat_md_path,
+                        source_html_path=mat_html_path,
+                    ),
                     store=store, job_id=job_id, stage="finalize",
                 )
                 sqlite_import_succeeded = True

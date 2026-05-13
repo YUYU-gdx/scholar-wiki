@@ -272,10 +272,10 @@ class _SQLiteJobStore:
         values["progress"] = int(values.get("progress", 0) or 0)
         values["requested_cancel"] = 1 if bool(values.get("requested_cancel")) else 0
         values["file_size"] = int(values.get("file_size", 0) or 0)
-        # Let DB defaults handle timestamps when not provided
+        ts_now = _now_iso()
         for ts_col in ("created_at", "updated_at"):
             if not values.get(ts_col):
-                values[ts_col] = None
+                values[ts_col] = ts_now
         with self._conn() as conn:
             conn.execute(
                 f"insert into pipeline_jobs ({','.join(columns)}) values ({','.join(['?'] * len(columns))})",

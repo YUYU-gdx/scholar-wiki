@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,16 @@ def _parse_year_value(raw: Any) -> int | None:
         return int(float(text))
     except Exception:
         return None
+
+
+def _safe_parse_authors_json(raw: object) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(str(raw or "[]"))
+        if isinstance(parsed, list):
+            return [x for x in parsed if isinstance(x, dict)]
+    except Exception:
+        pass
+    return []
 
 
 def _extract_theories(paper: dict[str, Any]) -> list[str]:
@@ -161,6 +172,7 @@ class GraphService:
         self._views_json: Path | None = None
         self._views: dict[str, Any] | None = None
         self._loaded = False
+        self._views_mtime: float = 0
 
         self._nodes: dict[str, dict[str, Any]] = {}
         self._edges: list[dict[str, Any]] = []
@@ -286,15 +298,21 @@ class GraphService:
         return out
 
     def _ensure_loaded(self, library_id: str = "") -> None:
-        if self._loaded and self._current_library == library_id:
-            return
         path = self._resolve_views_json(library_id)
+        # Reload if the file has been modified since last load (e.g. by a pipeline job)
+        if self._loaded and self._current_library == library_id:
+            try:
+                if path and path.exists() and path.stat().st_mtime <= self._views_mtime:
+                    return
+            except OSError:
+                return
         if path is None or not path.exists():
             self._views = {"nodes": {}, "edges": [], "moderation_links": [], "interaction_links": [], "edge_index_by_node": {}, "overview": {"node_ids": [], "edge_indexes": []}, "paper_map": {}, "meta": {"isolated_node_count": 0, "dataset_library_name": ""}}
             self._views_json = path
             self._current_library = library_id
             self._build_indexes()
             self._loaded = True
+            self._views_mtime = time.time()
             return
         try:
             raw = path.read_text(encoding="utf-8")
@@ -305,6 +323,7 @@ class GraphService:
         self._current_library = library_id
         self._build_indexes()
         self._loaded = True
+        self._views_mtime = time.time()
 
     def _build_indexes(self) -> None:
         views = self._views
@@ -671,40 +690,34 @@ class GraphService:
 
     def get_full(self, library_id: str = "") -> dict[str, Any]:
         self._ensure_loaded(library_id)
-        paper_map_with_display: dict[str, dict[str, Any]] = {}
-        # Build paper_map from SQLite metadata + graph_views extraction data
-        for pid, meta in self._paper_meta_by_id.items():
-            gv_paper = self._paper_map_unique.get(pid, {}) if isinstance(self._paper_map_unique.get(pid), dict) else {}
-            base = dict(gv_paper)
-            base["library_id"] = library_id
-            base["paper_id"] = pid
-            base["paper_key"] = pid
-            base["source_pdf_path"] = str(meta.get("source_pdf_path", "") or "")
-            base["source_md_path"] = str(meta.get("source_md_path", "") or "")
-            base["source_html_path"] = str(meta.get("source_html_path", "") or "")
-            base["offline_html_path"] = str(meta.get("offline_html_path", "") or "")
-            base["title"] = str(meta.get("title", "") or "").strip() or pid
-            base["display_title"] = base["title"]
-            base["doi"] = str(meta.get("doi", "") or pid)
-            base["article_url"] = str(meta.get("article_url", "") or "")
-            base["authors_json"] = []
-            authors_raw = meta.get("authors_json", "[]")
-            try:
-                parsed_authors = json.loads(str(authors_raw or "[]"))
-                if isinstance(parsed_authors, list):
-                    base["authors_json"] = parsed_authors
-            except Exception:
-                base["authors_json"] = []
-            base["journal"] = str(meta.get("journal", "") or "")
-            base["publication_date"] = str(meta.get("publication_date", "") or "")
-            base["publication_year"] = _parse_year_value(meta.get("publication_year"))
-            paper_map_with_display[pid] = base
 
-        # Build mapping: graph_views paper_id → SQLite paper_id
+        # Paper map: single source from SQLite
+        paper_map_with_display: dict[str, dict[str, Any]] = {}
+        for pid, meta in self._paper_meta_by_id.items():
+            paper_map_with_display[pid] = {
+                "library_id": library_id,
+                "paper_id": pid,
+                "paper_key": pid,
+                "source_pdf_path": str(meta.get("source_pdf_path", "") or ""),
+                "source_md_path": str(meta.get("source_md_path", "") or ""),
+                "source_html_path": str(meta.get("source_html_path", "") or ""),
+                "offline_html_path": str(meta.get("offline_html_path", "") or ""),
+                "title": str(meta.get("title", "") or "").strip() or pid,
+                "display_title": str(meta.get("title", "") or "").strip() or pid,
+                "doi": str(meta.get("doi", "") or pid),
+                "article_url": str(meta.get("article_url", "") or ""),
+                "authors_json": _safe_parse_authors_json(meta.get("authors_json", "[]")),
+                "journal": str(meta.get("journal", "") or ""),
+                "publication_date": str(meta.get("publication_date", "") or ""),
+                "publication_year": _parse_year_value(meta.get("publication_year")),
+            }
+
+        # Map graph_views paper_ids → SQLite paper_keys for node/edge normalization
         gv_pid_to_pkey: dict[str, str] = {}
-        for pid in self._paper_meta_by_id:
-            if pid in self._paper_map_unique:
-                gv_pid_to_pkey[pid] = pid
+        for gv_pid, gv_paper in self._paper_map_unique.items():
+            pkey = str(gv_paper.get("paper_key", "") or gv_paper.get("paper_id", "") or "").strip()
+            if pkey and pkey in self._paper_meta_by_id:
+                gv_pid_to_pkey[gv_pid] = pkey
 
         # Normalize nodes: replace graph_views paper_id with workspace paper_key
         normalized_nodes: list[dict[str, Any]] = []
@@ -858,10 +871,7 @@ class GraphService:
             return None
         # Look up in memory cache first; fall back to direct DB read
         sqlite_meta = self._paper_meta_by_id.get(pid, {})
-        gv = self._paper_map_unique.get(pid, {}) if isinstance(self._paper_map_unique.get(pid), dict) else {}
-        if not sqlite_meta and not gv:
-            # Paper may have been added by a pipeline job after server started;
-            # try reading directly from SQLite.
+        if not sqlite_meta:
             db_path = self._settings.workspaces_dir / library_id / "kn_gragh.db"
             if db_path.exists():
                 import sqlite3
@@ -873,22 +883,23 @@ class GraphService:
                 conn.close()
                 if row:
                     sqlite_meta = dict(row)
-            if not sqlite_meta:
-                return None
-        # Merge graph_views extraction data with SQLite metadata
-        payload = dict(gv)
-        payload["paper_id"] = pid
-        payload["paper_key"] = str(gv.get("paper_key", "") or "").strip() or pid
-        payload["title"] = str(sqlite_meta.get("title", "") or gv.get("title", "") or "").strip() or pid
-        payload["display_title"] = payload["title"]
-        payload["doi"] = str(sqlite_meta.get("doi", "") or gv.get("doi", "") or pid)
-        payload["source_pdf_path"] = str(sqlite_meta.get("source_pdf_path", "") or gv.get("source_pdf_path", "") or "")
-        payload["source_md_path"] = str(sqlite_meta.get("source_md_path", "") or gv.get("source_md_path", "") or "")
-        payload["source_html_path"] = str(sqlite_meta.get("source_html_path", "") or gv.get("source_html_path", "") or "")
-        payload["offline_html_path"] = str(sqlite_meta.get("offline_html_path", "") or gv.get("offline_html_path", "") or "")
-        payload["article_url"] = str(sqlite_meta.get("article_url", "") or gv.get("article_url", "") or "")
-        payload["library_id"] = library_id
-        return payload
+        if not sqlite_meta:
+            return None
+        # Build from SQLite metadata; graph_views extraction fields can be
+        # layered in later when the caller needs them.
+        return {
+            "paper_id": pid,
+            "paper_key": pid,
+            "library_id": library_id,
+            "title": str(sqlite_meta.get("title", "") or "").strip() or pid,
+            "display_title": str(sqlite_meta.get("title", "") or "").strip() or pid,
+            "doi": str(sqlite_meta.get("doi", "") or pid),
+            "source_pdf_path": str(sqlite_meta.get("source_pdf_path", "") or ""),
+            "source_md_path": str(sqlite_meta.get("source_md_path", "") or ""),
+            "source_html_path": str(sqlite_meta.get("source_html_path", "") or ""),
+            "offline_html_path": str(sqlite_meta.get("offline_html_path", "") or ""),
+            "article_url": str(sqlite_meta.get("article_url", "") or ""),
+        }
 
     def get_paper_files(self, paper_id_or_doi: str, library_id: str = "") -> dict[str, Any] | None:
         """Return available readable files for a paper."""
@@ -957,11 +968,32 @@ class GraphService:
             except OSError:
                 pass
 
+        # Resolve content_list_v2.json for PDF↔markdown position mapping
+        content_list_v2_path = ""
+        mineru_dir = None
+        if source_md:
+            md_path = Path(source_md)
+            candidate_dir = md_path.parent if md_path.is_file() else md_path
+            if candidate_dir.exists():
+                mineru_dir = candidate_dir
+        if mineru_dir is None and source_pdf:
+            pdf_path = Path(source_pdf)
+            if pdf_path.parent.exists():
+                mineru_dir = pdf_path.parent
+        if mineru_dir is not None:
+            try:
+                matches = list(mineru_dir.glob("*_content_list_v2.json"))
+                if matches:
+                    content_list_v2_path = str(matches[0])
+            except OSError:
+                pass
+
         return {
             "paper_id": paper.get("paper_id", paper_id_or_doi),
             "library_id": paper.get("library_id", library_id),
             "files": files,
             "default_view": default_view,
+            "content_list_v2_path": content_list_v2_path,
         }
 
     def delete_paper(self, paper_id_or_doi: str, library_id: str = "") -> dict[str, Any] | None:

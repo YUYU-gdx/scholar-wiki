@@ -99,8 +99,13 @@
   - `nodes`（由数组转 map，key 为 `node_id`）
   - `edge_index_by_node`
   - `overview{node_ids, edge_indexes}`
-  - `paper_map`（以 `paper_id` 和 `doi` 双 key 索引）
+  - `paper_map`（以 `paper_id` 和 `job::job_*` 双 key 索引，仅供内部 node/edge 的 paper_id 映射使用）
   - 节点侧统计：`paper_profile`、`paper_count_mentions`、`dominant_paper_id`、`paper_entropy`
+
+> **数据源规约：** API 返回给前端的 `paper_map`（`/graph/full` 和 `/paper/{id}`）的论文元数据字段
+> （title、doi、authors_json、journal、publication_date、source_pdf_path、source_md_path 等）
+> **仅来源于 SQLite `papers` 表**，不再合并 graph_views.json 的 paper_map。
+> graph_views.json 的 paper_map 仅用于解析 node/edge 中的 paper_id 引用（job ID → workspace paper_key）。
 
 ## 5. Chat 数据模型（对话服务）
 

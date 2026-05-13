@@ -691,7 +691,7 @@ class LiteratureService:
         title = str(row.get("title", "") or "").strip()
         if title:
             title_key = _safe_segment(title)
-            if title_key and title_key not in {"job", "item", "paper", "article"}:
+            if title_key and title_key not in {"job", "item", "paper", "article", "upload"}:
                 return f"title_{title_key[:160]}"
         if doi_norm:
             return f"doi_{doi_norm}"
@@ -745,6 +745,19 @@ class LiteratureService:
         html_seed = str(html_inline or "")
         paper_key = self._paper_key_for_row(row=row, source_path=source_path, html_text=html_seed)
         paper_root = workspace_root / "corpus" / "papers" / paper_key
+        # If directory already exists for a different paper (same filename collision),
+        # append a short content hash to disambiguate.
+        if paper_root.exists() and source_path is not None and source_path.exists():
+            existing_source = paper_root / "source" / _safe_windows_filename(source_path.name, fallback="original.pdf")
+            if existing_source.exists():
+                try:
+                    existing_digest = _sha256_file(existing_source)
+                    new_digest = _sha256_file(source_path)
+                    if existing_digest != new_digest:
+                        paper_key = f"{paper_key}_{new_digest[:8]}"
+                        paper_root = workspace_root / "corpus" / "papers" / paper_key
+                except OSError:
+                    pass
         source_dir = paper_root / "source"
         html_dir = paper_root / "derived" / "html"
         mineru_latest_dir = paper_root / "derived" / "mineru" / "latest"

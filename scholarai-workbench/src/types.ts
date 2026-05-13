@@ -430,6 +430,7 @@ export interface PaperFiles {
     html?: PaperFilesFileInfo;
   };
   default_view: 'pdf' | 'markdown' | 'html' | 'none';
+  content_list_v2_path: string;
 }
 
 export interface TranslationProviderConfig {

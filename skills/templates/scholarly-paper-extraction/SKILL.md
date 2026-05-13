@@ -89,6 +89,7 @@ description: 五步工作流提取论文实体并结构化输出：信息抽取 
 - `interactions` 每项必填：`inputs`（至少 2 个非空变量）、`output`、`effect_form`、`verification`、`evidence_text`。
 - `effect_form` 仅允许：`positive` / `negative` / `nonlinear` / `unclear`。
 - `verification` 仅允许：`supported` / `not_supported` / `mixed` / `unclear`。
+- 注意json结构，注意字段内部的转义
 
 ### 元数据提取约束
 

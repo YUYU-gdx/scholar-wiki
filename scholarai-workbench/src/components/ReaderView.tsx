@@ -90,7 +90,10 @@ export default function ReaderView() {
       return;
     }
     setTabs((prev) => {
-      const existing = prev.find((t) => t.paperId === targetPaperId && t.libraryId === targetLibraryId);
+      const targetType = (selectedPaperPreferredType as TabDescriptor['type']) || 'markdown';
+      const existing = prev.find(
+        (t) => t.paperId === targetPaperId && t.libraryId === targetLibraryId && t.type === targetType,
+      );
       if (existing) {
         setActiveTabId(existing.id);
         return prev;
@@ -99,7 +102,7 @@ export default function ReaderView() {
         id: crypto.randomUUID(),
         paperId: targetPaperId,
         libraryId: targetLibraryId,
-        type: (selectedPaperPreferredType as TabDescriptor['type']) || 'markdown',
+        type: targetType,
         path: '',
         title: targetPaperId,
       };

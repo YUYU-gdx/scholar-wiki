@@ -138,101 +138,109 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
 
     @router.post("/zotero/import")
     async def zotero_import(body: ZoteroImportRequest):
-        import uuid, hashlib, json, shutil, os
-        from pathlib import Path
-        from kn_graph.services.zotero_scanner import get_zotero_items_batch
-        from kn_graph.services.pipeline_runtime import dispatch_inline
+        try:
+            import uuid, hashlib, json, shutil, os
+            from pathlib import Path
+            from kn_graph.services.zotero_scanner import get_zotero_items_batch
+            from kn_graph.services.pipeline_runtime import dispatch_inline
 
-        data_dir = str(body.data_dir or "").strip()
-        library_id = str(body.library_id or "").strip()
-        item_ids = list(body.item_ids or [])
+            data_dir = str(body.data_dir or "").strip()
+            library_id = str(body.library_id or "").strip()
+            item_ids = list(body.item_ids or [])
 
-        if not data_dir:
-            from kn_graph.services.zotero_scanner import _find_data_dir
-            data_dir = _find_data_dir() or ""
-        if not data_dir:
-            return JSONResponse(status_code=400, content={"error": "data_dir_required"})
-        if not library_id:
-            return JSONResponse(status_code=400, content={"error": "library_id_required"})
-        if not item_ids:
-            return JSONResponse(status_code=400, content={"error": "item_ids_required"})
-        if pipeline_service is None:
-            return JSONResponse(status_code=500, content={"error": "pipeline_service_unavailable"})
+            if not data_dir:
+                from kn_graph.services.zotero_scanner import _find_data_dir
+                data_dir = _find_data_dir() or ""
+            if not data_dir:
+                return JSONResponse(status_code=400, content={"error": "data_dir_required"})
+            if not library_id:
+                return JSONResponse(status_code=400, content={"error": "library_id_required"})
+            if not item_ids:
+                return JSONResponse(status_code=400, content={"error": "item_ids_required"})
+            if pipeline_service is None:
+                return JSONResponse(status_code=500, content={"error": "pipeline_service_unavailable"})
 
-        # Resolve workspace path
-        workspaces_dir = Path(literature_service._settings.workspaces_dir)
-        workspace_path = workspaces_dir / library_id
-        if not workspace_path.is_dir():
-            return JSONResponse(status_code=400, content={"error": "workspace_not_found", "library_id": library_id})
+            # Resolve workspace path
+            workspaces_dir = Path(literature_service._settings.workspaces_dir)
+            workspace_path = workspaces_dir / library_id
+            if not workspace_path.is_dir():
+                return JSONResponse(status_code=400, content={"error": "workspace_not_found", "library_id": library_id})
 
-        # Resolve runs root from settings
-        settings_obj = literature_service._settings
-        runs_root = Path(getattr(settings_obj, 'pipeline_runs_root',
-                          os.path.join(getattr(settings_obj, 'data_dir', 'outputs'), 'runs')))
+            # Resolve runs root from settings
+            settings_obj = literature_service._settings
+            runs_root = Path(getattr(settings_obj, 'pipeline_runs_root',
+                              os.path.join(getattr(settings_obj, 'data_dir', 'outputs'), 'runs')))
 
-        job_ids = []
-        all_items = get_zotero_items_batch(data_dir, item_ids)
-        for zotero_data in all_items:
+            job_ids = []
+            all_items = get_zotero_items_batch(data_dir, item_ids)
+            for zotero_data in all_items:
 
-            # Find first PDF path that exists
-            pdf_paths = [a for a in zotero_data.get("pdf_paths", []) if a.get("file_exists")]
-            if not pdf_paths:
-                continue
+                # Find first PDF path that exists
+                pdf_paths = [a for a in zotero_data.get("pdf_paths", []) if a.get("file_exists")]
+                if not pdf_paths:
+                    continue
 
-            src_pdf = pdf_paths[0]["resolved_path"]
-            job_id = f"job_{uuid.uuid4().hex}"
-            run_dir = runs_root / job_id
-            input_dir = run_dir / "input"
-            input_dir.mkdir(parents=True, exist_ok=True)
+                src_pdf = pdf_paths[0]["resolved_path"]
+                job_id = f"job_{uuid.uuid4().hex}"
+                run_dir = runs_root / job_id
+                input_dir = run_dir / "input"
+                input_dir.mkdir(parents=True, exist_ok=True)
 
-            dest_pdf = input_dir / "upload.pdf"
-            shutil.copy2(src_pdf, dest_pdf)
+                dest_pdf = input_dir / "upload.pdf"
+                shutil.copy2(src_pdf, dest_pdf)
 
-            file_size = os.path.getsize(dest_pdf)
-            with open(dest_pdf, "rb") as f:
-                file_hash = hashlib.sha256(f.read()).hexdigest()
+                file_size = os.path.getsize(dest_pdf)
+                with open(dest_pdf, "rb") as f:
+                    file_hash = hashlib.sha256(f.read()).hexdigest()
 
-            # Build Zotero options for the pipeline runtime
-            zotero_options = {
-                "extraction_mode": "agent",
-                "library_id": library_id,
-                "_workspace_path": str(workspace_path),
-                "zotero_metadata": zotero_data.get("metadata", {}),
-                "zotero_creators": zotero_data.get("creators", []),
-                "zotero_notes": zotero_data.get("notes", []),
-                "zotero_annotations": zotero_data.get("annotations", []),
-                "_zotero_source": True,
-            }
+                # Build Zotero options for the pipeline runtime
+                zotero_options = {
+                    "extraction_mode": "agent",
+                    "library_id": library_id,
+                    "_workspace_path": str(workspace_path),
+                    "zotero_metadata": zotero_data.get("metadata", {}),
+                    "zotero_creators": zotero_data.get("creators", []),
+                    "zotero_notes": zotero_data.get("notes", []),
+                    "zotero_annotations": zotero_data.get("annotations", []),
+                    "_zotero_source": True,
+                }
 
-            file_name = os.path.basename(src_pdf)
-            payload = {
-                "job_id": job_id,
-                "status": "queued",
-                "stage": "accepted",
-                "progress": 0,
-                "error_code": "",
-                "error_detail": "",
-                "input_path": str(dest_pdf),
-                "output_path": "",
-                "options_json": json.dumps(zotero_options, ensure_ascii=False),
-                "result_json": "{}",
-                "requested_cancel": False,
-                "idempotency_key": "",
-                "last_event": "accepted",
-                "file_size": file_size,
-                "file_hash": file_hash,
-                "library_id": library_id,
-                "workspace_path": str(workspace_path),
-                "source_job_id": "",
-                "file_name": file_name,
-            }
-            pipeline_service.create_job(payload)
+                file_name = os.path.basename(src_pdf)
+                payload = {
+                    "job_id": job_id,
+                    "status": "queued",
+                    "stage": "accepted",
+                    "progress": 0,
+                    "error_code": "",
+                    "error_detail": "",
+                    "input_path": str(dest_pdf),
+                    "output_path": "",
+                    "options_json": json.dumps(zotero_options, ensure_ascii=False),
+                    "result_json": "{}",
+                    "requested_cancel": False,
+                    "idempotency_key": "",
+                    "last_event": "accepted",
+                    "file_size": file_size,
+                    "file_hash": file_hash,
+                    "library_id": library_id,
+                    "workspace_path": str(workspace_path),
+                    "source_job_id": "",
+                    "file_name": file_name,
+                }
+                pipeline_service.create_job(payload)
 
-            # Dispatch inline execution
-            dispatch_inline(pipeline_service._store, job_id, str(dest_pdf), zotero_options, runs_root)
+                # Dispatch inline execution
+                dispatch_inline(pipeline_service._store, job_id, str(dest_pdf), zotero_options, runs_root)
 
-            job_ids.append(job_id)
+                job_ids.append(job_id)
 
-        return {"job_ids": job_ids, "count": len(job_ids)}
+            return {"job_ids": job_ids, "count": len(job_ids)}
+
+        except Exception as exc:
+            import traceback
+            return JSONResponse(
+                status_code=500,
+                content={"error": "zotero_import_failed", "detail": str(exc), "traceback": traceback.format_exc()},
+            )
 
     return router

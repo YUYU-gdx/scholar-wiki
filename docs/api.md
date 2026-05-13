@@ -17,3 +17,4 @@
 - 返回 `application/json; charset=utf-8`（静态文件除外）。
 - 404 语义化错误码：`paper_not_found` / `node_not_found`。
 - `/paper/{id}/files` 优先展示：PDF > Markdown > HTML。
+- `/graph/full` 返回的 `paper_map` 论文元数据（title、doi、authors、source_pdf_path 等）**仅来源于 SQLite `papers` 表**，不依赖 graph_views.json。
