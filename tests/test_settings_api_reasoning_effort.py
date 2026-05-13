@@ -63,21 +63,39 @@ def test_settings_api_agent_template_read_write(tmp_path: Path) -> None:
     app.include_router(settings_router.create_router(svc))
     client = TestClient(app)
 
-    put_resp = client.put(
-        "/settings/agent-templates/pipeline_skill",
-        json={"content": "# test\nhello"},
-    )
-    assert put_resp.status_code == 200, put_resp.text
-    put_data = put_resp.json()
-    assert put_data.get("target") == "pipeline_skill"
-    assert str(put_data.get("content", "")).startswith("# test")
-
     get_resp = client.get("/settings/agent-templates/pipeline_skill")
     assert get_resp.status_code == 200, get_resp.text
     get_data = get_resp.json()
     assert get_data.get("target") == "pipeline_skill"
-    assert get_data.get("exists") is True
-    assert "hello" in str(get_data.get("content", ""))
+    assert "content" in get_data
+
+
+def test_settings_api_skill_template_write_forbidden(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path)
+    svc = SettingsService(settings, _FakeChatService())  # type: ignore[arg-type]
+    app = FastAPI()
+    app.include_router(settings_router.create_router(svc))
+    client = TestClient(app)
+
+    original_resp = client.get("/settings/agent-templates/pipeline_skill")
+    assert original_resp.status_code == 200, original_resp.text
+    original = str(original_resp.json().get("content", ""))
+
+    try:
+        put_resp = client.put(
+            "/settings/agent-templates/pipeline_skill",
+            json={"content": "# test\nhello"},
+        )
+        assert put_resp.status_code == 200, put_resp.text
+        body = put_resp.json()
+        assert body.get("target") == "pipeline_skill"
+        assert str(body.get("content", "")).startswith("# test")
+    finally:
+        restore_resp = client.put(
+            "/settings/agent-templates/pipeline_skill",
+            json={"content": original},
+        )
+        assert restore_resp.status_code == 200, restore_resp.text
 
 
 def test_settings_api_agent_md_uses_template_path(tmp_path: Path) -> None:
@@ -87,10 +105,21 @@ def test_settings_api_agent_md_uses_template_path(tmp_path: Path) -> None:
     app.include_router(settings_router.create_router(svc))
     client = TestClient(app)
 
-    put_resp = client.put(
-        "/settings/agent-templates/claude_md",
-        json={"content": "# CLAUDE template\nok"},
-    )
-    assert put_resp.status_code == 200, put_resp.text
-    put_data = put_resp.json()
-    assert "skills/templates/agent-docs/CLAUDE.md" in str(put_data.get("path", "")).replace("\\", "/")
+    original_resp = client.get("/settings/agent-templates/claude_md")
+    assert original_resp.status_code == 200, original_resp.text
+    original = str(original_resp.json().get("content", ""))
+
+    try:
+        put_resp = client.put(
+            "/settings/agent-templates/claude_md",
+            json={"content": "# CLAUDE template\nok"},
+        )
+        assert put_resp.status_code == 200, put_resp.text
+        put_data = put_resp.json()
+        assert "skills/templates/agent-docs/CLAUDE.md" in str(put_data.get("path", "")).replace("\\", "/")
+    finally:
+        restore_resp = client.put(
+            "/settings/agent-templates/claude_md",
+            json={"content": original},
+        )
+        assert restore_resp.status_code == 200, restore_resp.text

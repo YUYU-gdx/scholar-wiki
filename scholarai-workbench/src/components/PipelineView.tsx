@@ -493,7 +493,7 @@ export default function PipelineView() {
           <p className="text-xs text-on-surface-variant text-center">
             建议单次拖拽不超过 10 个文件，超大批量导入可能造成卡顿
           </p>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center justify-end gap-3">
             <input
               type="file"
               accept=".pdf"
@@ -501,7 +501,6 @@ export default function PipelineView() {
               className="hidden"
               id="pdf-upload"
             />
-            <label htmlFor="pdf-upload" className="flex-1 min-w-0 relative" />
             <button
               onClick={() => setShowZoteroModal(true)}
               className="shrink-0 flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-bold border-2 border-secondary text-secondary hover:bg-secondary-container/10 transition-all whitespace-nowrap"
