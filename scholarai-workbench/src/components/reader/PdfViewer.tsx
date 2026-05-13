@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -8,8 +8,6 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 import SelectionActionPopover from './SelectionActionPopover';
 import { api } from '../../api';
 import { upsertNoteInMarkdown } from './NoteMarkdownSync';
-import { loadContentList, findTouchedBlocks, getBlocksQuote, computeUnionBbox } from './ContentListResolver';
-import type { ContentBlock } from './ContentListResolver';
 import { isSelectionInside } from './selectionScope';
 import { notesCache } from './NotesCache';
 
@@ -36,19 +34,24 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   const safePdfBytes = useMemo(() => Uint8Array.from(data || new Uint8Array()), [data]);
   const validHeader = useMemo(() => hasValidPdfHeader(safePdfBytes), [safePdfBytes]);
   const [pdfUrl, setPdfUrl] = useState<string>('');
-  const [selectionUI, setSelectionUI] = useState({ visible: false, x: 0, y: 0, text: '', pageIndex: -1 });
+  const [selectionUI, setSelectionUI] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    text: string;
+    pageIndex: number;
+    normRects?: Array<{ x0: number; y0: number; x1: number; y1: number }>;
+  }>({ visible: false, x: 0, y: 0, text: '', pageIndex: -1 });
   const [translationLoading, setTranslationLoading] = useState(false);
   const [translationText, setTranslationText] = useState('');
   const selectionHostRef = useRef<HTMLDivElement>(null);
   const [pdfDocProxy, setPdfDocProxy] = useState<any>(null);
   const pageTextCacheRef = useRef<Map<number, string>>(new Map());
-  const contentListRef = useRef<ContentBlock[][] | null>(null);
-  const contentListLoadedRef = useRef(false);
-  const [highlights, setHighlights] = useState<Array<{ pageIndex: number; x0: number; y0: number; x1: number; y1: number; noteId: string }>>([]);
+  const [highlights, setHighlights] = useState<Array<{ pageIndex: number; noteId: string; rects: Array<{ x0: number; y0: number; x1: number; y1: number }> }>>([]);
   const pageDimsRef = useRef<Map<number, { width: number; height: number }>>(new Map());
   const highlightsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [floatingNote, setFloatingNote] = useState<{ visible: boolean; noteText: string; quote: string; x: number; y: number }>({ visible: false, noteText: '', quote: '', x: 0, y: 0 });
-  const floatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [noteMeta, setNoteMeta] = useState<Map<string, { pageIndex: number; noteText: string; quote: string }>>(new Map());
+  const [noteCards, setNoteCards] = useState<Array<{ noteId: string; x: number; y: number; noteText: string; quote: string }>>([]);
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -135,19 +138,6 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     return () => URL.revokeObjectURL(url);
   }, [safePdfBytes]);
 
-  // Load content_list_v2.json for PDF↔markdown position mapping
-  useEffect(() => {
-    if (!contentListV2Path || contentListLoadedRef.current) return;
-    let cancelled = false;
-    loadContentList(contentListV2Path).then((pages) => {
-      if (cancelled) return;
-      contentListRef.current = pages;
-      contentListLoadedRef.current = true;
-      // eslint-disable-next-line no-console
-      console.log('[pdf] content_list_v2 loaded', { path: contentListV2Path, pages: pages.length });
-    });
-    return () => { cancelled = true; };
-  }, [contentListV2Path]);
 
   useEffect(() => {
     const host = selectionHostRef.current;
@@ -170,7 +160,24 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       const pageNumberAttr = pageEl?.getAttribute('data-page-number');
       const pageIndex = pageNumberAttr ? parseInt(pageNumberAttr, 10) - 1 : -1;
       const rect = range.getBoundingClientRect();
-      setSelectionUI({ visible: true, x: Math.max(12, rect.left), y: Math.max(12, rect.top - 220), text: picked, pageIndex });
+      let normRects: Array<{ x0: number; y0: number; x1: number; y1: number }> | undefined;
+      const canvasEl = pageEl.querySelector('.react-pdf__Page__canvas') as HTMLElement | null;
+      if (canvasEl) {
+        const cr = canvasEl.getBoundingClientRect();
+        if (cr.width > 0 && cr.height > 0) {
+          const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+          const rangeRects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+          const srcRects = rangeRects.length > 0 ? rangeRects : [rect];
+          normRects = srcRects.map((r) => {
+            const x0 = clamp01((r.left - cr.left) / cr.width);
+            const y0 = clamp01((r.top - cr.top) / cr.height);
+            const x1 = clamp01((r.right - cr.left) / cr.width);
+            const y1 = clamp01((r.bottom - cr.top) / cr.height);
+            return { x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1) };
+          }).filter((r) => (r.x1 - r.x0) > 0.0005 && (r.y1 - r.y0) > 0.0005);
+        }
+      }
+      setSelectionUI({ visible: true, x: Math.max(12, rect.left), y: Math.max(12, rect.top - 220), text: picked, pageIndex, normRects });
       setTranslationText('');
     };
     host.addEventListener('mouseup', onUp);
@@ -183,28 +190,54 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   const loadHighlights = async () => {
     if (!pdfDocProxy || !markdownPath) return;
     try {
-      // Fetch page dimensions (lazy, one page at a time)
-      const dims = pageDimsRef.current;
-      if (dims.size === 0) {
-        const firstPage = await pdfDocProxy.getPage(1);
-        const vp = firstPage.getViewport({ scale: 1 });
-        dims.set(1, { width: vp.width, height: vp.height });
-      }
       // Load notes from the main markdown file
       const shell = window.desktopShell;
       if (!shell || shell.runtime !== 'electron' || !markdownPath) return;
       const res = await shell.readLocalText(markdownPath);
       if (!res.ok || !res.data) return;
       const entries = notesCache.load(String(res.data), paperId, libraryId, markdownPath);
-      const hls: Array<{ pageIndex: number; x0: number; y0: number; x1: number; y1: number; noteId: string }> = [];
+      const hls: Array<{ pageIndex: number; noteId: string; rects: Array<{ x0: number; y0: number; x1: number; y1: number }> }> = [];
       for (const e of entries) {
-        if (!e.rect) continue;
-        const parts = e.rect.split(',').map(Number);
-        if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
-          hls.push({ pageIndex: e.pageIndex, x0: parts[0], y0: parts[1], x1: parts[2], y1: parts[3], noteId: e.id });
+        const rects: Array<{ x0: number; y0: number; x1: number; y1: number }> = [];
+        const quadGroups = String(e.quads || '').split('|').map((g) => g.trim()).filter(Boolean);
+        for (const g of quadGroups) {
+          const p = g.split(',').map(Number);
+          if (p.length === 4 && p.every((n) => !isNaN(n))) rects.push({ x0: p[0], y0: p[1], x1: p[2], y1: p[3] });
+        }
+        if (rects.length === 0 && e.rect) {
+          const parts = e.rect.split(',').map(Number);
+          if (parts.length === 4 && parts.every((n) => !isNaN(n))) rects.push({ x0: parts[0], y0: parts[1], x1: parts[2], y1: parts[3] });
+        }
+        if (rects.length > 0) {
+          hls.push({ pageIndex: e.pageIndex, noteId: e.id, rects });
+          if (!pageDimsRef.current.has(e.pageIndex + 1)) {
+            // eslint-disable-next-line no-await-in-loop
+            const page = await pdfDocProxy.getPage(e.pageIndex + 1);
+            const vp = page.getViewport({ scale: 1 });
+            pageDimsRef.current.set(e.pageIndex + 1, { width: vp.width, height: vp.height });
+          }
         }
       }
       setHighlights(hls);
+      const highlightIdSet = new Set(hls.map((h) => String(h.noteId || '')));
+      // eslint-disable-next-line no-console
+      console.log('[notes][highlights] parsed from md', {
+        markdownPath,
+        entryCount: entries.length,
+        highlightCount: hls.length,
+        noteIds: hls.map((h) => h.noteId),
+      });
+      const nextMeta = new Map<string, { pageIndex: number; noteText: string; quote: string }>();
+      for (const e of entries) {
+        const id = String(e.id || '');
+        if (!id || !highlightIdSet.has(id)) continue;
+        nextMeta.set(id, {
+          pageIndex: Number(e.pageIndex || 0),
+          noteText: String(e.noteText || ''),
+          quote: String(e.selectedText || '').slice(0, 220),
+        });
+      }
+      setNoteMeta(nextMeta);
       // eslint-disable-next-line no-console
       console.log('[pdf] highlights loaded', { count: hls.length });
     } catch {
@@ -218,23 +251,44 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   }, [pdfDocProxy, markdownPath]);
 
   useEffect(() => {
-    const handler = () => {
-      // Debounce — notes might not be written to disk yet
+    const handler = (evt: Event) => {
+      const e = evt as CustomEvent<{ paperId?: string; noteId?: string; action?: string }>;
+      if (String(e.detail?.paperId || '') && String(e.detail?.paperId || '') !== String(paperId || '')) return;
+      const deletedNoteId = String(e.detail?.action || '') === 'delete' ? String(e.detail?.noteId || '') : '';
+      if (deletedNoteId) {
+        setHighlights((prev) => prev.filter((h) => String(h.noteId || '') !== deletedNoteId));
+        setNoteMeta((prev) => {
+          const next = new Map(prev);
+          next.delete(deletedNoteId);
+          return next;
+        });
+        setNoteCards((prev) => prev.filter((c) => c.noteId !== deletedNoteId));
+      }
       if (highlightsTimerRef.current) clearTimeout(highlightsTimerRef.current);
       highlightsTimerRef.current = setTimeout(() => loadHighlights(), 300);
     };
-    window.addEventListener('reader-annotation-changed', handler);
+    window.addEventListener('reader-annotation-changed', handler as EventListener);
     return () => {
-      window.removeEventListener('reader-annotation-changed', handler);
+      window.removeEventListener('reader-annotation-changed', handler as EventListener);
       if (highlightsTimerRef.current) clearTimeout(highlightsTimerRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdfDocProxy, markdownPath]);
+  }, [pdfDocProxy, markdownPath, paperId]);
 
-  const appendMdNoteByAnchor = async (noteId: string, selectedText: string, noteText: string, opts?: { pageIndex?: number; rect?: string }): Promise<string> => {
-    if (!markdownPath) return '';
-    await upsertNoteInMarkdown(markdownPath, noteId, selectedText, noteText, { pageIndex: opts?.pageIndex, rect: opts?.rect });
-    return markdownPath;
+  const appendMdNoteByAnchor = async (
+    noteId: string,
+    selectedText: string,
+    noteText: string,
+    opts?: { pageIndex?: number; rect?: string; quads?: string; anchorText?: string },
+  ): Promise<{ ok: boolean; path: string }> => {
+    if (!markdownPath) return { ok: false, path: '' };
+    const ok = await upsertNoteInMarkdown(markdownPath, noteId, selectedText, noteText, {
+      pageIndex: opts?.pageIndex,
+      rect: opts?.rect,
+      quads: opts?.quads,
+      anchorText: opts?.anchorText,
+    });
+    return { ok, path: markdownPath };
   };
 
   const handleTranslate = async () => {
@@ -261,82 +315,56 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     console.log('[notes] pdf save start', { noteId, paperId, libraryId, pickedLen: picked.length, noteLen: noteText.length, pageIndex });
 
     try {
-      const contentPages = contentListRef.current;
+      const quote = picked;
+      let noteOpts: { pageIndex?: number; rect?: string; quads?: string; anchorText?: string } | undefined;
 
-      // ── Block-based quote: expand selection to full blocks, clean, then match like case 1 ──
-      let quote = picked;
-      let noteOpts: { pageIndex?: number; rect?: string } | undefined;
-      if (contentPages && pageIndex >= 0 && pageIndex < contentPages.length) {
-        const pageBlocks = contentPages[pageIndex];
-        const touched = findTouchedBlocks(pageBlocks, picked);
-        if (touched) {
-          const full = getBlocksQuote(pageBlocks, touched.startIdx, touched.endIdx);
-          // Compute union bbox of all touched blocks for highlight positioning
-          const unionBbox = computeUnionBbox(pageBlocks, touched.startIdx, touched.endIdx);
-          // eslint-disable-next-line no-console
-          console.log('[notes] raw quote from blocks', {
-            rawLen: full.quote.length,
-            rawHead: full.quote.slice(0, 120),
-            rawTail: full.quote.slice(-80),
-            unionBbox,
-          });
-          // Clean: strip leading/trailing whitespace/newlines, normalize inner whitespace
-          const cleaned = full.quote.replace(/^[\s\n\r]+|[\s\n\r]+$/g, '').replace(/\s+/g, ' ').trim();
-          if (cleaned) {
-            // eslint-disable-next-line no-console
-            console.log('[notes] cleaned quote', {
-              cleanedLen: cleaned.length,
-              cleanedHead: cleaned.slice(0, 120),
-              cleanedTail: cleaned.slice(-80),
-            });
-            quote = cleaned;
-            noteOpts = { pageIndex, rect: unionBbox ? `${unionBbox.x0},${unionBbox.y0},${unionBbox.x1},${unionBbox.y1}` : undefined };
-          } else {
-            // eslint-disable-next-line no-console
-            console.log('[notes] cleaned quote was empty, falling back to picked');
+      // Derive PDF rects from current selection geometry.
+      if (pageIndex >= 0 && selectionUI.normRects && selectionUI.normRects.length > 0 && pdfDocProxy) {
+        try {
+          let dims = pageDimsRef.current.get(pageIndex + 1);
+          if (!dims) {
+            const pg = await pdfDocProxy.getPage(pageIndex + 1);
+            const vp = pg.getViewport({ scale: 1 });
+            dims = { width: vp.width, height: vp.height };
+            pageDimsRef.current.set(pageIndex + 1, dims);
           }
-        } else {
-          // eslint-disable-next-line no-console
-          console.log('[notes] findTouchedBlocks returned null, falling back to picked');
+          const pdfRects = selectionUI.normRects.map((nr) => {
+            const x0 = nr.x0 * dims.width;
+            const x1 = nr.x1 * dims.width;
+            const y1 = (1 - nr.y0) * dims.height;
+            const y0 = (1 - nr.y1) * dims.height;
+            return { x0, y0, x1, y1 };
+          });
+          const rect = pdfRects.reduce((acc, r) => ({
+            x0: Math.min(acc.x0, r.x0),
+            y0: Math.min(acc.y0, r.y0),
+            x1: Math.max(acc.x1, r.x1),
+            y1: Math.max(acc.y1, r.y1),
+          }));
+          noteOpts = {
+            pageIndex,
+            rect: `${rect.x0},${rect.y0},${rect.x1},${rect.y1}`,
+            quads: pdfRects.map((r) => `${r.x0},${r.y0},${r.x1},${r.y1}`).join('|'),
+            anchorText: picked,
+          };
+        } catch {
+          // no-op
         }
-      } else {
-        // eslint-disable-next-line no-console
-        console.log('[notes] no content_list_v2 available, using picked text', { hasPages: !!contentPages, pageIndex, pageCount: contentPages?.length });
       }
 
-      // ── Standard path: same as case 1 (MD manual selection) ──
-      const ensuredPath = await appendMdNoteByAnchor(noteId, quote, noteText, noteOpts);
+      // 鈹€鈹€ Standard path: same as case 1 (MD manual selection) 鈹€鈹€
+      const ensured = await appendMdNoteByAnchor(noteId, quote, noteText, noteOpts);
+      if (!ensured.ok) {
+        throw new Error('笔记写入 markdown 失败，请确认 markdown 路径和读写权限');
+      }
       // eslint-disable-next-line no-console
-      console.log('[notes] pdf save done', { ensuredPath, quoteLen: quote.length });
+      console.log('[notes] pdf save done', { ensuredPath: ensured.path, quoteLen: quote.length });
 
-      // Show floating note card next to the highlight
-      if (noteOpts?.rect && noteOpts.pageIndex != null) {
-        const host = selectionHostRef.current;
-        if (host) {
-          // Delay to let React render highlights first
-          setTimeout(() => {
-            const pageEl = host.querySelector(`[data-page-number="${noteOpts.pageIndex! + 1}"]`) as HTMLElement | null;
-            if (pageEl) {
-              const highlight = pageEl.querySelector('.kn-pdf-highlight') as HTMLElement | null;
-              if (highlight) {
-                const hr = highlight.getBoundingClientRect();
-                setFloatingNote({
-                  visible: true,
-                  noteText,
-                  quote: quote.slice(0, 200),
-                  x: hr.right + 12,
-                  y: hr.top,
-                });
-                // Auto-dismiss after 6s
-                if (floatingTimerRef.current) clearTimeout(floatingTimerRef.current);
-                floatingTimerRef.current = setTimeout(() => {
-                  setFloatingNote((p) => ({ ...p, visible: false }));
-                }, 6000);
-              }
-            }
-          }, 200);
-        }
-      }
+      setNoteMeta((prev) => {
+        const next = new Map(prev);
+        next.set(noteId, { pageIndex, noteText, quote: quote.slice(0, 220) });
+        return next;
+      });
 
       window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
       setSelectionUI((p) => ({ ...p, visible: false }));
@@ -347,7 +375,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     }
   };
 
-  // ── Render highlight overlays on PDF pages ──
+  // 鈹€鈹€ Render highlight overlays on PDF pages 鈹€鈹€
   useEffect(() => {
     const host = selectionHostRef.current;
     if (!host) return;
@@ -357,8 +385,6 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       host.querySelectorAll('.kn-pdf-highlight-layer').forEach((el) => el.remove());
 
       if (highlights.length === 0) return;
-
-      const defaultDims = pageDimsRef.current.get(1) || { width: 612, height: 792 };
 
       // Group highlights by page
       const byPage = new Map<number, typeof highlights>();
@@ -371,43 +397,48 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       for (const [pageIdx, hls] of byPage) {
         const pageEl = host.querySelector(`[data-page-number="${pageIdx + 1}"]`) as HTMLElement | null;
         if (!pageEl) continue;
-
-        // Get page dimensions for this page (lazy, use default if unknown)
-        let dims = pageDimsRef.current.get(pageIdx + 1);
-        if (!dims) {
-          // Use a reasonable default same as first page
-          dims = defaultDims;
-        }
+        const dims = pageDimsRef.current.get(pageIdx + 1);
+        if (!dims) continue;
 
         const layer = document.createElement('div');
         layer.className = 'kn-pdf-highlight-layer';
-        layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:5;';
+        layer.style.cssText = 'position:absolute;pointer-events:none;z-index:5;';
 
         for (const h of hls) {
-          const el = document.createElement('div');
-          el.className = 'kn-pdf-highlight';
-          const left = (h.x0 / dims.width) * 100;
-          const top = ((dims.height - h.y1) / dims.height) * 100;
-          const w = ((h.x1 - h.x0) / dims.width) * 100;
-          const hgt = ((h.y1 - h.y0) / dims.height) * 100;
-          el.style.cssText = `position:absolute;left:${left}%;top:${top}%;width:${w}%;height:${hgt}%;background:rgba(251,191,36,0.25);border-radius:2px;pointer-events:auto;cursor:pointer;transition:background 0.15s;`;
-          el.title = '笔记标注';
-          el.addEventListener('mouseenter', () => {
-            el.style.background = 'rgba(251,191,36,0.45)';
-          });
-          el.addEventListener('mouseleave', () => {
-            el.style.background = 'rgba(251,191,36,0.25)';
-          });
-          layer.appendChild(el);
+          for (const r of h.rects) {
+            const el = document.createElement('div');
+            el.className = 'kn-pdf-highlight';
+            el.setAttribute('data-note-id', String(h.noteId || ''));
+            const left = (r.x0 / dims.width) * 100;
+            const top = ((dims.height - r.y1) / dims.height) * 100;
+            const w = ((r.x1 - r.x0) / dims.width) * 100;
+            const hgt = ((r.y1 - r.y0) / dims.height) * 100;
+            el.style.cssText = `position:absolute;left:${left}%;top:${top}%;width:${w}%;height:${hgt}%;background:rgba(251,191,36,0.25);border-radius:2px;pointer-events:auto;cursor:pointer;transition:background 0.15s;`;
+            el.title = '笔记标注';
+            el.addEventListener('mouseenter', () => {
+              el.style.background = 'rgba(251,191,36,0.45)';
+            });
+            el.addEventListener('mouseleave', () => {
+              el.style.background = 'rgba(251,191,36,0.25)';
+            });
+            layer.appendChild(el);
+          }
         }
-
-        // Position relative to the page's canvas wrapper
-        const canvasWrapper = pageEl.querySelector('.react-pdf__Page__canvas') as HTMLElement | null;
-        if (canvasWrapper) {
-          canvasWrapper.style.position = 'relative';
-          canvasWrapper.appendChild(layer);
+        // Position the overlay against the rendered canvas box.
+        const canvasEl = pageEl.querySelector('.react-pdf__Page__canvas') as HTMLElement | null;
+        if (canvasEl) {
+          const prevPos = pageEl.style.position;
+          if (!prevPos || prevPos === 'static') pageEl.style.position = 'relative';
+          layer.style.left = `${canvasEl.offsetLeft}px`;
+          layer.style.top = `${canvasEl.offsetTop}px`;
+          layer.style.width = `${canvasEl.clientWidth}px`;
+          layer.style.height = `${canvasEl.clientHeight}px`;
+          pageEl.appendChild(layer);
         } else {
-          // Fallback: append to page element itself, but make it relative
+          layer.style.left = '0';
+          layer.style.top = '0';
+          layer.style.right = '0';
+          layer.style.bottom = '0';
           const prevPos = pageEl.style.position;
           if (!prevPos || prevPos === 'static') pageEl.style.position = 'relative';
           pageEl.appendChild(layer);
@@ -420,6 +451,40 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     return () => clearTimeout(timer);
   }, [highlights, scale, pageCount]);
 
+  useEffect(() => {
+    const host = selectionHostRef.current;
+    if (!host) {
+      setNoteCards([]);
+      return;
+    }
+    const recompute = () => {
+      const hostRect = host.getBoundingClientRect();
+      const cards: Array<{ noteId: string; x: number; y: number; noteText: string; quote: string }> = [];
+      for (const [noteId, meta] of noteMeta.entries()) {
+        const pageEl = host.querySelector(`[data-page-number="${meta.pageIndex + 1}"]`) as HTMLElement | null;
+        if (!pageEl) continue;
+        const hit = pageEl.querySelector(`.kn-pdf-highlight[data-note-id="${noteId}"]`) as HTMLElement | null;
+        if (!hit) continue;
+        const hr = hit.getBoundingClientRect();
+        cards.push({
+          noteId,
+          x: (hr.right - hostRect.left) + host.scrollLeft + 12,
+          y: (hr.top - hostRect.top) + host.scrollTop,
+          noteText: meta.noteText,
+          quote: meta.quote,
+        });
+      }
+      setNoteCards(cards);
+    };
+    recompute();
+    host.addEventListener('scroll', recompute, { passive: true });
+    window.addEventListener('resize', recompute);
+    return () => {
+      host.removeEventListener('scroll', recompute);
+      window.removeEventListener('resize', recompute);
+    };
+  }, [noteMeta, highlights, scale, pageCount]);
+
   const pdfDocumentNode = useMemo(() => (
     <Document
       key={pdfUrl || fileName}
@@ -429,6 +494,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
         setPageCount(pdf.numPages);
         setCurrentPage(1);
         setError(null);
+        pageDimsRef.current.clear();
       }}
       onLoadError={(e) => setError(`Failed to load PDF: ${e.message}`)}
       loading={<div className="text-sm text-on-surface-variant">Loading PDF...</div>}
@@ -460,7 +526,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   }
 
   return (
-    <div className="flex flex-col h-full bg-surface-container-low">
+    <div className="relative flex flex-col h-full bg-surface-container-low">
       <div className="flex items-center justify-between px-4 py-2 border-b border-outline-variant bg-surface-container-lowest">
         <span className="text-xs font-mono text-on-surface-variant truncate max-w-[300px]">{fileName}</span>
         <div className="flex items-center gap-3">
@@ -483,32 +549,36 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       <div ref={selectionHostRef} className="flex-1 overflow-auto flex justify-center p-4">
         {pdfDocumentNode}
 
-        {/* Floating note card after saving */}
-        {floatingNote.visible && (
+        {noteCards.map((card) => (
           <div
-            className="fixed z-50 max-w-[320px] rounded-xl border border-outline-variant bg-surface-container-lowest shadow-2xl p-4 space-y-2"
-            style={{ left: `${floatingNote.x}px`, top: `${floatingNote.y}px` }}
+            key={card.noteId}
+            className="absolute z-40 w-[320px] max-w-[30vw] rounded-xl border border-outline-variant bg-surface-container-lowest shadow-2xl p-4 space-y-2"
+            style={{ left: `${card.x}px`, top: `${card.y}px` }}
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-secondary">笔记已保存</span>
+              <span className="text-xs font-semibold text-secondary">当前笔记</span>
               <button
                 className="text-outline hover:text-on-surface text-sm leading-none"
                 onClick={() => {
-                  setFloatingNote((p) => ({ ...p, visible: false }));
-                  if (floatingTimerRef.current) clearTimeout(floatingTimerRef.current);
+                  setNoteMeta((prev) => {
+                    const next = new Map(prev);
+                    next.delete(card.noteId);
+                    return next;
+                  });
+                  setNoteCards((prev) => prev.filter((x) => x.noteId !== card.noteId));
                 }}
               >
                 &times;
               </button>
             </div>
-            {floatingNote.quote && (
+            {card.quote && (
               <p className="text-xs text-on-surface-variant line-clamp-3 leading-relaxed pl-2 border-l-2 border-secondary/30">
-                {floatingNote.quote}
+                {card.quote}
               </p>
             )}
-            <p className="text-xs text-on-surface leading-relaxed">{floatingNote.noteText}</p>
+            <p className="text-xs text-on-surface leading-relaxed">{card.noteText}</p>
           </div>
-        )}
+        ))}
       </div>
       <SelectionActionPopover
         visible={selectionUI.visible}
@@ -524,3 +594,4 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     </div>
   );
 }
+

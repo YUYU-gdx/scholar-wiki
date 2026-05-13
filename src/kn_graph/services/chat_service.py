@@ -19,7 +19,7 @@ from kn_graph.services.agent_runner import CodexRunner  # noqa: E402
 
 
 class ChatService:
-    TRANSLATION_LABEL_HTML = '<span style="color:#16a34a;"><strong>译文</strong></span>'
+    TRANSLATION_LABEL_HTML = '<span class="translation-label">【译文】</span>'
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -733,13 +733,38 @@ class ChatService:
         total_latency = 0
         translated_blocks = 0
         last_meta: dict[str, Any] = {}
-        total_work = max(1, len([x for x in blocks if x.strip() and not self._is_fenced_code_block(x)]))
+        in_reference_h1_section = False
+        total_work = max(
+            1,
+            len(
+                [
+                    x
+                    for x in blocks
+                    if x.strip()
+                    and not self._is_fenced_code_block(x)
+                    and not self._is_reader_note_block(x)
+                    and not self._is_existing_translation_block(x)
+                    and not self._is_reference_h1_block(x)
+                ]
+            ),
+        )
         done_work = 0
         for block in blocks:
             out.append(block)
             if not block.strip():
                 continue
+            if self._is_h1_block(block):
+                if self._is_reference_h1_block(block):
+                    in_reference_h1_section = True
+                else:
+                    in_reference_h1_section = False
+            if in_reference_h1_section:
+                continue
             if self._is_fenced_code_block(block):
+                continue
+            if self._is_reader_note_block(block):
+                continue
+            if self._is_existing_translation_block(block):
                 continue
             result = self._translate_single_text(
                 text=block,
@@ -877,6 +902,44 @@ class ChatService:
         start = lines[0].strip()
         end = lines[-1].strip()
         return (start.startswith("```") and end.startswith("```")) or (start.startswith("~~~") and end.startswith("~~~"))
+
+    def _is_reader_note_block(self, block: str) -> bool:
+        text = str(block or "")
+        return "[!NOTE] Reader Note" in text or "Note ID:" in text
+
+    def _is_existing_translation_block(self, block: str) -> bool:
+        text = str(block or "").strip()
+        if not text:
+            return False
+        lower = text.lower()
+        label_lower = self.TRANSLATION_LABEL_HTML.lower()
+        if lower.startswith("translation:"):
+            return True
+        if lower.startswith("译文:"):
+            return True
+        if lower.startswith("【译文】"):
+            return True
+        if lower.startswith('<span class="translation-label">【译文】</span>:'):
+            return True
+        if label_lower in lower:
+            return True
+        return False
+
+    def _is_h1_block(self, block: str) -> bool:
+        first = str(block or "").strip().splitlines()
+        if not first:
+            return False
+        return first[0].lstrip().startswith("# ")
+
+    def _is_reference_h1_block(self, block: str) -> bool:
+        first_lines = str(block or "").strip().splitlines()
+        if not first_lines:
+            return False
+        first = first_lines[0].strip()
+        if not first.startswith("# "):
+            return False
+        title = first[2:].strip().lower()
+        return title in {"reference", "references"}
 
     def test_provider(self, provider: str, model: str = "", options: dict[str, Any] | None = None, prompt: str = "") -> dict[str, Any]:
         if options is None:

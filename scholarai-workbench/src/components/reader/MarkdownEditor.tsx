@@ -216,6 +216,7 @@ export default function MarkdownEditor({
   onModeChange,
   onContentChange,
 }: MarkdownEditorProps) {
+  const TRANSLATION_JOB_STORAGE_KEY = 'reader_translation_job_v1';
   const [mode, setMode] = useState<ViewerMode>(initialMode);
   const [text, setText] = useState(content);
   const [renderedHtml, setRenderedHtml] = useState('');
@@ -225,6 +226,8 @@ export default function MarkdownEditor({
   const [docTranslationRunning, setDocTranslationRunning] = useState(false);
   const [docTranslationProgress, setDocTranslationProgress] = useState(0);
   const [docTranslationStatus, setDocTranslationStatus] = useState('');
+  const [docHasActiveTask, setDocHasActiveTask] = useState(false);
+  const docTranslationPollingRef = useRef(false);
   const [noteRanges, setNoteRanges] = useState<Array<{ start: number; end: number; id: string; quote: string; note: string }>>([]);
   const flashTimerRef = useRef<number | null>(null);
 
@@ -319,8 +322,8 @@ export default function MarkdownEditor({
 
   const findReaderNoteRanges = (raw: string): Array<{ start: number; end: number; id: string; quote: string; note: string }> =>
     extractNoteBlocks(raw).map((x) => {
-      const quoteMatch = x.text.match(/>\s*(?:Quote|寮曠敤)锛?\s*\n>\s*([\s\S]*?)\n>\s*\n>\s*(?:Note|绗旇)锛?/);
-      const noteMatch = x.text.match(/>\s*(?:Note|绗旇)锛?\s*\n>\s*([\s\S]*?)\n>\s*\n>\s*(?:Time|鏃堕棿)锛?/);
+      const quoteMatch = x.text.match(/>\s*Quote:\s*\n(?:>\s*\n)*>\s*([\s\S]*?)\n>\s*\n>\s*Note:/i);
+      const noteMatch = x.text.match(/>\s*Note:\s*\n(?:>\s*\n)*>\s*([\s\S]*?)\n>\s*\n>\s*Time:/i);
       return {
         start: x.start,
         end: x.end,
@@ -414,6 +417,8 @@ export default function MarkdownEditor({
       for (const bq of Array.from(doc.querySelectorAll('blockquote'))) {
         const t = String(bq.textContent || '');
         if (!t.includes('[!NOTE] Reader Note')) continue;
+        // Old/malformed reader notes fallback: still render with note callout visual style.
+        bq.classList.add('callout', 'callout-note');
         const idx = noteIdx;
         const noteId = notes[idx]?.id || '';
         noteIdx += 1;
@@ -607,11 +612,95 @@ export default function MarkdownEditor({
     }
   };
 
+  const persistTranslationJob = (payload: { job_id: string; absolute_path: string; started_at: number }) => {
+    try {
+      window.sessionStorage.setItem(TRANSLATION_JOB_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // no-op
+    }
+  };
+
+  const clearPersistedTranslationJob = () => {
+    try {
+      window.sessionStorage.removeItem(TRANSLATION_JOB_STORAGE_KEY);
+    } catch {
+      // no-op
+    }
+  };
+
+  const loadPersistedTranslationJob = (): { job_id: string; absolute_path: string; started_at: number } | null => {
+    try {
+      const raw = window.sessionStorage.getItem(TRANSLATION_JOB_STORAGE_KEY);
+      if (!raw) return null;
+      const obj = JSON.parse(raw) as { job_id?: string; absolute_path?: string; started_at?: number };
+      const jobId = String(obj?.job_id || '').trim();
+      const path = String(obj?.absolute_path || '').trim();
+      const startedAt = Number(obj?.started_at || 0);
+      if (!jobId || !path || !Number.isFinite(startedAt) || startedAt <= 0) return null;
+      return { job_id: jobId, absolute_path: path, started_at: startedAt };
+    } catch {
+      return null;
+    }
+  };
+
+  const pollTranslationJobUntilDone = useCallback(async (jobId: string, startedAtMs: number) => {
+    if (docTranslationPollingRef.current) return;
+    docTranslationPollingRef.current = true;
+    setDocTranslationRunning(true);
+    setDocHasActiveTask(true);
+    try {
+      while (docTranslationPollingRef.current) {
+        // eslint-disable-next-line no-await-in-loop
+        const row = await api.chat.getTranslateJob(jobId);
+        setDocTranslationProgress(Math.max(0, Math.min(100, Number(row.progress || 0))));
+        setDocTranslationStatus(
+          row.status === 'running' || row.status === 'queued'
+            ? `进行中 ${Math.max(0, Math.min(100, Number(row.progress || 0)))}%`
+            : row.status === 'completed'
+              ? '已完成'
+              : row.status === 'failed'
+                ? '失败'
+                : String(row.status || ''),
+        );
+        if (row.status === 'completed') {
+          const translated = String(row.result?.formatted_text || row.result?.translated_text || '').trim();
+          if (!translated) throw new Error('translation_result_empty');
+          setText(translated);
+          currentContentRef.current = translated;
+          onContentChange?.(translated);
+          if (window.desktopShell?.runtime === 'electron' && absolutePath) {
+            await window.desktopShell.writeLocalText(absolutePath, translated);
+          }
+          clearPersistedTranslationJob();
+          setTranslationText('全文对照翻译已完成并写回。');
+          setDocTranslationProgress(100);
+          setDocHasActiveTask(false);
+          return;
+        }
+        if (row.status === 'failed') {
+          clearPersistedTranslationJob();
+          setDocHasActiveTask(false);
+          throw new Error(String(row.error || 'translation_job_failed'));
+        }
+        if (Date.now() - startedAtMs > 30 * 60 * 1000) {
+          clearPersistedTranslationJob();
+          setDocHasActiveTask(false);
+          throw new Error('translation_job_timeout');
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
+    } finally {
+      docTranslationPollingRef.current = false;
+      setDocTranslationRunning(false);
+    }
+  }, [absolutePath, onContentChange]);
+
   const handleTranslateWholeDocument = async () => {
     try {
       setDocTranslationRunning(true);
       setDocTranslationProgress(0);
-      setDocTranslationStatus('准备提交翻译任务...');
+      setDocTranslationStatus('提交中 0%');
       const cfg = await api.chat.getTranslationProviderConfig();
       const jobsUnsupportedKey = 'reader_translate_jobs_unsupported';
       const jobsUnsupported = window.sessionStorage.getItem(jobsUnsupportedKey) === '1';
@@ -620,36 +709,10 @@ export default function MarkdownEditor({
         const submit = await api.chat.submitTranslateJob(currentContentRef.current, cfg);
         const jobId = String(submit.job_id || '').trim();
         if (!jobId) throw new Error('translation_job_id_missing');
-        setDocTranslationStatus('翻译中...');
         const startedAt = Date.now();
-        while (true) {
-          // eslint-disable-next-line no-await-in-loop
-          const row = await api.chat.getTranslateJob(jobId);
-          setDocTranslationProgress(Math.max(0, Math.min(100, Number(row.progress || 0))));
-          if (row.status === 'completed') {
-            const translated = String(row.result?.formatted_text || row.result?.translated_text || '').trim();
-            if (!translated) throw new Error('translation_result_empty');
-            setText(translated);
-            currentContentRef.current = translated;
-            onContentChange?.(translated);
-            if (window.desktopShell?.runtime === 'electron' && absolutePath) {
-              // Single write to avoid multi-insert races.
-              await window.desktopShell.writeLocalText(absolutePath, translated);
-            }
-            setTranslationText('全文对照翻译已完成并写回。');
-            setDocTranslationStatus('已完成');
-            setDocTranslationProgress(100);
-            return;
-          }
-          if (row.status === 'failed') {
-            throw new Error(String(row.error || 'translation_job_failed'));
-          }
-          if (Date.now() - startedAt > 30 * 60 * 1000) {
-            throw new Error('translation_job_timeout');
-          }
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise((resolve) => setTimeout(resolve, 700));
-        }
+        persistTranslationJob({ job_id: jobId, absolute_path: String(absolutePath || ''), started_at: startedAt });
+        await pollTranslationJobUntilDone(jobId, startedAt);
+        return;
       } catch (jobErr) {
         // Fallback path: older backend without /chat/translate/jobs.
         const emsg = String((jobErr as Error).message || '');
@@ -658,6 +721,7 @@ export default function MarkdownEditor({
         }
         setDocTranslationStatus('任务接口不可用，回退到同步翻译...');
         setDocTranslationProgress(20);
+        setDocHasActiveTask(true);
         const syncResult = await api.chat.translate(currentContentRef.current, cfg, true);
         setDocTranslationProgress(85);
         const translated = String(syncResult.formatted_text || syncResult.translated_text || '').trim();
@@ -668,20 +732,39 @@ export default function MarkdownEditor({
         if (window.desktopShell?.runtime === 'electron' && absolutePath) {
           await window.desktopShell.writeLocalText(absolutePath, translated);
         }
+        clearPersistedTranslationJob();
         setDocTranslationProgress(100);
         setDocTranslationStatus('已完成（同步模式）');
+        setDocHasActiveTask(false);
         setTranslationText('全文对照翻译已完成并写回。');
         return;
       }
     } catch (e) {
       const msg = String((e as Error).message || 'unknown_error');
       setDocTranslationStatus(`失败: ${msg}`);
+      setDocHasActiveTask(false);
       setTranslationText(`全文翻译失败: ${msg}`);
       window.alert(`全文翻译失败：${msg}`);
     } finally {
       setDocTranslationRunning(false);
     }
   };
+
+  useEffect(() => {
+    const pending = loadPersistedTranslationJob();
+    if (!pending) return;
+    if (String(pending.absolute_path || '').trim() !== String(absolutePath || '').trim()) return;
+    setDocHasActiveTask(true);
+    pollTranslationJobUntilDone(pending.job_id, pending.started_at).catch((e) => {
+      const msg = String((e as Error).message || 'unknown_error');
+      setDocTranslationStatus(`失败: ${msg}`);
+      setTranslationText(`全文翻译失败: ${msg}`);
+      setDocHasActiveTask(false);
+    });
+    return () => {
+      docTranslationPollingRef.current = false;
+    };
+  }, [absolutePath, pollTranslationJobUntilDone]);
 
   const handleSaveNote = async (note: string) => {
     const noteId = crypto.randomUUID();
@@ -805,7 +888,7 @@ export default function MarkdownEditor({
       setText(latest);
       onContentChange?.(latest);
     }
-    window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
+    window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId, noteId: range.id || '', action: 'delete' } }));
   };
 
   const renderedMarkdownNode = useMemo(() => (
@@ -1008,20 +1091,22 @@ export default function MarkdownEditor({
           ))}
         </div>
         <div className="flex items-center gap-2 ml-2">
-          <button
-            className={`px-3 py-1 text-xs rounded-md border ${docTranslationRunning ? 'border-secondary text-secondary' : 'border-outline-variant text-on-surface-variant hover:bg-surface-container-low'}`}
-            onClick={handleTranslateWholeDocument}
-            disabled={docTranslationRunning}
-            title="全文段落对照翻译"
-          >
-            {docTranslationRunning ? '翻译中...' : '全文对照翻译'}
-          </button>
-          {docTranslationRunning && (
+          {!docHasActiveTask && (
+            <button
+              className="px-3 py-1 text-xs rounded-md border border-outline-variant text-on-surface-variant hover:bg-surface-container-low"
+              onClick={handleTranslateWholeDocument}
+              disabled={docTranslationRunning}
+              title="全文段落对照翻译"
+            >
+              全文对照翻译
+            </button>
+          )}
+          {(docTranslationRunning || docHasActiveTask) && (
             <div className="w-28 h-2 rounded-full bg-surface-container overflow-hidden border border-outline-variant">
               <div className="h-full bg-secondary transition-all duration-300" style={{ width: `${docTranslationProgress}%` }} />
             </div>
           )}
-          {docTranslationRunning && (
+          {(docTranslationRunning || docHasActiveTask) && (
             <span className="text-[11px] font-mono text-on-surface-variant">{docTranslationProgress}%</span>
           )}
           {!!docTranslationStatus && (

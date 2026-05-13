@@ -104,7 +104,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
             fileName={document.file_name}
             paperId={paperId}
             libraryId={libraryId}
-            markdownPath={String(document.markdown_path || '')}
+            markdownPath={effectiveMarkdownPath}
             sourcePath={String(document.absolute_path || '')}
             contentListV2Path={String(document.content_list_v2_path || '')}
           />

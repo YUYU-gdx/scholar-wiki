@@ -32,8 +32,8 @@ class ChatTranslationFormattingTest(unittest.TestCase):
             with patch("kn_graph.services.chat_service.ProviderRegistry", _FakeRegistry):
                 out = svc.translate_text(text="hello", compare_by_paragraph=False)
             self.assertEqual(out["translated_text"], "你好世界")
-            self.assertIn("color:#16a34a", out["formatted_text"])
-            self.assertIn("译文", out["formatted_text"])
+            self.assertIn('class="translation-label"', str(out["formatted_text"]))
+            self.assertIn("【译文】", str(out["formatted_text"]))
 
     def test_markdown_compare_translation_per_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,6 +93,73 @@ class ChatTranslationFormattingTest(unittest.TestCase):
                 self.assertEqual(int(status.get("progress", 0) or 0), 100)
                 result = status.get("result") if isinstance(status.get("result"), dict) else {}
                 self.assertIn("ZH:A", str(result.get("translated_text", "") or ""))
+
+    def test_markdown_compare_skips_existing_notes_and_translations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = ChatService(Settings(data_dir=Path(tmp)))
+
+            def _fake_translate_single_text(**kwargs):
+                text = str(kwargs.get("text", "") or "")
+                return {
+                    "translated_text": f"ZH:{text}",
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                    "target_lang": "zh",
+                    "latency_ms": 1,
+                }
+
+            source = (
+                "Para one.\n\n"
+                "<span class=\"translation-label\">【译文】</span>: old text\n\n"
+                "> [!NOTE] Reader Note\n"
+                "> Note ID: abc\n"
+                "> Quote:\n"
+                "> foo\n\n"
+                "Para two.\n\n"
+                "Translation: already translated"
+            )
+            with patch.object(svc, "_translate_single_text", side_effect=_fake_translate_single_text) as m:
+                out = svc.translate_text(text=source, compare_by_paragraph=True)
+            rendered = str(out.get("formatted_text", "") or "")
+            self.assertIn("ZH:Para one.", rendered)
+            self.assertIn("ZH:Para two.", rendered)
+            self.assertNotIn("ZH:Translation: already translated", rendered)
+            self.assertNotIn("ZH:【译文】:", rendered)
+            self.assertEqual(m.call_count, 2)
+
+    def test_markdown_compare_skips_reference_h1_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = ChatService(Settings(data_dir=Path(tmp)))
+
+            def _fake_translate_single_text(**kwargs):
+                text = str(kwargs.get("text", "") or "")
+                return {
+                    "translated_text": f"ZH:{text}",
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                    "target_lang": "zh",
+                    "latency_ms": 1,
+                }
+
+            source = (
+                "# Intro\n\n"
+                "Main body.\n\n"
+                "# References\n\n"
+                "[1] Foo Bar.\n\n"
+                "Another ref line.\n\n"
+                "# Appendix\n\n"
+                "Appendix body."
+            )
+            with patch.object(svc, "_translate_single_text", side_effect=_fake_translate_single_text) as m:
+                out = svc.translate_text(text=source, compare_by_paragraph=True)
+            rendered = str(out.get("formatted_text", "") or "")
+            self.assertIn("ZH:# Intro", rendered)
+            self.assertIn("ZH:Main body.", rendered)
+            self.assertNotIn("ZH:[1] Foo Bar.", rendered)
+            self.assertNotIn("ZH:Another ref line.", rendered)
+            self.assertIn("ZH:# Appendix", rendered)
+            self.assertIn("ZH:Appendix body.", rendered)
+            self.assertEqual(m.call_count, 4)
 
 
 if __name__ == "__main__":

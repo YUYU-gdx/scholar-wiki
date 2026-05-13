@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { StickyNote, Trash2, Pencil, MapPin } from 'lucide-react';
+import { StickyNote, Trash2, Pencil } from 'lucide-react';
 import { notesCache, type NoteEntry } from './NotesCache';
 import { deleteNoteFromMarkdownAny, upsertNoteInMarkdown } from './NoteMarkdownSync';
 
@@ -9,14 +9,6 @@ interface AnnotationSidebarProps {
   markdownPath?: string;
   isOpen: boolean;
   onToggle: () => void;
-}
-
-function parseRect(rect: string): { x0: number; y0: number; x1: number; y1: number } | null {
-  const parts = String(rect || '').trim().split(',').map(Number);
-  if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
-    return { x0: parts[0], y0: parts[1], x1: parts[2], y1: parts[3] };
-  }
-  return null;
 }
 
 function formatTime(iso: string): string {
@@ -39,17 +31,17 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
     const shell = window.desktopShell;
     const path = String(markdownPath || '').trim();
     if (!paperId || !path || !shell || shell.runtime !== 'electron') {
-      setReaderNotes(notesCache.get(paperId));
+      setReaderNotes([]);
       return;
     }
     shell.readLocalText(path).then((res: any) => {
       if (!res?.ok || typeof res.data !== 'string') {
-        setReaderNotes(notesCache.get(paperId));
+        setReaderNotes([]);
         return;
       }
       const entries = notesCache.load(String(res.data), paperId, libraryId, path);
       setReaderNotes(entries);
-    }).catch(() => setReaderNotes(notesCache.get(paperId)));
+    }).catch(() => setReaderNotes([]));
   };
 
   useEffect(() => {
@@ -72,33 +64,39 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
   const handleDelete = async (entry: NoteEntry) => {
     const path = String(entry.markdownPath || markdownPath || '').trim();
     if (!path) return;
-    const ok = await deleteNoteFromMarkdownAny([path], entry.id, entry.selectedText, entry.noteText);
-    if (ok) {
+    const res = await deleteNoteFromMarkdownAny([path], entry.id, entry.selectedText, entry.noteText);
+    if (res.ok) {
       notesCache.invalidate(paperId);
-      window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
+      window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId, noteId: entry.id, action: 'delete' } }));
     }
   };
 
   const handleEdit = async (entry: NoteEntry) => {
     const path = String(entry.markdownPath || markdownPath || '').trim();
     if (!path) return;
-    await upsertNoteInMarkdown(path, entry.id, entry.selectedText, editComment);
+    const ok = await upsertNoteInMarkdown(path, entry.id, entry.selectedText, editComment, { pageIndex: entry.pageIndex, rect: entry.rect, quads: entry.quads });
+    if (!ok) {
+      window.alert('保存笔记失败：写入 markdown 失败');
+      return;
+    }
     notesCache.invalidate(paperId);
     setEditingId(null);
     window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
   };
 
-  const sortedNotes = [...readerNotes].sort((a, b) =>
-    String(a.createdAt).localeCompare(String(b.createdAt)),
-  );
+  const jumpToMarkdownNote = (entry: NoteEntry) => {
+    const path = String(entry.markdownPath || markdownPath || '').trim();
+    if (!path) return;
+    window.dispatchEvent(new CustomEvent('open-reader-file', { detail: { path } }));
+    const query = String(entry.selectedText || entry.noteText || '').trim();
+    if (query) {
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('reader-search-and-jump', { detail: { paperId, query } }));
+      }, 180);
+    }
+  };
 
-  // Group notes by page
-  const pagedNotes: Record<number, NoteEntry[]> = {};
-  for (const n of sortedNotes) {
-    const p = n.pageIndex;
-    if (!pagedNotes[p]) pagedNotes[p] = [];
-    pagedNotes[p].push(n);
-  }
+  const sortedNotes = [...readerNotes].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
 
   return (
     <div className={`border-l border-outline-variant bg-surface-container-lowest flex flex-col transition-all duration-200 ${isOpen ? 'w-80' : 'w-0 overflow-hidden'}`}>
@@ -116,87 +114,78 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
           <div className="text-center py-12">
             <StickyNote className="w-8 h-8 text-outline mx-auto mb-2" />
             <p className="text-xs text-on-surface-variant">暂无笔记</p>
-            <p className="text-xs text-outline mt-1">选中文字后添加笔记</p>
+            <p className="text-xs text-outline mt-1">选中文本后可添加笔记</p>
           </div>
         )}
 
-        {sortedNotes.map((entry) => {
-          const rect = parseRect(entry.rect);
-          const hasPosition = rect !== null;
-
-          return (
-            <div
-              key={entry.id}
-              className="rounded-xl border border-outline-variant/60 bg-surface-container-low hover:bg-surface-container transition-colors overflow-hidden"
-            >
-              {/* Header: page badge + actions */}
-              <div className="flex items-center gap-2 px-3 pt-3 pb-1">
-                <span className={`inline-flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 ${hasPosition ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container-high text-on-surface-variant'}`}>
-                  <MapPin className="w-3 h-3" />
-                  第{entry.pageIndex + 1}页
-                </span>
-                {hasPosition && (
-                  <span className="text-[10px] text-outline font-mono">
-                    [{rect!.x0},{rect!.y0}]
-                  </span>
-                )}
-                <div className="ml-auto flex items-center gap-1">
-                  <button
-                    className="text-outline hover:text-secondary p-1 rounded"
-                    onClick={() => { setEditingId(editingId === entry.id ? null : entry.id); setEditComment(entry.noteText); }}
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    className="text-outline hover:text-error p-1 rounded"
-                    onClick={() => handleDelete(entry)}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+        {sortedNotes.map((entry) => (
+          <div
+            key={entry.id}
+            className="rounded-xl border border-outline-variant/60 bg-surface-container-low hover:bg-surface-container transition-colors overflow-hidden"
+          >
+            <div className="flex items-center gap-2 px-3 pt-3 pb-2">
+              <span className="inline-flex items-center text-[11px] font-medium rounded-full px-2 py-0.5 bg-secondary-container text-on-secondary-container">
+                第 {entry.pageIndex + 1} 页
+              </span>
+              <div className="ml-auto flex items-center gap-1">
+                <button
+                  className="text-outline hover:text-secondary p-1 rounded"
+                  onClick={() => { setEditingId(editingId === entry.id ? null : entry.id); setEditComment(entry.noteText); }}
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  className="text-outline hover:text-error p-1 rounded"
+                  onClick={() => handleDelete(entry)}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
+            </div>
 
-              {/* Quote */}
+            <button
+              className="w-full text-left px-3 pb-3"
+              onClick={() => jumpToMarkdownNote(entry)}
+              title="跳转到 markdown 中对应位置"
+            >
               {entry.selectedText && (
-                <div className="px-3 pb-0.5">
+                <div className="mb-2">
+                  <p className="text-[11px] text-outline mb-1">引用内容</p>
                   <p className="text-xs leading-relaxed text-on-surface-variant line-clamp-3 pl-2 border-l-2 border-secondary/30">
                     {entry.selectedText}
                   </p>
                 </div>
               )}
 
-              {/* Note content */}
-              <div className="px-3 pb-2">
+              <div>
+                <p className="text-[11px] text-outline mb-1">笔记内容</p>
                 {editingId === entry.id ? (
-                  <div className="mt-2 space-y-1">
+                  <div className="space-y-1">
                     <textarea
                       className="w-full text-xs p-2 border border-outline-variant rounded-lg bg-surface-container-lowest resize-none"
                       rows={3}
                       value={editComment}
                       onChange={(e) => setEditComment(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
                     />
                     <div className="flex gap-2 justify-end">
-                      <button className="text-xs px-3 py-1 rounded-lg bg-primary-container text-on-primary-container font-medium" onClick={() => handleEdit(entry)}>保存</button>
-                      <button className="text-xs px-3 py-1 rounded-lg text-outline hover:text-on-surface" onClick={() => setEditingId(null)}>取消</button>
+                      <button className="text-xs px-3 py-1 rounded-lg bg-primary-container text-on-primary-container font-medium" onClick={(e) => { e.stopPropagation(); handleEdit(entry); }}>保存</button>
+                      <button className="text-xs px-3 py-1 rounded-lg text-outline hover:text-on-surface" onClick={(e) => { e.stopPropagation(); setEditingId(null); }}>取消</button>
                     </div>
                   </div>
                 ) : (
-                  <button
-                    className="w-full text-left text-xs text-on-surface leading-relaxed mt-1"
-                    onClick={() => { setEditingId(entry.id); setEditComment(entry.noteText); }}
-                  >
-                    {entry.noteText || <span className="text-outline italic">点击添加笔记...</span>}
-                  </button>
+                  <p className="text-xs text-on-surface leading-relaxed">
+                    {entry.noteText || <span className="text-outline italic">点击编辑笔记...</span>}
+                  </p>
                 )}
               </div>
+            </button>
 
-              {/* Footer: time */}
-              <div className="px-3 pb-2">
-                <span className="text-[10px] text-outline">{formatTime(entry.createdAt)}</span>
-              </div>
+            <div className="px-3 pb-2">
+              <span className="text-[10px] text-outline">{formatTime(entry.createdAt)}</span>
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
     </div>
   );

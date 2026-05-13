@@ -15,6 +15,29 @@ function normalizeForMatch(s: string): string {
   return String(s || '').replace(/\s+/g, ' ').trim();
 }
 
+function buildAnchorCandidates(anchorText: string, quote: string): string[] {
+  const primary = String(anchorText || '').trim();
+  const fallback = String(quote || '').trim();
+  const base = primary || fallback;
+  if (!base) return [];
+
+  const parts = base
+    .split(/\n{2,}/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const lastParagraph = parts.length > 0 ? parts[parts.length - 1] : '';
+  const lines = base
+    .split('\n')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const lastLine = lines.length > 0 ? lines[lines.length - 1] : '';
+
+  const out = [lastParagraph, lastLine, base, fallback]
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(out));
+}
+
 function dedupeReaderNotesHeadings(raw: string): string {
   return String(raw || '').replace(/(?:\n\s*## Reader Notes\s*){2,}/g, '\n\n## Reader Notes\n\n');
 }
@@ -117,12 +140,13 @@ export function buildNoteBlock(
   id: string,
   quote: string,
   note: string,
-  opts?: { time?: string; pageIndex?: number; rect?: string },
+  opts?: { time?: string; pageIndex?: number; rect?: string; quads?: string },
 ): string {
   const time = opts?.time || new Date().toISOString();
-  const pageLine = opts?.pageIndex != null && opts.pageIndex >= 0 ? `> Page: ${opts.pageIndex}\n` : '';
-  const rectLine = opts?.rect ? `> Rect: ${opts.rect}\n` : '';
-  return `\n\n> [!NOTE] Reader Note\n> Note ID: ${id}\n${pageLine}${rectLine}> Quote:\n> ${String(quote || '').trim()}\n>\n> Note:\n> ${String(note || '').trim()}\n>\n> Time:\n> ${time}\n`;
+  const pageLine = opts?.pageIndex != null && opts.pageIndex >= 0 ? `>\n> Page: ${opts.pageIndex}\n` : '';
+  const rectLine = opts?.rect ? `>\n> Rect: ${opts.rect}\n` : '';
+  const quadsLine = opts?.quads ? `>\n> Quads: ${opts.quads}\n` : '';
+  return `\n\n> [!NOTE] Reader Note\n>\n> Note ID: ${id}\n${pageLine}${rectLine}${quadsLine}>\n> Quote:\n> ${String(quote || '').trim()}\n>\n> Note:\n> ${String(note || '').trim()}\n>\n> Time:\n> ${time}\n`;
 }
 
 export function extractNoteBlocks(raw: string): Array<{ id: string; start: number; end: number; text: string }> {
@@ -133,7 +157,7 @@ export function extractNoteBlocks(raw: string): Array<{ id: string; start: numbe
   while (pos < src.length) {
     const start = src.indexOf(marker, pos);
     if (start < 0) break;
-    let end = src.indexOf('\n\n', start + marker.length);
+    let end = src.indexOf(marker, start + marker.length);
     if (end < 0) end = src.length;
     const seg = src.slice(start, end);
     const idMatch = seg.match(/>\s*Note ID:\s*([a-zA-Z0-9-]+)/);
@@ -143,7 +167,7 @@ export function extractNoteBlocks(raw: string): Array<{ id: string; start: numbe
       end,
       text: seg,
     });
-    pos = end + 2;
+    pos = end;
   }
   return out;
 }
@@ -152,10 +176,10 @@ export async function upsertNoteInMarkdown(
   noteId: string,
   quote: string,
   note: string,
-  opts?: { pageIndex?: number; rect?: string },
-): Promise<void> {
+  opts?: { pageIndex?: number; rect?: string; quads?: string; anchorText?: string },
+): Promise<boolean> {
   const shell = window.desktopShell;
-  if (!shell || shell.runtime !== 'electron' || !markdownPath) return;
+  if (!shell || shell.runtime !== 'electron' || !markdownPath) return false;
   let read = await shell.readLocalText(markdownPath);
   if (!read.ok) {
     const init = '## Reader Notes\n';
@@ -163,19 +187,19 @@ export async function upsertNoteInMarkdown(
     if (!created.ok) {
       // eslint-disable-next-line no-console
       console.warn('[notes] upsert failed: cannot create markdown file', { markdownPath, error: created.error });
-      return;
+      return false;
     }
     read = await shell.readLocalText(markdownPath);
     if (!read.ok) {
       // eslint-disable-next-line no-console
       console.warn('[notes] upsert failed: cannot re-read markdown file', { markdownPath, error: read.error });
-      return;
+      return false;
     }
   }
   const raw = normalizeNewlines(read.data || '');
   const marker = `> Note ID: ${noteId}`;
   const at = raw.indexOf(marker);
-  const block = buildNoteBlock(noteId, quote, note, { pageIndex: opts?.pageIndex, rect: opts?.rect });
+  const block = buildNoteBlock(noteId, quote, note, { pageIndex: opts?.pageIndex, rect: opts?.rect, quads: opts?.quads });
   let next = raw;
   if (at >= 0) {
     const start = raw.lastIndexOf('> [!NOTE] Reader Note', at);
@@ -185,12 +209,22 @@ export async function upsertNoteInMarkdown(
       next = `${raw.slice(0, start)}${block}${raw.slice(end)}`;
     }
   } else {
-    const insertAt = findQuoteInsertIndex(raw, quote);
+    const candidates = buildAnchorCandidates(String(opts?.anchorText || ''), quote);
+    let insertAt = raw.length;
+    for (const c of candidates) {
+      const atCandidate = findQuoteInsertIndex(raw, c);
+      if (atCandidate < raw.length) {
+        insertAt = atCandidate;
+        break;
+      }
+    }
     // eslint-disable-next-line no-console
     console.log('[notes] upsert insertAt', {
       insertAt,
       rawLen: raw.length,
       fallback: insertAt >= raw.length,
+      candidates: candidates.map((x) => x.length),
+      quoteLen: String(quote || '').trim().length,
       contextBefore: insertAt < raw.length ? raw.slice(Math.max(0, insertAt - 60), insertAt) : '(fallback)',
       contextAfter: insertAt < raw.length ? raw.slice(insertAt, insertAt + 80) : '(fallback)',
     });
@@ -205,7 +239,10 @@ export async function upsertNoteInMarkdown(
   if (!wr.ok) {
     // eslint-disable-next-line no-console
     console.warn('[notes] upsert write failed', { markdownPath, noteId, error: wr.error });
+    return false;
   }
+  const verify = await shell.readLocalText(markdownPath);
+  return !!(verify.ok && String(verify.data || '').includes(`> Note ID: ${noteId}`));
 }
 
 export async function addNoteToMarkdownAtomic(markdownPath: string, noteId: string, quote: string, note: string): Promise<{ ok: boolean; raw: string }> {
