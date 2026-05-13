@@ -52,6 +52,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   const highlightsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [noteMeta, setNoteMeta] = useState<Map<string, { pageIndex: number; noteText: string; quote: string }>>(new Map());
   const [noteCards, setNoteCards] = useState<Array<{ noteId: string; x: number; y: number; noteText: string; quote: string }>>([]);
+  const clampScale = (value: number): number => Math.max(0.6, Math.min(3.0, Math.round(value * 100) / 100));
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -138,6 +139,47 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     return () => URL.revokeObjectURL(url);
   }, [safePdfBytes]);
 
+  useEffect(() => {
+    const host = selectionHostRef.current;
+    if (!host) return;
+
+    const applyZoomDelta = (delta: number) => {
+      setScale((s) => clampScale(s + delta));
+    };
+
+    const onWheel = (evt: WheelEvent) => {
+      if (!(evt.ctrlKey || evt.metaKey)) return;
+      evt.preventDefault();
+      applyZoomDelta(evt.deltaY < 0 ? 0.1 : -0.1);
+    };
+
+    const onKeyDown = (evt: KeyboardEvent) => {
+      if (!(evt.ctrlKey || evt.metaKey)) return;
+      const key = String(evt.key || '').toLowerCase();
+      if (key === '=' || key === '+') {
+        evt.preventDefault();
+        applyZoomDelta(0.15);
+        return;
+      }
+      if (key === '-' || key === '_') {
+        evt.preventDefault();
+        applyZoomDelta(-0.15);
+        return;
+      }
+      if (key === '0') {
+        evt.preventDefault();
+        setScale(1.15);
+      }
+    };
+
+    host.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      host.removeEventListener('wheel', onWheel);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
 
   useEffect(() => {
     const host = selectionHostRef.current;
@@ -220,13 +262,6 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       }
       setHighlights(hls);
       const highlightIdSet = new Set(hls.map((h) => String(h.noteId || '')));
-      // eslint-disable-next-line no-console
-      console.log('[notes][highlights] parsed from md', {
-        markdownPath,
-        entryCount: entries.length,
-        highlightCount: hls.length,
-        noteIds: hls.map((h) => h.noteId),
-      });
       const nextMeta = new Map<string, { pageIndex: number; noteText: string; quote: string }>();
       for (const e of entries) {
         const id = String(e.id || '');
@@ -238,8 +273,6 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
         });
       }
       setNoteMeta(nextMeta);
-      // eslint-disable-next-line no-console
-      console.log('[pdf] highlights loaded', { count: hls.length });
     } catch {
       // silent
     }
@@ -311,8 +344,6 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
 
     const noteId = crypto.randomUUID();
     const pageIndex = selectionUI.pageIndex;
-    // eslint-disable-next-line no-console
-    console.log('[notes] pdf save start', { noteId, paperId, libraryId, pickedLen: picked.length, noteLen: noteText.length, pageIndex });
 
     try {
       const quote = picked;
@@ -357,8 +388,6 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
       if (!ensured.ok) {
         throw new Error('笔记写入 markdown 失败，请确认 markdown 路径和读写权限');
       }
-      // eslint-disable-next-line no-console
-      console.log('[notes] pdf save done', { ensuredPath: ensured.path, quoteLen: quote.length });
 
       setNoteMeta((prev) => {
         const next = new Map(prev);
@@ -531,22 +560,38 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
         <span className="text-xs font-mono text-on-surface-variant truncate max-w-[300px]">{fileName}</span>
         <div className="flex items-center gap-3">
           <span className="text-xs font-mono">{pageCount || '-'} pages</span>
+          <span
+            className="text-[11px] text-on-surface-variant"
+            title="Ctrl/Cmd + Wheel, Ctrl/Cmd + +/-, Ctrl/Cmd + 0"
+          >
+            Ctrl/Cmd + Wheel
+          </span>
           <button
             className="px-2 py-1 text-xs border border-outline-variant rounded hover:bg-surface-container"
-            onClick={() => setScale((s) => Math.round((s + 0.15) * 100) / 100)}
+            onClick={() => setScale((s) => clampScale(s - 0.15))}
+            title="Zoom out (Ctrl/Cmd + -)"
           >
-            Zoom {Math.round(scale * 100)}%
+            -
+          </button>
+          <span className="text-xs font-mono min-w-[52px] text-center">{Math.round(scale * 100)}%</span>
+          <button
+            className="px-2 py-1 text-xs border border-outline-variant rounded hover:bg-surface-container"
+            onClick={() => setScale((s) => clampScale(s + 0.15))}
+            title="Zoom in (Ctrl/Cmd + +)"
+          >
+            +
           </button>
           <button
             className="px-2 py-1 text-xs border border-outline-variant rounded hover:bg-surface-container"
-            onClick={() => setScale((s) => Math.max(0.6, Math.round((s - 0.15) * 100) / 100))}
+            onClick={() => setScale(1.15)}
+            title="Reset zoom (Ctrl/Cmd + 0)"
           >
-            Out
+            100%
           </button>
         </div>
       </div>
 
-      <div ref={selectionHostRef} className="flex-1 overflow-auto flex justify-center p-4">
+      <div ref={selectionHostRef} className="relative flex-1 overflow-auto flex justify-center p-4">
         {pdfDocumentNode}
 
         {noteCards.map((card) => (
@@ -555,28 +600,9 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
             className="absolute z-40 w-[320px] max-w-[30vw] rounded-xl border border-outline-variant bg-surface-container-lowest shadow-2xl p-4 space-y-2"
             style={{ left: `${card.x}px`, top: `${card.y}px` }}
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-secondary">当前笔记</span>
-              <button
-                className="text-outline hover:text-on-surface text-sm leading-none"
-                onClick={() => {
-                  setNoteMeta((prev) => {
-                    const next = new Map(prev);
-                    next.delete(card.noteId);
-                    return next;
-                  });
-                  setNoteCards((prev) => prev.filter((x) => x.noteId !== card.noteId));
-                }}
-              >
-                &times;
-              </button>
-            </div>
-            {card.quote && (
-              <p className="text-xs text-on-surface-variant line-clamp-3 leading-relaxed pl-2 border-l-2 border-secondary/30">
-                {card.quote}
-              </p>
-            )}
-            <p className="text-xs text-on-surface leading-relaxed">{card.noteText}</p>
+            <p className="text-xs text-on-surface leading-relaxed whitespace-pre-wrap">
+              {card.noteText}
+            </p>
           </div>
         ))}
       </div>

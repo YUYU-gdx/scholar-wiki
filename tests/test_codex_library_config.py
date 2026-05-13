@@ -29,6 +29,9 @@ class CodexLibraryConfigTest(unittest.TestCase):
                 skill_dir = Path(str(p.get("path", "")))
                 self.assertTrue(skill_dir.exists())
                 self.assertTrue((skill_dir / "SKILL.md").exists())
+            # Agent markdown templates should be synchronized with skill bootstrap timing.
+            self.assertTrue((workspace / "CLAUDE.md").exists())
+            self.assertTrue((workspace / "AGENTS.md").exists())
             # Legacy path should be cleaned up
             self.assertFalse((workspace / ".codex_project_skills").exists())
 

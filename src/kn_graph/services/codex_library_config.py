@@ -35,6 +35,9 @@ def _repo_root() -> Path:
 def _skills_template_root() -> Path:
     return (_repo_root() / "skills" / "templates").resolve()
 
+def _agent_docs_template_root() -> Path:
+    return (_skills_template_root() / "agent-docs").resolve()
+
 
 def _template_skill_path(skill_name: str) -> str:
     return str((_skills_template_root() / skill_name).resolve())
@@ -76,6 +79,26 @@ def _copy_single_skill(src: Path, target: Path) -> None:
         shutil.copytree(src_dir, dst_dir)
 
 
+def _sync_workspace_agent_docs(workspace: Path) -> None:
+    """Sync CLAUDE.md/AGENTS.md into workspace at the same time as skills."""
+    docs_root = _agent_docs_template_root()
+    mapping = {
+        "CLAUDE.md": docs_root / "CLAUDE.md",
+        "AGENTS.md": docs_root / "AGENTS.md",
+    }
+    for name, template_path in mapping.items():
+        source = template_path
+        if not source.exists():
+            legacy = _repo_root() / name
+            if legacy.exists():
+                source = legacy
+        if not source.exists():
+            continue
+        target = workspace / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
 def bootstrap_workspace_project_skills(workspace_path: str, skill_names: list[str] | None = None) -> list[dict[str, str]]:
     """Deploy skill templates to the correct auto-discovery paths for each backend.
 
@@ -109,6 +132,9 @@ def bootstrap_workspace_project_skills(workspace_path: str, skill_names: list[st
     legacy_root = ws / ".codex_project_skills"
     if legacy_root.exists():
         shutil.rmtree(str(legacy_root), ignore_errors=True)
+
+    # Keep markdown templates in sync with skill deployment timing.
+    _sync_workspace_agent_docs(ws)
 
     return loaded
 

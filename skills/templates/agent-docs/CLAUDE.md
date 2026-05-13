@@ -1,0 +1,2 @@
+# CLAUDE template
+ok

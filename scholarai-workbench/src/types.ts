@@ -494,6 +494,13 @@ export interface GlobalSettingsPayload {
   updated_at: string;
 }
 
+export interface AgentTemplatePayload {
+  target: string;
+  path: string;
+  exists: boolean;
+  content: string;
+}
+
 export type View = 'library' | 'graph' | 'chat' | 'reader' | 'pipeline' | 'settings';
 
 // ── Zotero import types ──────────────────────────────────────────────

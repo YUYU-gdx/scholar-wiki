@@ -4,6 +4,19 @@ import type { GlobalSettingsPayload } from '../types';
 
 type SectionState = { saving: boolean; message: string };
 type ProviderPreset = { id: string; name: string; base_url: string };
+type AgentTemplateTarget = 'pipeline_skill' | 'qa_skill' | 'claude_md' | 'agent_md';
+type AgentTemplateEditorState = {
+  open: boolean;
+  section: 'pipeline_agent' | 'agent_settings' | '';
+  kind: 'skill' | 'md' | '';
+  title: string;
+  target: AgentTemplateTarget;
+  loading: boolean;
+  saving: boolean;
+  content: string;
+  path: string;
+  message: string;
+};
 const IMPORT_SECTION_IDS = new Set(['pipeline', 'pipeline_agent', 'embedding']);
 const PROVIDER_KEY_GUIDE_URLS: Record<string, string> = {
   deepseek: 'https://platform.deepseek.com/api_keys',
@@ -83,6 +96,18 @@ export default function SettingsView() {
   const [agentTestScope, setAgentTestScope] = useState<'agent_settings' | 'pipeline_agent'>('agent_settings');
   const [agentTesting, setAgentTesting] = useState(false);
   const [agentInstalling, setAgentInstalling] = useState(false);
+  const [templateEditor, setTemplateEditor] = useState<AgentTemplateEditorState>({
+    open: false,
+    section: '',
+    kind: '',
+    title: '',
+    target: 'pipeline_skill',
+    loading: false,
+    saving: false,
+    content: '',
+    path: '',
+    message: '',
+  });
 
   const categories = useMemo(() => {
     const raw = payload?.schema?.categories ?? [];
@@ -262,6 +287,81 @@ export default function SettingsView() {
     }
   };
 
+  const loadTemplateEditor = async (
+    section: 'pipeline_agent' | 'agent_settings',
+    kind: 'skill' | 'md',
+    target: AgentTemplateTarget,
+    title: string,
+  ) => {
+    setTemplateEditor({
+      open: true,
+      section,
+      kind,
+      title,
+      target,
+      loading: true,
+      saving: false,
+      content: '',
+      path: '',
+      message: '',
+    });
+    try {
+      const data = await api.settings.getAgentTemplate(target);
+      setTemplateEditor((prev) => ({
+        ...prev,
+        loading: false,
+        content: String(data.content ?? ''),
+        path: String(data.path ?? ''),
+      }));
+    } catch (err) {
+      setTemplateEditor((prev) => ({
+        ...prev,
+        loading: false,
+        message: `加载失败: ${(err as Error).message}`,
+      }));
+    }
+  };
+
+  const switchMdTarget = async (target: AgentTemplateTarget) => {
+    setTemplateEditor((prev) => ({ ...prev, target, loading: true, message: '' }));
+    try {
+      const data = await api.settings.getAgentTemplate(target);
+      setTemplateEditor((prev) => ({
+        ...prev,
+        loading: false,
+        content: String(data.content ?? ''),
+        path: String(data.path ?? ''),
+      }));
+    } catch (err) {
+      setTemplateEditor((prev) => ({
+        ...prev,
+        loading: false,
+        message: `加载失败: ${(err as Error).message}`,
+      }));
+    }
+  };
+
+  const saveTemplateEditor = async () => {
+    const { target, content } = templateEditor;
+    setTemplateEditor((prev) => ({ ...prev, saving: true, message: '' }));
+    try {
+      const data = await api.settings.saveAgentTemplate(target, content);
+      setTemplateEditor((prev) => ({
+        ...prev,
+        saving: false,
+        content: String(data.content ?? ''),
+        path: String(data.path ?? ''),
+        message: '保存成功。',
+      }));
+    } catch (err) {
+      setTemplateEditor((prev) => ({
+        ...prev,
+        saving: false,
+        message: `保存失败: ${(err as Error).message}`,
+      }));
+    }
+  };
+
   if (loading) return <div className="flex-1 overflow-auto p-8 bg-surface-container-low">正在加载设置...</div>;
   if (loadError) return <div className="flex-1 overflow-auto p-8 bg-surface-container-low text-error">设置加载失败: {loadError}</div>;
 
@@ -303,6 +403,18 @@ export default function SettingsView() {
                 <div className="text-xs text-on-surface-variant">复用配置仅同步到当前页面草稿，需点击保存后生效。</div>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => loadTemplateEditor('pipeline_agent', 'skill', 'pipeline_skill', '编辑文献管理 Agent Skill 模板')}
+                  className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest border border-outline-variant"
+                >
+                  编辑 Skill
+                </button>
+                <button
+                  onClick={() => loadTemplateEditor('pipeline_agent', 'md', 'claude_md', '编辑文献管理 Agent MD')}
+                  className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest border border-outline-variant"
+                >
+                  编辑 MD
+                </button>
                 <button
                   onClick={() => reuseAgentConfig('agent_settings', 'pipeline_agent')}
                   className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest border border-outline-variant"
@@ -463,6 +575,18 @@ export default function SettingsView() {
                   {id === 'agent_settings' && (
                     <>
                       <button
+                        onClick={() => loadTemplateEditor('agent_settings', 'skill', 'qa_skill', '编辑知识问答 Agent Skill 模板')}
+                        className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest border border-outline-variant"
+                      >
+                        编辑 Skill
+                      </button>
+                      <button
+                        onClick={() => loadTemplateEditor('agent_settings', 'md', 'claude_md', '编辑知识问答 Agent MD')}
+                        className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest border border-outline-variant"
+                      >
+                        编辑 MD
+                      </button>
+                      <button
                         onClick={() => reuseAgentConfig('pipeline_agent', 'agent_settings')}
                         className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest border border-outline-variant"
                         title="复用「文献管理 Agent」当前选择的 provider/model/api_key/base_url"
@@ -573,6 +697,57 @@ export default function SettingsView() {
           );
         })}
       </div>
+      {templateEditor.open && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-5xl max-h-[85vh] bg-surface border border-outline-variant rounded-2xl shadow-xl flex flex-col">
+            <div className="px-5 py-3 border-b border-outline-variant flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-on-surface truncate">{templateEditor.title}</div>
+                <div className="text-xs text-on-surface-variant truncate">{templateEditor.path || '未加载'}</div>
+              </div>
+              <button
+                onClick={() => setTemplateEditor((prev) => ({ ...prev, open: false }))}
+                className="px-3 py-1.5 text-xs rounded border border-outline-variant bg-surface-container-high text-on-surface"
+              >
+                关闭
+              </button>
+            </div>
+            {templateEditor.kind === 'md' && (
+              <div className="px-5 pt-3">
+                <select
+                  className="px-3 py-2 rounded border text-sm"
+                  value={templateEditor.target}
+                  onChange={(e) => switchMdTarget(e.target.value as AgentTemplateTarget)}
+                >
+                  <option value="claude_md">CLAUDE.md</option>
+                  <option value="agent_md">AGENTS.md</option>
+                </select>
+              </div>
+            )}
+            <div className="px-5 py-3 flex-1 min-h-0">
+              <textarea
+                className="w-full h-full min-h-[420px] p-3 rounded border bg-surface-container-low font-mono text-xs outline-none"
+                value={templateEditor.content}
+                onChange={(e) => setTemplateEditor((prev) => ({ ...prev, content: e.target.value }))}
+                disabled={templateEditor.loading}
+                spellCheck={false}
+              />
+            </div>
+            <div className="px-5 py-3 border-t border-outline-variant flex items-center justify-between gap-3">
+              <div className="text-xs text-on-surface-variant">
+                {templateEditor.loading ? '加载中...' : templateEditor.message || '仅点击“保存”后才会写入模板文件。'}
+              </div>
+              <button
+                onClick={saveTemplateEditor}
+                disabled={templateEditor.loading || templateEditor.saving}
+                className="px-4 py-2 rounded bg-secondary text-on-secondary disabled:opacity-50 text-xs"
+              >
+                {templateEditor.saving ? '保存中...' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

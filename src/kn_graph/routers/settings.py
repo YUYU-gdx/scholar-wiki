@@ -29,4 +29,22 @@ def create_router(settings_service: SettingsService) -> APIRouter:
         except Exception as exc:
             return JSONResponse(status_code=400, content={"error": "settings_update_failed", "detail": str(exc)})
 
+    @router.get("/agent-templates/{target}")
+    async def get_agent_template(target: str):
+        try:
+            return settings_service.get_agent_template(target)
+        except KeyError as exc:
+            return JSONResponse(status_code=404, content={"error": str(exc)})
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"error": "agent_template_read_failed", "detail": str(exc)})
+
+    @router.put("/agent-templates/{target}")
+    async def save_agent_template(target: str, body: dict[str, Any]):
+        try:
+            return settings_service.save_agent_template(target, str(body.get("content", "") or ""))
+        except KeyError as exc:
+            return JSONResponse(status_code=404, content={"error": str(exc)})
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"error": "agent_template_save_failed", "detail": str(exc)})
+
     return router

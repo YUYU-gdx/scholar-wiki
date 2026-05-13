@@ -23,6 +23,7 @@ import type {
   TranslateJobSubmitResponse,
   TranslateJobStatusResponse,
   GlobalSettingsPayload,
+  AgentTemplatePayload,
   ZoteroScanResponse,
   ZoteroImportResponse,
 } from './types';
@@ -358,6 +359,15 @@ export const api = {
       return jsonFetch(`/settings/${encodeURIComponent(category)}`, {
         method: 'PUT',
         body: JSON.stringify(payload),
+      });
+    },
+    getAgentTemplate(target: string): Promise<AgentTemplatePayload> {
+      return jsonFetch(`/settings/agent-templates/${encodeURIComponent(target)}`);
+    },
+    saveAgentTemplate(target: string, content: string): Promise<AgentTemplatePayload> {
+      return jsonFetch(`/settings/agent-templates/${encodeURIComponent(target)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ content }),
       });
     },
   },

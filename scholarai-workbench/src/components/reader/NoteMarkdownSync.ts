@@ -15,6 +15,12 @@ function normalizeForMatch(s: string): string {
   return String(s || '').replace(/\s+/g, ' ').trim();
 }
 
+function findReaderNoteBlockEnd(src: string, start: number): number {
+  const marker = '> [!NOTE] Reader Note';
+  const next = src.indexOf(marker, start + marker.length);
+  return next >= 0 ? next : src.length;
+}
+
 function buildAnchorCandidates(anchorText: string, quote: string): string[] {
   const primary = String(anchorText || '').trim();
   const fallback = String(quote || '').trim();
@@ -68,13 +74,6 @@ function findQuoteInsertIndex(raw: string, quote: string): number {
   const src = normalizeNewlines(raw);
   const picked = String(quote || '').trim();
   if (!picked) return src.length;
-  // eslint-disable-next-line no-console
-  console.log('[notes] findQuoteInsertIndex input', {
-    pickedLen: picked.length,
-    pickedHead: picked.slice(0, 120),
-    pickedTail: picked.slice(-80),
-    srcLen: src.length,
-  });
   const exact = src.indexOf(picked);
   if (exact >= 0) {
     const endOfSelection = exact + picked.length;
@@ -157,8 +156,7 @@ export function extractNoteBlocks(raw: string): Array<{ id: string; start: numbe
   while (pos < src.length) {
     const start = src.indexOf(marker, pos);
     if (start < 0) break;
-    let end = src.indexOf(marker, start + marker.length);
-    if (end < 0) end = src.length;
+    const end = findReaderNoteBlockEnd(src, start);
     const seg = src.slice(start, end);
     const idMatch = seg.match(/>\s*Note ID:\s*([a-zA-Z0-9-]+)/);
     out.push({
@@ -167,7 +165,7 @@ export function extractNoteBlocks(raw: string): Array<{ id: string; start: numbe
       end,
       text: seg,
     });
-    pos = end;
+    pos = Math.max(end, start + marker.length);
   }
   return out;
 }
@@ -218,16 +216,6 @@ export async function upsertNoteInMarkdown(
         break;
       }
     }
-    // eslint-disable-next-line no-console
-    console.log('[notes] upsert insertAt', {
-      insertAt,
-      rawLen: raw.length,
-      fallback: insertAt >= raw.length,
-      candidates: candidates.map((x) => x.length),
-      quoteLen: String(quote || '').trim().length,
-      contextBefore: insertAt < raw.length ? raw.slice(Math.max(0, insertAt - 60), insertAt) : '(fallback)',
-      contextAfter: insertAt < raw.length ? raw.slice(insertAt, insertAt + 80) : '(fallback)',
-    });
     if (insertAt < raw.length) {
       next = `${raw.slice(0, insertAt)}${block}${raw.slice(insertAt)}`;
     } else {

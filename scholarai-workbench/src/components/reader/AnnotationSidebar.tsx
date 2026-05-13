@@ -175,7 +175,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
                   </div>
                 ) : (
                   <p className="text-xs text-on-surface leading-relaxed">
-                    {entry.noteText || <span className="text-outline italic">点击编辑笔记...</span>}
+                    {entry.noteText || <span className="text-outline italic">（空笔记）</span>}
                   </p>
                 )}
               </div>

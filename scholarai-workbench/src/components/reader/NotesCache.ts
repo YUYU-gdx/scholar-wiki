@@ -19,6 +19,68 @@ export interface NoteEntry {
 
 const cache = new Map<string, NoteEntry[]>();
 
+function findReaderNoteBlockEnd(src: string, start: number): number {
+  const marker = '> [!NOTE] Reader Note';
+  const next = src.indexOf(marker, start + marker.length);
+  return next >= 0 ? next : src.length;
+}
+
+function parseReaderNoteFields(seg: string): {
+  id: string; pageIndex: number; rect: string; quads: string; quote: string; note: string; time: string;
+} {
+  const lines = String(seg || '').replace(/\r\n/g, '\n').split('\n')
+    .map((ln) => ln.replace(/^\s*>\s?/, '').trimEnd());
+  let id = '';
+  let pageIndex = 0;
+  let rect = '';
+  let quads = '';
+  let quote = '';
+  let note = '';
+  let time = '';
+  let mode: '' | 'quote' | 'note' | 'time' = '';
+  const quoteLines: string[] = [];
+  const noteLines: string[] = [];
+  const flush = () => {
+    if (mode === 'quote') quote = quoteLines.join('\n').trim();
+    if (mode === 'note') note = noteLines.join('\n').trim();
+    mode = '';
+  };
+  for (const rawLine of lines) {
+    const line = String(rawLine || '').trim();
+    if (!line) continue;
+    const idMatch = line.match(/^Note ID:\s*([a-zA-Z0-9-]+)/i);
+    if (idMatch) { flush(); id = String(idMatch[1] || '').trim(); continue; }
+    const pageMatch = line.match(/^Page:\s*(\d+)/i);
+    if (pageMatch) { flush(); pageIndex = parseInt(String(pageMatch[1] || '0'), 10) || 0; continue; }
+    const rectMatch = line.match(/^Rect:\s*(.+)$/i);
+    if (rectMatch) { flush(); rect = String(rectMatch[1] || '').trim(); continue; }
+    const quadsMatch = line.match(/^Quads:\s*(.+)$/i);
+    if (quadsMatch) { flush(); quads = String(quadsMatch[1] || '').trim(); continue; }
+    if (/^Quote:\s*$/i.test(line)) { flush(); mode = 'quote'; continue; }
+    if (/^Note:\s*$/i.test(line)) { flush(); mode = 'note'; continue; }
+    const timeMatch = line.match(/^Time:\s*(.*)$/i);
+    if (timeMatch) {
+      flush();
+      const t = String(timeMatch[1] || '').trim();
+      if (t) {
+        time = t;
+        break;
+      }
+      mode = 'time';
+      continue;
+    }
+    if (mode === 'time') {
+      const t = line.trim();
+      if (t) time = t;
+      break;
+    }
+    if (mode === 'quote') quoteLines.push(line);
+    else if (mode === 'note') noteLines.push(line);
+  }
+  flush();
+  return { id, pageIndex, rect, quads, quote, note, time };
+}
+
 function parseNoteBlocks(raw: string): Array<{ id: string; pageIndex: number; rect: string; quads: string; quote: string; note: string; time: string }> {
   const src = String(raw || '').replace(/\r\n/g, '\n');
   const out: Array<{ id: string; pageIndex: number; rect: string; quads: string; quote: string; note: string; time: string }> = [];
@@ -27,30 +89,19 @@ function parseNoteBlocks(raw: string): Array<{ id: string; pageIndex: number; re
   while (pos < src.length) {
     const start = src.indexOf(marker, pos);
     if (start < 0) break;
-    let end = src.indexOf(marker, start + marker.length);
-    if (end < 0) end = src.length;
+    const end = findReaderNoteBlockEnd(src, start);
     const seg = src.slice(start, end);
-    const idMatch = seg.match(/>\s*Note ID:\s*([a-zA-Z0-9-]+)/);
-    const pageMatch = seg.match(/>\s*Page:\s*(\d+)/);
-    const rectMatch = seg.match(/>\s*Rect:\s*([\d.,\s]+)/);
-    const quadsMatch = seg.match(/>\s*Quads:\s*([^\n\r]+)/);
-    const quoteMatch = seg.match(/>\\s*Quote:\\s*\\n(?:>\\s*\\n)*>\\s*([\\s\\S]*?)\\n>\\s*\\n>\\s*Note:/i);
-    const noteMatch = seg.match(/>\\s*Note:\\s*\\n(?:>\\s*\\n)*>\\s*([\\s\\S]*?)\\n>\\s*\\n>\\s*Time:/i);
-    const timeMatch = seg.match(/>\\s*Time:\\s*(.+)/i);
+    const parsed = parseReaderNoteFields(seg);
     out.push({
-      id: idMatch ? String(idMatch[1]) : '',
-      pageIndex: pageMatch ? parseInt(String(pageMatch[1]), 10) : 0,
-      rect: rectMatch ? String(rectMatch[1]).trim() : '',
-      quads: quadsMatch ? String(quadsMatch[1]).trim() : '',
-      quote: quoteMatch
-        ? String(quoteMatch[1] || '').split('\n').map((ln) => ln.replace(/^>\s?/, '')).join('\n').trim()
-        : '',
-      note: noteMatch
-        ? String(noteMatch[1] || '').split('\n').map((ln) => ln.replace(/^>\s?/, '')).join('\n').trim()
-        : '',
-      time: String(timeMatch?.[1] || '').trim(),
+      id: parsed.id,
+      pageIndex: parsed.pageIndex,
+      rect: parsed.rect,
+      quads: parsed.quads,
+      quote: parsed.quote,
+      note: parsed.note,
+      time: parsed.time,
     });
-    pos = end;
+    pos = Math.max(end, start + marker.length);
   }
   return out;
 }

@@ -332,3 +332,44 @@ class SettingsService:
         if key == "agent_settings":
             return _mask_sensitive_fields(self._chat_service.save_agent_settings(payload))
         raise KeyError(f"unknown_settings_category:{key}")
+
+    def get_agent_template(self, target: str) -> dict[str, Any]:
+        path = self._resolve_agent_template_path(target)
+        content = path.read_text(encoding="utf-8") if path.exists() else ""
+        return {
+            "target": str(target or "").strip().lower(),
+            "path": str(path.resolve()),
+            "exists": path.exists(),
+            "content": content,
+        }
+
+    def save_agent_template(self, target: str, content: str) -> dict[str, Any]:
+        path = self._resolve_agent_template_path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(content or ""), encoding="utf-8")
+        return self.get_agent_template(target)
+
+    def _resolve_agent_template_path(self, target: str) -> Path:
+        key = str(target or "").strip().lower()
+        root = Path.cwd()
+        mapping: dict[str, Path] = {
+            "pipeline_skill": Path("skills/templates/scholarly-paper-extraction/SKILL.md"),
+            "qa_skill": Path("skills/templates/answer_library_question/SKILL.md"),
+            "claude_md": Path("skills/templates/agent-docs/CLAUDE.md"),
+            "agent_md": Path("skills/templates/agent-docs/AGENTS.md"),
+        }
+        rel = mapping.get(key)
+        if rel is None:
+            raise KeyError(f"unknown_agent_template_target:{key}")
+        path = root / rel
+        if key == "claude_md" and not path.exists():
+            legacy = root / "CLAUDE.md"
+            if legacy.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
+        if key == "agent_md" and not path.exists():
+            legacy = root / "AGENTS.md"
+            if legacy.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
+        return path

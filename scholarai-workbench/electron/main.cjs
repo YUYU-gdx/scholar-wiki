@@ -270,6 +270,30 @@ function createMainWindow() {
     mainWindow = null;
   });
 
+  mainWindow.webContents.on("context-menu", (_event, params) => {
+    const hasSelection = Boolean(params.selectionText && String(params.selectionText).trim());
+    const menuTemplate = params.isEditable
+      ? [
+          { role: "undo" },
+          { role: "redo" },
+          { type: "separator" },
+          { role: "cut" },
+          { role: "copy" },
+          { role: "paste" },
+          { role: "selectAll" },
+          { type: "separator" },
+          { role: "inspect" },
+        ]
+      : [
+          { role: "copy", enabled: hasSelection },
+          { role: "selectAll" },
+          { type: "separator" },
+          { role: "inspect" },
+        ];
+    const menu = Menu.buildFromTemplate(menuTemplate);
+    menu.popup({ window: mainWindow || undefined });
+  });
+
   // Always open devtools for reader diagnostics in current development workflow.
   mainWindow.webContents.openDevTools({ mode: "detach" });
 }

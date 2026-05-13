@@ -94,6 +94,11 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
       ? (document.absolute_path || '')
       : (document.markdown_path || ''),
   ).trim();
+  const rightPanelsWidthPx =
+    (sidebarOpen ? 320 : 0)
+    + (backlinksOpen ? 256 : 0)
+    + (entitiesOpen ? 360 : 0)
+    + (chatOpen ? 430 : 0);
 
   return (
     <div className="flex-1 flex overflow-hidden relative">
@@ -158,7 +163,10 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
       )}
 
       {(document.type === 'pdf' || document.type === 'markdown') && (
-        <div className="absolute right-3 top-16 z-20 hidden md:flex flex-col gap-2">
+        <div
+          className="absolute top-16 z-20 hidden md:flex flex-col gap-2 transition-all duration-200"
+          style={{ right: `${12 + rightPanelsWidthPx}px` }}
+        >
           <button
             className={`inline-flex items-center justify-center gap-2 w-11 h-11 rounded-xl border text-xs font-semibold shadow-sm transition-all group hover:w-[118px] hover:justify-start hover:px-3 ${
               sidebarOpen

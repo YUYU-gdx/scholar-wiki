@@ -234,6 +234,7 @@ export default function MarkdownEditor({
   // CM6 refs
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const selectionHostRef = useRef<HTMLDivElement>(null);
+  const readScrollRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const currentContentRef = useRef(content);
 
@@ -247,6 +248,14 @@ export default function MarkdownEditor({
     setText(content);
     currentContentRef.current = content;
   }, [content]);
+
+  // Reset read-mode scroll for newly opened markdown files.
+  useEffect(() => {
+    const el = readScrollRef.current;
+    if (!el) return;
+    el.scrollTop = 0;
+    el.scrollLeft = 0;
+  }, [absolutePath]);
 
   // Auto-save: 150ms debounced write to disk
   useEffect(() => {
@@ -322,14 +331,26 @@ export default function MarkdownEditor({
 
   const findReaderNoteRanges = (raw: string): Array<{ start: number; end: number; id: string; quote: string; note: string }> =>
     extractNoteBlocks(raw).map((x) => {
-      const quoteMatch = x.text.match(/>\s*Quote:\s*\n(?:>\s*\n)*>\s*([\s\S]*?)\n>\s*\n>\s*Note:/i);
-      const noteMatch = x.text.match(/>\s*Note:\s*\n(?:>\s*\n)*>\s*([\s\S]*?)\n>\s*\n>\s*Time:/i);
+      const lines = String(x.text || '').replace(/\r\n/g, '\n').split('\n').map((ln) => ln.replace(/^\s*>\s?/, '').trimEnd());
+      let mode: '' | 'quote' | 'note' = '';
+      const quoteLines: string[] = [];
+      const noteLines: string[] = [];
+      for (const rawLine of lines) {
+        const line = String(rawLine || '').trim();
+        if (!line) continue;
+        if (/^Quote:\s*$/i.test(line)) { mode = 'quote'; continue; }
+        if (/^Note:\s*$/i.test(line)) { mode = 'note'; continue; }
+        if (/^Time:\s*/i.test(line)) { mode = ''; continue; }
+        if (/^(Note ID|Page|Rect|Quads):/i.test(line)) continue;
+        if (mode === 'quote') quoteLines.push(line);
+        else if (mode === 'note') noteLines.push(line);
+      }
       return {
         start: x.start,
         end: x.end,
         id: x.id,
-        quote: String(quoteMatch?.[1] || '').trim(),
-        note: String(noteMatch?.[1] || '').trim(),
+        quote: quoteLines.join('\n').trim(),
+        note: noteLines.join('\n').trim(),
       };
     });
 
@@ -1135,33 +1156,35 @@ export default function MarkdownEditor({
                 el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
               }}
             />
-            <div className="flex-1 overflow-y-auto p-6 max-w-[800px] mx-auto">
-            <div
-              onClick={(evt) => {
-                const rawTarget = evt.target;
-                const elem = rawTarget instanceof Element ? rawTarget : ((rawTarget as Node | null)?.parentElement || null);
-                const copyBtn = elem?.closest('[data-code-copy]') as HTMLElement | null;
-                if (copyBtn) {
-                  const pre = copyBtn.closest('.code-block-header')?.nextElementSibling;
-                  const code = pre?.querySelector('code');
-                  if (code) {
-                    navigator.clipboard.writeText(code.textContent || '').then(() => {
-                      copyBtn.textContent = 'Copied!';
-                      copyBtn.classList.add('copied');
-                      setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('copied'); }, 2000);
-                    }).catch(() => {});
-                  }
-                  return;
-                }
-                const btn = elem?.closest('[data-reader-note-delete]') as HTMLElement | null;
-                if (!btn) return;
-                const idx = Number(btn.getAttribute('data-reader-note-delete') || '-1');
-                if (idx >= 0) handleDeleteNoteByIndex(idx);
-              }}
-            >
-              {renderedMarkdownNode}
+            <div ref={readScrollRef} className="flex-1 overflow-y-auto p-6">
+              <div className="max-w-[800px] mx-auto">
+                <div
+                  onClick={(evt) => {
+                    const rawTarget = evt.target;
+                    const elem = rawTarget instanceof Element ? rawTarget : ((rawTarget as Node | null)?.parentElement || null);
+                    const copyBtn = elem?.closest('[data-code-copy]') as HTMLElement | null;
+                    if (copyBtn) {
+                      const pre = copyBtn.closest('.code-block-header')?.nextElementSibling;
+                      const code = pre?.querySelector('code');
+                      if (code) {
+                        navigator.clipboard.writeText(code.textContent || '').then(() => {
+                          copyBtn.textContent = 'Copied!';
+                          copyBtn.classList.add('copied');
+                          setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('copied'); }, 2000);
+                        }).catch(() => {});
+                      }
+                      return;
+                    }
+                    const btn = elem?.closest('[data-reader-note-delete]') as HTMLElement | null;
+                    if (!btn) return;
+                    const idx = Number(btn.getAttribute('data-reader-note-delete') || '-1');
+                    if (idx >= 0) handleDeleteNoteByIndex(idx);
+                  }}
+                >
+                  {renderedMarkdownNode}
+                </div>
+              </div>
             </div>
-          </div>
           </div>
         )}
 
