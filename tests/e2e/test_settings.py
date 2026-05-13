@@ -77,12 +77,8 @@ def _backup_pipeline():
     data = _get_settings()
     p = data.get("settings", {}).get("pipeline", {})
     return {
-        "fast_provider": p.get("fast_provider", "deepseek"),
-        "fast_model": p.get("fast_model", ""),
-        "fast_api_key": p.get("fast_api_key", ""),
-        "fast_base_url": p.get("fast_base_url", ""),
-        "fast_endpoint_url": p.get("fast_endpoint_url", ""),
-        "extraction_mode": p.get("extraction_mode", "fast"),
+        "extraction_mode": p.get("extraction_mode", "agent"),
+        "mineru_api_key": p.get("mineru_api_key", ""),
     }
 
 
@@ -160,9 +156,9 @@ class TestSettingsPanel(unittest.TestCase):
             f"Expected 3 save buttons, found {save_buttons.count()}",
         )
         self.assertGreater(
-            _find_label(self.page, "Fast 模式提供商").count(),
+            _find_label(self.page, "提取模式").count(),
             0,
-            "Pipeline: Fast 模式提供商 field missing",
+            "Pipeline: 提取模式 field missing",
         )
         self.assertGreater(
             _find_label(self.page, "翻译提供商").count(),
@@ -177,43 +173,18 @@ class TestSettingsPanel(unittest.TestCase):
 
     # ── Test Case 2: Pipeline change provider → fields auto-load ────────
 
-    def test_02_pipeline_change_provider_auto_loads_fields(self):
-        fast_provider_select = _find_label(self.page, "Fast 模式提供商").locator("select")
-        current_value = fast_provider_select.input_value()
-        print(f"  Current fast_provider: {current_value}")
-
-        # Switch to a different provider that has preset data (openai or anthropic)
-        target = "openai" if current_value != "openai" else "anthropic"
-        fast_provider_select.select_option(target)
-        self.page.wait_for_timeout(1500)
-
-        self.assertEqual(fast_provider_select.input_value(), target)
-
-        model_input = _find_label(self.page, "Fast 模型").locator("input")
-        self.assertGreater(model_input.count(), 0, "Fast 模型 field missing")
-        actual_model = model_input.input_value()
-        print(f"  Fast model for {target}: '{actual_model}'")
-
-        base_url_input = _find_label(self.page, "Fast Base URL").locator("input")
-        self.assertGreater(base_url_input.count(), 0, "Fast Base URL field missing")
-        actual_base = base_url_input.input_value()
-        self.assertNotEqual(actual_base, "", f"Expected non-empty base_url for {target}")
-        print(f"  Fast base_url for {target}: '{actual_base}'")
-
-        # Switch back to original provider — no save needed, just verify UI
-        fast_provider_select.select_option(current_value)
-        self.page.wait_for_timeout(1500)
+    def test_02_pipeline_mode_is_agent_readonly(self):
+        mode_input = _find_label(self.page, "提取模式").locator("input")
+        self.assertGreater(mode_input.count(), 0, "提取模式 input missing")
+        self.assertEqual(mode_input.input_value(), "agent")
 
     # ── Test Case 3: Pipeline edit and save (restores original after) ───
 
     def test_03_pipeline_edit_and_save(self):
         backup = _backup_pipeline()
         try:
-            model_input = _find_label(self.page, "Fast 模型").locator("input")
-            api_key_input = _find_label(self.page, "Fast API Key").locator("input")
-
-            model_input.fill("deepseek-v4-flash")
-            api_key_input.fill("sk-pipe-ds")
+            mineru_key_input = _find_label(self.page, "MinerU API Key").locator("input")
+            mineru_key_input.fill("sk-mineru-e2e")
 
             self.page.locator("button", has_text="保存").first.click()
             self.page.wait_for_timeout(2000)
@@ -227,44 +198,16 @@ class TestSettingsPanel(unittest.TestCase):
 
             data = _get_settings()
             pipeline = data.get("settings", {}).get("pipeline", {})
-            self.assertEqual(pipeline.get("fast_model"), "deepseek-v4-flash")
-            self.assertEqual(pipeline.get("fast_api_key"), "sk-pipe-ds")
+            self.assertEqual(pipeline.get("extraction_mode"), "agent")
+            self.assertEqual(pipeline.get("mineru_api_key"), "sk-mineru-e2e")
         finally:
             _restore_pipeline(backup)
 
     # ── Test Case 4: Pipeline switch provider preserves data (no write) ─
 
-    def test_04_pipeline_switch_provider_preserves_data(self):
-        fast_provider_select = _find_label(self.page, "Fast 模式提供商").locator("select")
-        first_provider = fast_provider_select.input_value()
-        first_model = _find_label(self.page, "Fast 模型").locator("input").input_value()
-        print(f"  First provider: {first_provider}, model='{first_model}'")
-
-        # Switch to a second provider, verify its fields load, then switch
-        # back WITHOUT saving — original data must survive in the UI.
-        second_provider = "openai" if first_provider != "openai" else "anthropic"
-        fast_provider_select.select_option(second_provider)
-        self.page.wait_for_timeout(1500)
-
-        # Just verify the UI updated (fields changed for the new provider)
-        second_model = _find_label(self.page, "Fast 模型").locator("input").input_value()
-        print(f"  Second provider model: '{second_model}'")
-        # The second provider's model may be empty or a preset — either is fine
-        # as long as the UI responded to the switch.
-
-        # Switch back without saving
-        fast_provider_select.select_option(first_provider)
-        self.page.wait_for_timeout(1500)
-
-        restored_model = (
-            _find_label(self.page, "Fast 模型").locator("input").input_value()
-        )
-        self.assertEqual(
-            restored_model,
-            first_model,
-            f"Expected model '{first_model}' back, got '{restored_model}'",
-        )
-        print(f"  Restored model: '{restored_model}'")
+    def test_04_pipeline_mode_remains_agent(self):
+        mode_input = _find_label(self.page, "提取模式").locator("input")
+        self.assertEqual(mode_input.input_value(), "agent")
 
     # ── Test Case 5: Translation change provider then save (restores) ───
 

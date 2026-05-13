@@ -65,35 +65,20 @@ class SettingsService:
         self._store_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _get_pipeline_category(self) -> dict[str, Any]:
-        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map, provider_presets  # noqa: F811
+        from kn_graph.services.cherry_provider_catalog import provider_presets  # noqa: F811
         saved = self._read_store().get("categories", {}).get("pipeline", {})
         if not isinstance(saved, dict):
             saved = {}
         mode = str(saved.get("extraction_mode", "") or "agent").strip().lower()
         if mode not in {"agent"}:
             mode = "agent"
-        fast_providers = saved.get("fast_providers", {}) if isinstance(saved.get("fast_providers"), dict) else {}
-        active = str(saved.get("fast_provider", "") or "deepseek").strip()
-        provider_data = fast_providers.get(active, {}) if isinstance(fast_providers, dict) else {}
-        if not isinstance(provider_data, dict):
-            provider_data = {}
-        defaults_base = (provider_map().get(active, {})).get("base_url", "")
-        fast_model = str(provider_data.get("model", "") or "")
-        if not fast_model and active == "deepseek":
-            fast_model = "deepseek-v4-flash"
         return {
             "extraction_mode": mode,
             "mineru_api_key": str(saved.get("mineru_api_key", "") or ""),
-            "fast_provider": active,
-            "fast_model": fast_model,
-            "fast_api_key": str(provider_data.get("api_key", "") or ""),
-            "fast_base_url": str(provider_data.get("base_url", "") or defaults_base),
-            "fast_endpoint_url": str(provider_data.get("endpoint_url", "") or default_endpoint_url(defaults_base)),
             "provider_presets": provider_presets(),
         }
 
     def _save_pipeline_category(self, body: dict[str, Any]) -> dict[str, Any]:
-        from kn_graph.services.cherry_provider_catalog import default_endpoint_url, provider_map  # noqa: F811
         store = self._read_store()
         categories = store.get("categories", {}) if isinstance(store.get("categories"), dict) else {}
         saved = categories.get("pipeline", {}) if isinstance(categories, dict) else {}
@@ -106,35 +91,9 @@ class SettingsService:
             saved["extraction_mode"] = mode
         if "mineru_api_key" in body:
             saved["mineru_api_key"] = str(body.get("mineru_api_key", "") or "").strip()
-        requested = str(body.get("fast_provider", "") or "").strip()
-        if requested:
-            saved["fast_provider"] = requested
-        active = str(saved.get("fast_provider", "") or "deepseek").strip()
-        saved.setdefault("fast_providers", {})
-        if not isinstance(saved.get("fast_providers"), dict):
-            saved["fast_providers"] = {}
-        provider_data = saved["fast_providers"].get(active, {}) if isinstance(saved["fast_providers"], dict) else {}
-        if not isinstance(provider_data, dict):
-            provider_data = {}
-        # Map frontend keys (fast_model, fast_api_key, fast_base_url, fast_endpoint_url)
-        # to internal per-provider keys (model, api_key, base_url, endpoint_url)
-        field_map = [
-            ("fast_model", "model"),
-            ("fast_api_key", "api_key"),
-            ("fast_base_url", "base_url"),
-            ("fast_endpoint_url", "endpoint_url"),
-        ]
-        for body_key, store_key in field_map:
-            if body_key in body:
-                provider_data[store_key] = str(body.get(body_key, "") or "").strip()
-        base_url = str(provider_data.get("base_url", "") or "").strip()
-        if not base_url:
-            base_url = (provider_map().get(active, {})).get("base_url", "")
-            if base_url:
-                provider_data["base_url"] = base_url
-        if not str(provider_data.get("endpoint_url", "") or "").strip():
-            provider_data["endpoint_url"] = default_endpoint_url(base_url)
-        saved["fast_providers"][active] = provider_data
+        # Force-remove legacy fast extraction fields.
+        for legacy_key in ("fast_provider", "fast_providers", "fast_model", "fast_api_key", "fast_base_url", "fast_endpoint_url"):
+            saved.pop(legacy_key, None)
         categories["pipeline"] = saved
         store["categories"] = categories
         self._write_store(store)

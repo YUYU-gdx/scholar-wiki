@@ -4,7 +4,7 @@ Uses Playwright to interact with the Settings UI and saves screenshots for visua
 
 DOM Structure (from snapshot):
   Section 0: extra element (no title)
-  Section 1: Pipeline (selects: extraction_mode, fast_provider)
+  Section 1: Pipeline (fields: mineru_api_key, extraction_mode)
   Section 2: Translation (select: provider)
   Section 3: Agent (selects: current_agent, provider)
 """
@@ -60,7 +60,7 @@ def run_tests():
         pipe = backend_data["settings"].get("pipeline", {})
         trans = backend_data["settings"].get("translation", {})
         agent = backend_data["settings"].get("agent_settings", {})
-        print(f"  Backend: pipeline_provider={pipe.get('fast_provider','?')}, "
+        print(f"  Backend: pipeline_mode={pipe.get('extraction_mode','?')}, "
               f"trans_provider={trans.get('provider','?')}, agent={agent.get('current_agent','?')}, "
               f"agent_provider={agent.get('provider','?')}")
 
@@ -118,40 +118,18 @@ def run_tests():
             page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test01_error.png"), full_page=True)
             results.append(("Test 1", False, str(e)))
 
-        # ---- TEST 2: Pipeline - switch provider to openai, verify fields update ----
-        print("\n===== TEST 2: Pipeline provider switch -> verify model/api_key update =====")
+        # ---- TEST 2: Pipeline - extraction mode is fixed to agent ----
+        print("\n===== TEST 2: Pipeline extraction mode fixed to agent =====")
         try:
-            # Fast 模式提供商 is the 2nd select (index 1) in Pipeline section
-            provider_select = PIPELINE.locator("select").nth(1)
-            current_provider = provider_select.input_value()
-            print(f"  Current pipeline provider: {current_provider}")
-
-            # Switch to openai
-            provider_select.select_option("openai")
-            page.wait_for_timeout(2000)
-            page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test02_pipeline_switched_to_openai.png"), full_page=True)
-            print("  Screenshot: test02_pipeline_switched_to_openai.png")
-
-            # Verify updated fields
-            provider_val = provider_select.input_value()
-            # Fast 模型 = 2nd input (index 1). MinerU API Key = input 0 (password), Fast 模型 = input 1
-            model_input = PIPELINE.locator("input").nth(1)
-            model_val = model_input.input_value()
-            # Fast Base URL = 4th input (index 3)
-            base_url_input = PIPELINE.locator("input").nth(3)
-            base_url_val = base_url_input.input_value()
-
-            print(f"  After switch: provider='{provider_val}', model='{model_val}', base_url='{base_url_val}'")
-
-            if provider_val == "openai" and "openai" in base_url_val:
-                print("  PASS: Provider switched to openai, base_url updated")
-                results.append(("Test 2", True, f"Provider={provider_val}, model={model_val}, base_url={base_url_val}"))
-            elif provider_val == "openai":
-                print(f"  WARN: Provider switched but base_url may be stale: {base_url_val}")
-                results.append(("Test 2", True, f"Provider={provider_val}, base_url={base_url_val} (check)"))
+            mode_input = PIPELINE.locator("input").nth(1)
+            mode_val = mode_input.input_value()
+            print(f"  Pipeline extraction_mode UI: '{mode_val}'")
+            if mode_val == "agent":
+                print("  PASS: extraction mode is agent")
+                results.append(("Test 2", True, "extraction_mode=agent"))
             else:
-                print(f"  FAIL: Expected openai, got {provider_val}")
-                results.append(("Test 2", False, f"Expected openai, got {provider_val}"))
+                print(f"  FAIL: Expected agent, got {mode_val}")
+                results.append(("Test 2", False, f"Expected agent, got {mode_val}"))
         except Exception as e:
             import traceback; traceback.print_exc()
             print(f"  FAIL: {e}")
@@ -161,16 +139,9 @@ def run_tests():
         # ---- TEST 3: Pipeline - edit model/api_key, click Save, verify persistence ----
         print("\n===== TEST 3: Pipeline edit model/api_key + Save -> verify persistence =====")
         try:
-            test_model = f"test-e2e-model-{int(time.time())}"
-            test_api_key = f"sk-e2e-test-{int(time.time())}"
-
-            # Fast 模型 = input index 1
-            model_input = PIPELINE.locator("input").nth(1)
-            model_input.clear()
-            model_input.fill(test_model)
-
-            # Fast API Key = input index 2 (password field)
-            api_key_input = PIPELINE.locator("input").nth(2)
+            test_api_key = f"sk-e2e-mineru-{int(time.time())}"
+            # MinerU API Key = input index 0
+            api_key_input = PIPELINE.locator("input").nth(0)
             api_key_input.clear()
             api_key_input.fill(test_api_key)
 
@@ -195,45 +166,38 @@ def run_tests():
                 page.wait_for_timeout(2500)
                 go_to_settings()
                 ps = SECTIONS.nth(1)
-                check_model = ps.locator("input").nth(1).input_value()
-                print(f"  After refresh, model='{check_model}' (expected '{test_model}')")
-                if check_model == test_model:
-                    print("  PASS: Model persisted after page reload")
-                    results.append(("Test 3", True, f"Model persisted: {check_model}"))
+                check_mode = ps.locator("input").nth(1).input_value()
+                print(f"  After refresh, extraction_mode='{check_mode}'")
+                if check_mode == "agent":
+                    print("  PASS: extraction mode remained agent after save/reload")
+                    results.append(("Test 3", True, "extraction_mode remains agent"))
                 else:
-                    print(f"  FAIL: Model not persisted. Got '{check_model}', expected '{test_model}'")
-                    results.append(("Test 3", False, f"Expected {test_model}, got {check_model}"))
+                    print(f"  FAIL: extraction_mode changed unexpectedly: '{check_mode}'")
+                    results.append(("Test 3", False, f"Unexpected extraction_mode {check_mode}"))
         except Exception as e:
             import traceback; traceback.print_exc()
             print(f"  FAIL: {e}")
             page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test03_error.png"), full_page=True)
             results.append(("Test 3", False, str(e)))
 
-        # ---- TEST 4: Switch back to deepseek, verify data restored ----
-        print("\n===== TEST 4: Switch back to deepseek -> verify data restored =====")
+        # ---- TEST 4: Pipeline mode remains agent ----
+        print("\n===== TEST 4: Pipeline mode remains agent =====")
         try:
             # We might be on a fresh page after test 3's reload. Re-navigate to settings if needed.
             if "Settings" not in (page.text_content("nav") or ""):
                 go_to_settings()
 
-            provider_select = SECTIONS.nth(1).locator("select").nth(1)
-            provider_select.select_option("deepseek")
-            page.wait_for_timeout(2000)
-
             page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test04_switched_back_to_deepseek.png"), full_page=True)
             print("  Screenshot: test04_switched_back_to_deepseek.png")
 
-            model_val = SECTIONS.nth(1).locator("input").nth(1).input_value()
-            provider_val = provider_select.input_value()
-            base_url_val = SECTIONS.nth(1).locator("input").nth(3).input_value()
-            print(f"  After switch back: provider='{provider_val}', model='{model_val}', base_url='{base_url_val}'")
-
-            if provider_val == "deepseek":
-                print("  PASS: Switched back to deepseek")
-                results.append(("Test 4", True, f"Provider=deepseek, model={model_val}, base_url={base_url_val}"))
+            mode_val = SECTIONS.nth(1).locator("input").nth(1).input_value()
+            print(f"  Pipeline extraction_mode='{mode_val}'")
+            if mode_val == "agent":
+                print("  PASS: extraction mode is agent")
+                results.append(("Test 4", True, "extraction_mode=agent"))
             else:
-                print(f"  FAIL: Expected deepseek, got {provider_val}")
-                results.append(("Test 4", False, f"Expected deepseek, got {provider_val}"))
+                print(f"  FAIL: Expected agent, got {mode_val}")
+                results.append(("Test 4", False, f"Expected agent, got {mode_val}"))
         except Exception as e:
             print(f"  FAIL: {e}")
             page.screenshot(path=os.path.join(SCREENSHOT_DIR, "test04_error.png"), full_page=True)

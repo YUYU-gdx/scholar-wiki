@@ -59,12 +59,12 @@ class TestAgentPipelineIntegration:
         init_pipeline_settings(settings)
 
         explicit_options = {
-            "extraction_mode": "fast",
+            "extraction_mode": "agent",
             "pipeline_agent_backend": "gemini_cli",
         }
         options = _inject_pipeline_settings(explicit_options)
         # Explicit values should be preserved
-        assert options.get("extraction_mode") == "fast"
+        assert options.get("extraction_mode") == "agent"
         assert options.get("pipeline_agent_backend") == "gemini_cli"
 
     def test_extract_result_payload_format_compatibility(self):
@@ -124,31 +124,19 @@ class TestAgentPipelineIntegration:
         assert "paper_id" in raw_record
         assert raw_record["status"] == "ok"
 
-    def test_dispatcher_routes_to_fast_by_default(self):
-        """Verify the dispatcher calls fast path when extraction_mode is not agent."""
-        from kn_graph.services.pipeline_runtime import _run_extract_entities
+    def test_agent_extraction_validates_required_inputs(self):
+        """Verify agent extraction path validates required parse artifacts."""
+        from kn_graph.services.pipeline_runtime import _run_agent_extraction
 
-        # With fast mode, this should NOT raise agent_extraction_not_implemented
-        # It will fail on missing html_path (expected for fast path validation)
-        parse_meta = {"html_path": "/nonexistent/path.html"}
-        run_dir = Path(tempfile.mkdtemp())
-        store = MagicMock()
-        store.get_job.return_value = {"status": "running", "stage": "parse_pdf", "requested_cancel": False}
-        options = {"extraction_mode": "fast"}
-
-        with pytest.raises(RuntimeError, match="missing_html_for_extraction"):
-            _run_extract_entities("job_1", parse_meta, run_dir, store, options)
-
-    def test_dispatcher_routes_to_agent_when_mode_is_agent(self):
-        """Verify the dispatcher calls agent path when extraction_mode is agent."""
-        from kn_graph.services.pipeline_runtime import _run_extract_entities
-
-        parse_meta = {"html_path": "/nonexistent/path.html"}
+        parse_meta = {
+            "markdown_path": "/nonexistent/path.md",
+            "html_path": "/nonexistent/path.html",
+        }
         run_dir = Path(tempfile.mkdtemp())
         store = MagicMock()
         store.get_job.return_value = {"status": "running", "stage": "parse_pdf", "requested_cancel": False}
         options = {"extraction_mode": "agent"}
 
-        # Agent path validates html_path exists first, so it will raise missing_html
-        with pytest.raises(RuntimeError, match="missing_html_for_extraction"):
-            _run_extract_entities("job_1", parse_meta, run_dir, store, options)
+        # Agent path validates markdown exists first.
+        with pytest.raises(RuntimeError, match="missing_markdown_for_extraction"):
+            _run_agent_extraction("job_1", parse_meta, run_dir, store, options)

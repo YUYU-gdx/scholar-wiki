@@ -1051,27 +1051,6 @@ def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
         if val:
             out["mineru_api_key"] = val
 
-    # LLM provider / model / key from pipeline extraction settings
-    if not str(out.get("llm_provider", "") or "").strip():
-        val = str(getattr(settings, "pipeline_fast_provider", "") or "").strip()
-        if val:
-            out["llm_provider"] = val
-
-    if not str(out.get("llm_model", "") or "").strip():
-        val = str(getattr(settings, "pipeline_fast_model", "") or "").strip()
-        if val:
-            out["llm_model"] = val
-
-    if not str(out.get("llm_api_key", "") or "").strip():
-        val = str(getattr(settings, "deepseek_api_key", "") or "").strip()
-        if val:
-            out["llm_api_key"] = val
-
-    if not str(out.get("llm_base_url", "") or "").strip():
-        val = str(getattr(settings, "pipeline_fast_endpoint_url", "") or "").strip()
-        if val:
-            out["llm_base_url"] = val
-
     if not out.get("llm_timeout_seconds"):
         out["llm_timeout_seconds"] = 300
 

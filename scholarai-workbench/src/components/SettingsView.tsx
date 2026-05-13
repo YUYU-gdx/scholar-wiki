@@ -100,9 +100,7 @@ export default function SettingsView() {
     // the new provider's saved data. The backend will return the new provider's saved
     // model/api_key (or empty defaults if never saved).
     let body: Record<string, unknown>;
-    if (category === 'pipeline') {
-      body = { fast_provider: providerId, fast_base_url: hit.base_url, fast_endpoint_url: endpoint };
-    } else if (category === 'embedding') {
+    if (category === 'embedding') {
       body = { provider: providerId, endpoint_url: embEndpoint };
     } else if (category === 'agent_settings' || category === 'pipeline_agent') {
       body = { provider: providerId, base_url: hit.base_url };
@@ -114,9 +112,7 @@ export default function SettingsView() {
       setDrafts((prev) => ({ ...prev, [category]: asRecord(res.config) }));
     } catch (_err) {
       // Fallback: update local fields only, user can click Save manually
-      if (category === 'pipeline') {
-        setDrafts((prev) => ({ ...prev, pipeline: { ...asRecord(prev.pipeline), fast_provider: providerId, fast_base_url: hit.base_url, fast_endpoint_url: endpoint } }));
-      } else if (category === 'embedding') {
+      if (category === 'embedding') {
         setDrafts((prev) => ({ ...prev, embedding: { ...asRecord(prev.embedding), provider: providerId, endpoint_url: embEndpoint } }));
       } else if (category === 'agent_settings' || category === 'pipeline_agent') {
         setDrafts((prev) => ({ ...prev, [category]: { ...asRecord(prev[category]), provider: providerId, base_url: hit.base_url } }));
@@ -262,13 +258,8 @@ export default function SettingsView() {
               {id === 'pipeline' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                   <label><div className="mb-1">MinerU API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.mineru_api_key)} onChange={(e) => updateField(id, 'mineru_api_key', e.target.value)} /></label>
-                  <label><div className="mb-1">提取模式</div><select className="w-full px-3 py-2 rounded border" value={str(values.extraction_mode)} onChange={(e) => updateField(id, 'extraction_mode', e.target.value)}><option value="fast">fast</option><option value="agent">agent</option></select></label>
-                  <label><div className="mb-1">Fast 模式提供商</div><select className="w-full px-3 py-2 rounded border" value={str(values.fast_provider)} onChange={(e) => applyProviderPreset('pipeline', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
-                  <label><div className="mb-1">Fast 模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.fast_model)} onChange={(e) => updateField(id, 'fast_model', e.target.value)} /></label>
-                  <label><div className="mb-1">Fast API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.fast_api_key)} onChange={(e) => updateField(id, 'fast_api_key', e.target.value)} /></label>
-                  <label><div className="mb-1">Fast Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.fast_base_url)} onChange={(e) => updateField(id, 'fast_base_url', e.target.value)} /></label>
-                  <label className="md:col-span-2"><div className="mb-1">Fast Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.fast_endpoint_url)} onChange={(e) => updateField(id, 'fast_endpoint_url', e.target.value)} /></label>
-                  {str(values.extraction_mode) === 'agent' ? <div className="md:col-span-2 text-on-surface-variant">Agent 模式使用下方「Pipeline Agent」分类中配置的 Agent 后端进行三步提取（提取→消歧→笔记），耗时较长但质量更高。</div> : null}
+                  <label><div className="mb-1">提取模式</div><input className="w-full px-3 py-2 rounded border bg-surface-container-low text-on-surface-variant" value="agent" readOnly /></label>
+                  <div className="md:col-span-2 text-on-surface-variant">文献导入仅支持 Agent 模式，使用下方「Pipeline Agent」分类中配置的 Agent 后端进行三步提取（提取→消歧→笔记）。</div>
                 </div>
               )}
 
