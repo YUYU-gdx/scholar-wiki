@@ -234,14 +234,33 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
         const touched = findTouchedBlocks(pageBlocks, picked);
         if (touched) {
           const full = getBlocksQuote(pageBlocks, touched.startIdx, touched.endIdx);
+          // eslint-disable-next-line no-console
+          console.log('[notes] raw quote from blocks', {
+            rawLen: full.quote.length,
+            rawHead: full.quote.slice(0, 120),
+            rawTail: full.quote.slice(-80),
+          });
           // Clean: strip leading/trailing whitespace/newlines, normalize inner whitespace
           const cleaned = full.quote.replace(/^[\s\n\r]+|[\s\n\r]+$/g, '').replace(/\s+/g, ' ').trim();
           if (cleaned) {
-            quote = cleaned;
             // eslint-disable-next-line no-console
-            console.log('[notes] block quote expanded', { pageIndex, startIdx: touched.startIdx, endIdx: touched.endIdx, origLen: picked.length, quoteLen: quote.length });
+            console.log('[notes] cleaned quote', {
+              cleanedLen: cleaned.length,
+              cleanedHead: cleaned.slice(0, 120),
+              cleanedTail: cleaned.slice(-80),
+            });
+            quote = cleaned;
+          } else {
+            // eslint-disable-next-line no-console
+            console.log('[notes] cleaned quote was empty, falling back to picked');
           }
+        } else {
+          // eslint-disable-next-line no-console
+          console.log('[notes] findTouchedBlocks returned null, falling back to picked');
         }
+      } else {
+        // eslint-disable-next-line no-console
+        console.log('[notes] no content_list_v2 available, using picked text', { hasPages: !!contentPages, pageIndex, pageCount: contentPages?.length });
       }
 
       // ── Standard path: same as case 1 (MD manual selection) ──

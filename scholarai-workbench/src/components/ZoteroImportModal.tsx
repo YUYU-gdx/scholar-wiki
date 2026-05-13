@@ -136,11 +136,34 @@ export default function ZoteroImportModal({ open, onClose, onImportDone }: Props
       const result = await api.zotero.importItems(dataDir.trim(), [...selectedIds], targetLibrary);
       setImportResult(`成功导入 ${result.count} 篇论文`);
       onImportDone?.();
+      // Poll job status and trigger refresh when pipeline completes
+      if (result.job_ids?.length) {
+        pollJobsUntilDone(result.job_ids, targetLibrary);
+      }
     } catch (err) {
       setImportResult(`导入失败: ${String((err as Error)?.message || err)}`);
     } finally {
       setImporting(false);
     }
+  };
+
+  const pollJobsUntilDone = async (jobIds: string[], libraryId: string) => {
+    const pending = new Set(jobIds);
+    const terminal = new Set(['completed', 'failed', 'cancelled']);
+    while (pending.size > 0) {
+      await new Promise((r) => setTimeout(r, 3000));
+      for (const jid of [...pending]) {
+        try {
+          const job = await api.pipeline.getJob(jid);
+          if (terminal.has(job.status)) {
+            pending.delete(jid);
+          }
+        } catch {
+          pending.delete(jid); // job not found, stop polling
+        }
+      }
+    }
+    window.dispatchEvent(new CustomEvent('pipeline-completed', { detail: { libraryId } }));
   };
 
   const formatCreators = (creators: ZoteroItemInfo['creators']) => {

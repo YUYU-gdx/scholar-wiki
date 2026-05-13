@@ -108,6 +108,22 @@ export function findTouchedBlocks(
   }
 
   if (startBlock < 0 || endBlock < 0) return null;
+
+  // eslint-disable-next-line no-console
+  console.log('[resolver] findTouchedBlocks', {
+    selectedLen: selectedText.length,
+    selectedPreview: selectedText.slice(0, 80),
+    matchStart,
+    matchEnd,
+    startBlock,
+    endBlock,
+    blocksTouched: pageBlocks.slice(startBlock, endBlock + 1).map((b, i) => ({
+      idx: startBlock + i,
+      type: b.type,
+      textPreview: b.text.slice(0, 60),
+    })),
+  });
+
   return { startIdx: startBlock, endIdx: endBlock };
 }
 

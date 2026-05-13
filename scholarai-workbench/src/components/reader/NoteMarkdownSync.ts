@@ -85,14 +85,35 @@ function findQuoteInsertIndex(raw: string, quote: string): number {
   const src = normalizeNewlines(raw);
   const picked = String(quote || '').trim();
   if (!picked) return src.length;
+  // eslint-disable-next-line no-console
+  console.log('[notes] findQuoteInsertIndex input', {
+    pickedLen: picked.length,
+    pickedHead: picked.slice(0, 120),
+    pickedTail: picked.slice(-80),
+    srcLen: src.length,
+  });
   const exact = src.indexOf(picked);
   if (exact >= 0) {
     const endOfSelection = exact + picked.length;
     const tail = src.slice(endOfSelection);
     const endInTail = tail.indexOf('\n');
+    const contextBefore = src.slice(Math.max(0, exact - 60), exact);
+    const contextAfter = src.slice(endOfSelection, endOfSelection + 80);
+    const insertAt = endInTail >= 0 ? endOfSelection + endInTail : src.length;
+    const insertContext = src.slice(Math.max(0, insertAt - 40), insertAt + 80);
     // eslint-disable-next-line no-console
-    console.log('[notes] find index by exact', { exact, endOfSelection, srcLen: src.length });
-    return endInTail >= 0 ? endOfSelection + endInTail : src.length;
+    console.log('[notes] find index by exact', {
+      exact,
+      endOfSelection,
+      endInTail,
+      insertAt,
+      srcLen: src.length,
+      contextBefore,
+      matchHead: src.slice(exact, exact + 80),
+      contextAfter,
+      insertContext,
+    });
+    return insertAt;
   }
 
   const rawNorm = normalizeWithMap(src);
@@ -100,7 +121,13 @@ function findQuoteInsertIndex(raw: string, quote: string): number {
   const normIdx = rawNorm.normalized.indexOf(pickedNorm);
   if (normIdx < 0) {
     // eslint-disable-next-line no-console
-    console.warn('[notes] find index failed: no exact or normalized match', { pickedLen: picked.length, srcLen: src.length });
+    console.warn('[notes] find index failed: no exact or normalized match', {
+      pickedLen: picked.length,
+      pickedNormLen: pickedNorm.length,
+      pickedNormHead: pickedNorm.slice(0, 120),
+      srcLen: src.length,
+      srcNormHead: rawNorm.normalized.slice(0, 200),
+    });
     return src.length;
   }
   const normEnd = normIdx + Math.max(0, pickedNorm.length - 1);
@@ -108,9 +135,21 @@ function findQuoteInsertIndex(raw: string, quote: string): number {
   const endOfSelection = Math.min(src.length, rawEnd + 1);
   const tail = src.slice(endOfSelection);
   const endInTail = tail.indexOf('\n');
+  const insertAt = endInTail >= 0 ? endOfSelection + endInTail : src.length;
+  const insertContext = src.slice(Math.max(0, insertAt - 40), insertAt + 80);
   // eslint-disable-next-line no-console
-  console.log('[notes] find index by normalized map', { normIdx, endOfSelection, srcLen: src.length });
-  if (endInTail >= 0) return endOfSelection + endInTail;
+  console.log('[notes] find index by normalized map', {
+    normIdx,
+    normEnd,
+    rawEnd,
+    endOfSelection,
+    endInTail,
+    insertAt,
+    srcLen: src.length,
+    normMatchHead: rawNorm.normalized.slice(normIdx, normIdx + 80),
+    insertContext,
+  });
+  if (endInTail >= 0) return insertAt;
   return src.length;
 }
 
@@ -198,6 +237,14 @@ export async function upsertNoteInMarkdown(markdownPath: string, noteId: string,
     }
   } else {
     const insertAt = findQuoteInsertIndex(raw, quote);
+    // eslint-disable-next-line no-console
+    console.log('[notes] upsert insertAt', {
+      insertAt,
+      rawLen: raw.length,
+      fallback: insertAt >= raw.length,
+      contextBefore: insertAt < raw.length ? raw.slice(Math.max(0, insertAt - 60), insertAt) : '(fallback)',
+      contextAfter: insertAt < raw.length ? raw.slice(insertAt, insertAt + 80) : '(fallback)',
+    });
     if (insertAt < raw.length) {
       next = `${raw.slice(0, insertAt)}${block}${raw.slice(insertAt)}`;
     } else {
