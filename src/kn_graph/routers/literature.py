@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import shutil
+import traceback
+import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from kn_graph.models.literature import (
-    LiteratureAnswerRequest, LiteratureCreateLibraryRequest, LiteratureImportRequest,
+    LiteratureAnswerRequest, LiteratureCreateLibraryRequest,
     ZoteroScanRequest, ZoteroImportRequest,
 )
 from kn_graph.services.literature_service import LiteratureService
+from kn_graph.services.pipeline_runtime import dispatch_inline
+from kn_graph.services.zotero_scanner import _find_data_dir, get_zotero_items_batch, scan_zotero
 
 
 def create_router(literature_service: LiteratureService, pipeline_service: Any = None) -> APIRouter:
@@ -81,21 +90,6 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
         except Exception as exc:
             return JSONResponse(status_code=500, content={"error": "library_delete_failed", "detail": str(exc)})
 
-    @router.post("/import")
-    async def import_manifest(body: LiteratureImportRequest):
-        manifest_path = str(body.manifest_path or "").strip()
-        if not manifest_path:
-            return JSONResponse(status_code=400, content={"error": "manifest_path_required"})
-        library_id = str(body.library_id or "").strip()
-        options = dict(body.options) if body.options else {}
-        if library_id and "library_id" not in options:
-            options["library_id"] = library_id
-        try:
-            result = literature_service.import_manifest(manifest_path=manifest_path, options=options)
-            return result
-        except Exception as exc:
-            return JSONResponse(status_code=500, content={"error": "literature_import_failed", "detail": str(exc)})
-
     @router.post("/answer")
     async def literature_answer(body: LiteratureAnswerRequest):
         query = str(body.query or "").strip()
@@ -122,13 +116,11 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
     async def zotero_scan(body: ZoteroScanRequest):
         data_dir = str(body.data_dir or "").strip()
         if not data_dir:
-            from kn_graph.services.zotero_scanner import _find_data_dir
             data_dir = _find_data_dir() or ""
         if not data_dir:
             return JSONResponse(status_code=400, content={"error": "data_dir_required",
                 "hint": "Please provide the Zotero data directory path"})
         try:
-            from kn_graph.services.zotero_scanner import scan_zotero
             result = scan_zotero(data_dir)
             return result
         except FileNotFoundError as exc:
@@ -139,17 +131,11 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
     @router.post("/zotero/import")
     async def zotero_import(body: ZoteroImportRequest):
         try:
-            import uuid, hashlib, json, shutil, os
-            from pathlib import Path
-            from kn_graph.services.zotero_scanner import get_zotero_items_batch
-            from kn_graph.services.pipeline_runtime import dispatch_inline
-
             data_dir = str(body.data_dir or "").strip()
             library_id = str(body.library_id or "").strip()
             item_ids = list(body.item_ids or [])
 
             if not data_dir:
-                from kn_graph.services.zotero_scanner import _find_data_dir
                 data_dir = _find_data_dir() or ""
             if not data_dir:
                 return JSONResponse(status_code=400, content={"error": "data_dir_required"})
@@ -237,7 +223,6 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
             return {"job_ids": job_ids, "count": len(job_ids)}
 
         except Exception as exc:
-            import traceback
             return JSONResponse(
                 status_code=500,
                 content={"error": "zotero_import_failed", "detail": str(exc), "traceback": traceback.format_exc()},

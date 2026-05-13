@@ -114,8 +114,8 @@ class Settings(BaseModel):
 
     @property
     def pipeline_extraction_mode(self) -> str:
-        mode = str(self._cat("pipeline").get("extraction_mode", "") or "fast").strip().lower()
-        return mode if mode in ("fast", "agent") else "fast"
+        mode = str(self._cat("pipeline").get("extraction_mode", "") or "agent").strip().lower()
+        return mode if mode in ("agent",) else "agent"
 
     def _provider_api_key(self, provider_id: str) -> str:
         providers = self._cat("pipeline").get("fast_providers", {})

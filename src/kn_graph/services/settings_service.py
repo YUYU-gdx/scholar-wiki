@@ -69,9 +69,9 @@ class SettingsService:
         saved = self._read_store().get("categories", {}).get("pipeline", {})
         if not isinstance(saved, dict):
             saved = {}
-        mode = str(saved.get("extraction_mode", "") or "fast").strip().lower()
-        if mode not in {"fast", "agent"}:
-            mode = "fast"
+        mode = str(saved.get("extraction_mode", "") or "agent").strip().lower()
+        if mode not in {"agent"}:
+            mode = "agent"
         fast_providers = saved.get("fast_providers", {}) if isinstance(saved.get("fast_providers"), dict) else {}
         active = str(saved.get("fast_provider", "") or "deepseek").strip()
         provider_data = fast_providers.get(active, {}) if isinstance(fast_providers, dict) else {}
@@ -100,8 +100,8 @@ class SettingsService:
         if not isinstance(saved, dict):
             saved = {}
         if "extraction_mode" in body:
-            mode = str(body.get("extraction_mode", "") or "fast").strip().lower()
-            if mode not in {"fast", "agent"}:
+            mode = str(body.get("extraction_mode", "") or "agent").strip().lower()
+            if mode not in {"agent"}:
                 raise ValueError("settings_validation_failed: pipeline.extraction_mode")
             saved["extraction_mode"] = mode
         if "mineru_api_key" in body:

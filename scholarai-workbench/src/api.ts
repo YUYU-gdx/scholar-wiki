@@ -229,12 +229,6 @@ export const api = {
         body: JSON.stringify({ query, library_id: libraryId, top_k: topK, levels, keyword_weight: keywordWeight, rag_weight: ragWeight }),
       });
     },
-    importPaper(manifestPath: string, libraryId: string, options?: Record<string, unknown>): Promise<Record<string, unknown>> {
-      return jsonFetch('/literature/import', {
-        method: 'POST',
-        body: JSON.stringify({ manifest_path: manifestPath, library_id: libraryId, options: options || {} }),
-      });
-    },
   },
 
   zotero: {

@@ -11,7 +11,6 @@ from typing import Any, Protocol
 
 from kn_graph.providers.registry import ProviderRegistry
 from kn_graph._compat import bundle_root
-from kn_graph.services.extraction_pipeline import run as run_extraction_mvp, NullLLMClient
 from kn_graph.services.graph_builder import _build_artifact_from_sqlite, run_build_from_artifact
 from kn_graph.services.import_sqlite import main_inline as _import_sqlite_main_inline
 from kn_graph.services.locking import LibraryLock, file_write_lock, atomic_write_json
@@ -486,29 +485,6 @@ def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore,
     return meta
 
 
-def _build_llm_client(options: dict[str, Any]) -> Any:
-    provider = str(options.get("llm_provider", "")).strip().lower() or None
-    model = str(options.get("llm_model", "")).strip() or None
-    provider_options = {
-        "api_key_env": str(options.get("llm_api_key_env", "")).strip() or None,
-        "base_url": str(options.get("llm_base_url", "")).strip() or None,
-        "api_key": str(options.get("llm_api_key", "")).strip() or None,
-        "timeout_seconds": options.get("llm_timeout_seconds"),
-        "temperature": options.get("llm_temperature"),
-        "max_tokens": options.get("llm_max_tokens"),
-        "max_retries": options.get("llm_max_retries"),
-    }
-    provider_options = {k: v for k, v in provider_options.items() if v not in (None, "")}
-    try:
-        registry = ProviderRegistry()
-        return registry.create_extraction_client(
-            provider=provider,
-            model=model,
-            options=provider_options,
-        )
-    except Exception:
-        return NullLLMClient()
-
 
 def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path, store: JobStore, options: dict[str, Any]) -> dict[str, Any]:
     """Run extraction via agent (Codex/Claude Code/Gemini CLI) with scholarly-paper-extraction skill."""
@@ -736,7 +712,7 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
         _merge_zotero_into_paper_record(raw_record, options)
     raw_output_path.write_text(json.dumps(raw_record, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    # Build compatible payload for _run_finalize
+    # Build compatible payload for finalize step
     summary = {
         "seen": 1,
         "class_a_used": 1,
@@ -760,67 +736,6 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     }
     # Overwrite extract_result.json with the pipeline-compatible payload format
     (extract_dir / "extract_result.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    _stage_update(store, job_id, "extract_entities", 90, "stage_done", status="running")
-    _touch_marker(run_dir, "extract_entities")
-    return payload
-
-
-def _run_extract_entities(job_id: str, parse_meta: dict[str, Any], run_dir: Path, store: JobStore, options: dict[str, Any]) -> dict[str, Any]:
-    mode = str(options.get("extraction_mode", "fast") or "fast").strip().lower()
-    if mode == "agent":
-        return _run_agent_extraction(job_id, parse_meta, run_dir, store, options)
-    return _run_extract_entities_fast(job_id, parse_meta, run_dir, store, options)
-
-
-def _run_extract_entities_fast(job_id: str, parse_meta: dict[str, Any], run_dir: Path, store: JobStore, options: dict[str, Any]) -> dict[str, Any]:
-    _stage_update(store, job_id, "extract_entities", 55, "stage_started", status="running")
-    if _is_cancel_requested(store, job_id):
-        store.update_job(job_id, {"status": "cancelled", "last_event": "cancelled", "stage": "extract_entities"})
-        raise RuntimeError("job_cancelled")
-
-    html_path = Path(str(parse_meta.get("html_path", "")))
-    if not html_path.exists():
-        raise RuntimeError(f"missing_html_for_extraction:{html_path}")
-
-    extract_dir = run_dir / "extract"
-    extract_dir.mkdir(parents=True, exist_ok=True)
-    raw_output_path = extract_dir / "raw_llm_outputs.jsonl"
-    review_queue_path = extract_dir / "review_queue.jsonl"
-    report_path = extract_dir / "acceptance_report.md"
-
-    row = {"paper_id": job_id, "doi": f"job::{job_id}", "html": html_path.read_text(encoding="utf-8", errors="ignore")}
-    client = _build_llm_client(options)
-    artifacts = run_extraction_mvp(
-        [row],
-        sample_size=1,
-        llm_client=client,
-        project_root=Path.cwd(),
-        review_queue_jsonl=review_queue_path,
-        report_output_path=report_path,
-        raw_output_jsonl=raw_output_path,
-    )
-    summary = artifacts.summary.to_dict()
-    payload = {
-        "summary": summary,
-        "metrics": artifacts.metrics,
-        "report_path": str(report_path),
-        "raw_output_jsonl": str(raw_output_path),
-        "review_queue_jsonl": str(review_queue_path),
-    }
-    (extract_dir / "extract_result.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    # Merge Zotero metadata into the raw extraction records
-    if options.get("_zotero_source") and raw_output_path.exists():
-        merged_lines: list[str] = []
-        with open(raw_output_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                rec = json.loads(line)
-                _merge_zotero_into_paper_record(rec, options)
-                merged_lines.append(json.dumps(rec, ensure_ascii=False))
-        if merged_lines:
-            raw_output_path.write_text("\n".join(merged_lines) + "\n", encoding="utf-8")
     _stage_update(store, job_id, "extract_entities", 90, "stage_done", status="running")
     _touch_marker(run_dir, "extract_entities")
     return payload
@@ -1103,228 +1018,6 @@ def _run_finalize_after_import_locked(
             lib_lock.release()
 
 
-def _run_finalize(
-    job_id: str,
-    input_pdf: Path,
-    parse_meta: dict[str, Any],
-    extract_result: dict[str, Any],
-    run_dir: Path,
-    store: JobStore,
-    options: dict[str, Any],
-) -> dict[str, Any]:
-    _stage_update(store, job_id, "finalize", 95, "stage_started", status="running")
-    if _is_cancel_requested(store, job_id):
-        store.update_job(job_id, {"status": "cancelled", "last_event": "cancelled", "stage": "finalize"})
-        raise RuntimeError("job_cancelled")
-
-    library_id = str(options.get("library_id", "") or "").strip()
-    workspace_path = str(options.get("_workspace_path", "") or "").strip()
-    if not workspace_path:
-        workspace_path = _resolve_workspace_for_library(library_id)
-    lib_lock = LibraryLock(workspace_path) if workspace_path else None
-    import_result: dict[str, Any] = {}
-    import_warning = ""
-    graph_output_path = ""
-    concept_index_result: dict[str, Any] = {}
-    concept_index_warning = ""
-    graph_updated = False
-    graph_output_size = 0
-    if library_id:
-        try:
-            _stage_update(store, job_id, "finalize", 97, "stage_progress", status="running")
-            from kn_graph.services.literature_service import LiteratureService
-            literature = LiteratureService(settings=_pipeline_settings)
-            manifest_path = run_dir / "import_manifest.jsonl"
-            paper_id = str(options.get("paper_id", "") or f"job::{job_id}").strip()
-            doi = str(options.get("doi", "") or f"job::{job_id}").strip()
-            title = str(options.get("title", "") or input_pdf.stem or job_id).strip()
-            if not options.get("title") and not options.get("doi"):
-                md_title = _extract_title_from_parsed_md(parse_meta)
-                if md_title:
-                    title = md_title
-            parsed_html = parse_meta.get("html_path", "") or ""
-            preparsed_mineru_dir = str((run_dir / "parse" / "mineru_zip_unpacked").resolve())
-            row = {
-                "paper_id": paper_id,
-                "doi": doi,
-                "title": title,
-                "offline_html_path": str(parsed_html),
-                "source_path": str(input_pdf.resolve()),
-                "preparsed_main_md_path": str(parse_meta.get("markdown_path", "") or ""),
-                "preparsed_html_path": str(parse_meta.get("html_path", "") or ""),
-                "preparsed_zip_path": str(parse_meta.get("zip_path", "") or ""),
-                "preparsed_mineru_dir": preparsed_mineru_dir,
-            }
-            manifest_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-            import_result = _retry_on_transient(
-                lambda: literature.import_manifest(manifest_path=manifest_path, options={"library_id": library_id}),
-                store=store, job_id=job_id, stage="finalize",
-            )
-            workspace_path = str(import_result.get("workspace_path", "") or workspace_path)
-        except Exception as exc:
-            import_warning = str(exc)
-            raise RuntimeError(f"import_failed:{import_warning}") from exc
-    else:
-        raise RuntimeError("import_failed:library_id_missing")
-
-    imported_count = int(import_result.get("imported_count", 0) or 0)
-    if imported_count <= 0:
-        raise RuntimeError("import_noop:imported_count_is_zero")
-
-    # ── Persist paper metadata to SQLite from import result ──
-    graph_warning = ""
-    graph_output_path = ""
-    graph_updated = False
-    graph_output_size = 0
-    if workspace_path:
-        try:
-            import sqlite3 as _sqlite3
-            import json as _json
-            db_path = Path(workspace_path) / "kn_gragh.db"
-            conn = _sqlite3.connect(str(db_path))
-            repo = SqliteRepo(conn)
-            repo.apply_schema()
-
-            mats = import_result.get("materialized_papers", []) or []
-            mat0 = mats[0] or {} if mats else {}
-            mat_paper_key = str(mat0.get("paper_key", "")).strip()
-            mat_pdf_path = str(mat0.get("source_pdf_path", "") or "")
-            mat_md_path = _resolve_materialized_md_path(mat0)
-            mat_html_path = str(mat0.get("html_path", "") or "")
-            sqlite_import_succeeded = False
-
-            # Import extraction results into SQLite first (writes paper metadata + variables)
-            raw_jsonl = run_dir / "extract" / "raw_llm_outputs.jsonl"
-            if raw_jsonl.exists():
-                # Align extraction paper_id with the materialized paper_key from import
-                # so extraction data and file paths reference the same paper record.
-                mats_list = import_result.get("materialized_papers", []) or []
-                mat_paper_key = str((mats_list[0] or {}).get("paper_key", "") if mats_list else "").strip()
-                if mat_paper_key:
-                    fixed_path = run_dir / "extract" / "raw_llm_outputs_fixed.jsonl"
-                    with open(raw_jsonl, "r", encoding="utf-8") as fin, open(str(fixed_path), "w", encoding="utf-8") as fout:
-                        for line in fin:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            obj = json.loads(line)
-                            obj["paper_id"] = mat_paper_key
-                            fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-                    raw_jsonl = fixed_path
-                _stage_update(store, job_id, "finalize", 98, "importing_to_sqlite", status="running")
-                _retry_on_transient(
-                    lambda: _import_sqlite_main_inline(
-                        db_path=str(db_path), raw_output_jsonl=raw_jsonl, apply_schema=False,
-                        source_pdf_path=mat_pdf_path, source_md_path=mat_md_path,
-                        source_html_path=mat_html_path,
-                    ),
-                    store=store, job_id=job_id, stage="finalize",
-                )
-                sqlite_import_succeeded = True
-            if sqlite_import_succeeded:
-                concept_index_result, concept_index_warning = _sync_variable_concept_index(
-                    workspace_path=workspace_path,
-                    library_id=library_id,
-                    db_path=db_path,
-                    materialized_papers=[m for m in mats if isinstance(m, dict)],
-                )
-            # Write paper file paths (UPDATE to preserve extraction metadata)
-            cur = conn.cursor()
-            for m in mats:
-                if not isinstance(m, dict):
-                    continue
-                pid = str(m.get("paper_id", "") or m.get("paper_key", "") or "").strip()
-                if not pid:
-                    continue
-                meta_path = Path(str(m.get("meta_path", "") or ""))
-                meta = {}
-                if meta_path.exists():
-                    try:
-                        meta = _json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
-                    except Exception:
-                        meta = {}
-                if not isinstance(meta, dict):
-                    meta = {}
-                # Use UPDATE to avoid clearing extraction fields (extractability etc.)
-                cur.execute(
-                    """UPDATE papers SET offline_html_path = ?, source_pdf_path = ?, source_md_path = ?,
-                       source_html_path = ?, metadata_source = ?
-                       WHERE paper_id = ?""",
-                    (
-                        str(m.get("html_path", "") or ""),
-                        str(m.get("source_pdf_path", "") or ""),
-                        _resolve_materialized_md_path(m),
-                        str(m.get("html_path", "") or ""),
-                        "literature_import",
-                        pid,
-                    ),
-                )
-            conn.commit()
-            conn.close()
-            # Always rebuild graph_views — paper metadata is now in SQLite
-            _stage_update(store, job_id, "finalize", 99, "building_graph_views", status="running")
-            artifact = _build_artifact_from_sqlite(db_path)
-            views_out = Path(workspace_path) / "graph_views.json"
-            _retry_on_transient(
-                lambda: run_build_from_artifact(artifact, views_out),
-                store=store, job_id=job_id, stage="finalize",
-            )
-            graph_output_path = str(views_out.resolve())
-            graph_updated = views_out.exists()
-            if graph_updated:
-                graph_output_size = views_out.stat().st_size
-        except Exception as exc:
-            raise RuntimeError(f"finalize_failed:{exc}") from exc
-
-    keep_intermediates = bool(options.get("retain_job_intermediates", False))
-    cleanup = _cleanup_redundant_job_files(
-        input_pdf=input_pdf,
-        run_dir=run_dir,
-        keep_intermediates=keep_intermediates,
-    )
-
-    purge_job_workspace = bool(options.get("purge_job_workspace", True))
-    result = {
-        "job_id": job_id,
-        "run_dir": str(run_dir),
-        "library_id": library_id,
-        "workspace_path": workspace_path,
-        "parse": parse_meta,
-        "extract": extract_result,
-        "import_result": import_result,
-        "import_warning": import_warning,
-        "graph_warning": graph_warning,
-        "concept_index_result": concept_index_result,
-        "concept_index_warning": concept_index_warning,
-        "imported_paper_count": imported_count,
-        "graph_updated": bool(graph_updated),
-        "graph_output_path": graph_output_path,
-        "graph_output_size": int(graph_output_size),
-        "cleanup": cleanup,
-        "purge_job_workspace": {"enabled": purge_job_workspace},
-        "final_verdict": "success",
-        "finished_at": _now_iso(),
-    }
-    out_path = run_dir / "result.json"
-    out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    store.update_job(
-        job_id,
-        {
-            "status": "completed",
-            "stage": "finalize",
-            "progress": 100,
-            "output_path": str(out_path),
-            "result_json": _safe_json_dumps(result),
-            "last_event": "completed",
-        },
-    )
-    purge = _purge_job_workspace(run_dir=run_dir, enabled=purge_job_workspace)
-    if purge.get("purged"):
-        store.update_job(job_id, {"output_path": "", "result_json": _safe_json_dumps({**result, "purge_job_workspace": purge})})
-    else:
-        store.update_job(job_id, {"result_json": _safe_json_dumps({**result, "purge_job_workspace": purge})})
-    return result
-
 
 _pipeline_settings: Any = None
 
@@ -1391,7 +1084,7 @@ def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
 
     # extraction_mode
     if not str(out.get("extraction_mode", "") or "").strip():
-        val = str(getattr(settings, "pipeline_extraction_mode", "fast") or "fast").strip()
+        val = str(getattr(settings, "pipeline_extraction_mode", "agent") or "agent").strip()
         out["extraction_mode"] = val
 
     # pipeline_agent_backend
@@ -1452,62 +1145,46 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
             parse_meta = json.loads(pm_path.read_text(encoding="utf-8")) if pm_path.exists() else {}
         else:
             parse_meta = _run_parse_pdf(job_id, input_pdf, run_dir, job_store, options)
-        mode = str(options.get("extraction_mode", "fast") or "fast").strip().lower()
-        if mode == "agent":
-            if "materialize_paper" in checkpoint:
-                workspace_path = str(cp_meta.get("workspace_path", "") or "").strip()
-                library_id = str(cp_meta.get("library_id", "") or "").strip()
-                import_result = {"imported_count": 1, "workspace_path": workspace_path, "library_id": library_id, "materialized_papers": []}
-                imported_count = 1
-            else:
-                import_result, workspace_path, library_id = _run_materialize_import(
-                    job_id=job_id,
-                    input_pdf=input_pdf,
-                    parse_meta=parse_meta,
-                    run_dir=run_dir,
-                    store=job_store,
-                    options=options,
-                )
-                imported_count = int(import_result.get("imported_count", 0) or 0)
-                if imported_count <= 0:
-                    raise RuntimeError("import_noop:imported_count_is_zero")
-            mats = import_result.get("materialized_papers", []) or []
-            mat0 = mats[0] if isinstance(mats, list) and mats else {}
-            materialized_md_path = _resolve_materialized_md_path(mat0 if isinstance(mat0, dict) else {})
-            options = dict(options)
-            options["_workspace_path"] = workspace_path
-            options["_materialized_md_path"] = materialized_md_path
-            if "extract_entities" in checkpoint:
-                extract_result = json.loads((run_dir / "extract" / "extract_result.json").read_text(encoding="utf-8"))
-            else:
-                extract_result = _run_agent_extraction(job_id, parse_meta, run_dir, job_store, options)
-            _run_finalize_after_import_locked(
+        if "materialize_paper" in checkpoint:
+            workspace_path = str(cp_meta.get("workspace_path", "") or "").strip()
+            library_id = str(cp_meta.get("library_id", "") or "").strip()
+            import_result = {"imported_count": 1, "workspace_path": workspace_path, "library_id": library_id, "materialized_papers": []}
+            imported_count = 1
+        else:
+            import_result, workspace_path, library_id = _run_materialize_import(
                 job_id=job_id,
                 input_pdf=input_pdf,
                 parse_meta=parse_meta,
-                extract_result=extract_result,
                 run_dir=run_dir,
                 store=job_store,
                 options=options,
-                import_result=import_result,
-                workspace_path=workspace_path,
-                library_id=library_id,
-                imported_count=imported_count,
             )
+            imported_count = int(import_result.get("imported_count", 0) or 0)
+            if imported_count <= 0:
+                raise RuntimeError("import_noop:imported_count_is_zero")
+        mats = import_result.get("materialized_papers", []) or []
+        mat0 = mats[0] if isinstance(mats, list) and mats else {}
+        materialized_md_path = _resolve_materialized_md_path(mat0 if isinstance(mat0, dict) else {})
+        options = dict(options)
+        options["_workspace_path"] = workspace_path
+        options["_materialized_md_path"] = materialized_md_path
+        if "extract_entities" in checkpoint:
+            extract_result = json.loads((run_dir / "extract" / "extract_result.json").read_text(encoding="utf-8"))
         else:
-            if "extract_entities" in checkpoint:
-                extract_result = json.loads((run_dir / "extract" / "extract_result.json").read_text(encoding="utf-8"))
-            else:
-                extract_result = _run_extract_entities(job_id, parse_meta, run_dir, job_store, options)
-            _finalize_ws = str(options.get("_workspace_path", "") or "").strip() or _resolve_workspace_for_library(str(options.get("library_id", "") or "").strip())
-            _finalize_lock = LibraryLock(_finalize_ws) if _finalize_ws else None
-            if _finalize_lock:
-                _finalize_lock.acquire()
-            try:
-                _run_finalize(job_id, input_pdf, parse_meta, extract_result, run_dir, job_store, options)
-            finally:
-                if _finalize_lock:
-                    _finalize_lock.release()
+            extract_result = _run_agent_extraction(job_id, parse_meta, run_dir, job_store, options)
+        _run_finalize_after_import_locked(
+            job_id=job_id,
+            input_pdf=input_pdf,
+            parse_meta=parse_meta,
+            extract_result=extract_result,
+            run_dir=run_dir,
+            store=job_store,
+            options=options,
+            import_result=import_result,
+            workspace_path=workspace_path,
+            library_id=library_id,
+            imported_count=imported_count,
+        )
     except Exception as exc:
         if "job_cancelled" in str(exc):
             job_store.update_job(

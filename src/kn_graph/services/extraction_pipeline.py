@@ -21,12 +21,6 @@ class LLMClient(Protocol):
     def complete(self, user_content: str, system_prompt: str | None = None) -> str: ...
 
 
-class NullLLMClient:
-    def complete(self, user_content: str, system_prompt: str | None = None) -> str:
-        _ = user_content, system_prompt
-        raise RuntimeError("LLM client not configured.")
-
-
 @dataclass(slots=True, eq=True)
 class RunSummary:
     seen: int
@@ -66,7 +60,9 @@ def run(
     if sample_size < 0:
         raise ValueError("sample_size must be non-negative")
 
-    llm = llm_client or NullLLMClient()
+    if llm_client is None:
+        raise RuntimeError("extraction_pipeline: llm_client is required")
+    llm = llm_client
     root = Path(project_root) if project_root is not None else Path.cwd()
 
     seen = 0

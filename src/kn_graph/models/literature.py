@@ -53,14 +53,6 @@ class LiteratureAnswerResponse(BaseModel):
     degraded_reason: str = ""
 
 
-class LiteratureImportRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    manifest_path: str = ""
-    library_id: str = ""
-    options: dict[str, Any] = {}
-
-
 class LiteratureCreateLibraryRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

@@ -7,8 +7,8 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 import SelectionActionPopover from './SelectionActionPopover';
 import { api } from '../../api';
-import { ensureMarkdownPathForNotes, mergeNotesIntoMarkdown, setRecordedNotesMarkdownPath, upsertNoteInMarkdown, addNoteToMarkdownByOccurrence } from './NoteMarkdownSync';
-import { loadContentList, findTouchedBlocks, getBlocksQuote, countOccurrencesUpTo } from './ContentListResolver';
+import { ensureMarkdownPathForNotes, mergeNotesIntoMarkdown, setRecordedNotesMarkdownPath, upsertNoteInMarkdown } from './NoteMarkdownSync';
+import { loadContentList, findTouchedBlocks, getBlocksQuote } from './ContentListResolver';
 import type { ContentBlock } from './ContentListResolver';
 import type { PaperFiles } from '../../types';
 import { isSelectionInside } from './selectionScope';
@@ -227,66 +227,27 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     try {
       const contentPages = contentListRef.current;
 
+      // ── Block-based quote: expand selection to full blocks, clean, then match like case 1 ──
+      let quote = picked;
       if (contentPages && pageIndex >= 0 && pageIndex < contentPages.length) {
-        // ── Occurrence-based anchoring via content_list_v2.json ──
         const pageBlocks = contentPages[pageIndex];
         const touched = findTouchedBlocks(pageBlocks, picked);
-
         if (touched) {
-          const { quote, anchor } = getBlocksQuote(pageBlocks, touched.startIdx, touched.endIdx);
-          const occurrence = countOccurrencesUpTo(contentPages, pageIndex, touched.endIdx, anchor);
-          // eslint-disable-next-line no-console
-          console.log('[notes] block anchoring', { pageIndex, startIdx: touched.startIdx, endIdx: touched.endIdx, quoteLen: quote.length, anchorLen: anchor.length, occurrence });
-
-          // Ensure markdown file exists (without writing a note)
-          if (markdownPath) setRecordedNotesMarkdownPath(libraryId, paperId, markdownPath);
-          const filesStub: PaperFiles = {
-            paper_id: paperId,
-            library_id: libraryId,
-            files: {
-              markdown: markdownPath ? { path: markdownPath, name: 'notes.md', size_bytes: 0 } : undefined,
-              pdf: undefined,
-              html: undefined,
-            },
-            default_view: 'markdown',
-            content_list_v2_path: contentListV2Path,
-          };
-          if (!filesStub.files.markdown && sourcePath) {
-            filesStub.files.pdf = { path: sourcePath, name: fileName, size_bytes: 0 };
-          }
-          const ensured = await ensureMarkdownPathForNotes(filesStub, paperId);
-          if (markdownPath && ensured && markdownPath !== ensured) {
-            await mergeNotesIntoMarkdown(markdownPath, ensured);
-          }
-          const effectivePath = ensured || markdownPath;
-
-          if (effectivePath) {
-            const result = await addNoteToMarkdownByOccurrence(
-              effectivePath,
-              noteId,
-              quote,
-              noteText,
-              anchor,
-              occurrence,
-            );
-            if (result.ok) {
-              setRecordedNotesMarkdownPath(libraryId, paperId, effectivePath);
-              // eslint-disable-next-line no-console
-              console.log('[notes] pdf save done (occ)', { path: effectivePath, occurrence });
-              window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
-              setSelectionUI((p) => ({ ...p, visible: false }));
-              return;
-            }
+          const full = getBlocksQuote(pageBlocks, touched.startIdx, touched.endIdx);
+          // Clean: strip leading/trailing whitespace/newlines, normalize inner whitespace
+          const cleaned = full.quote.replace(/^[\s\n\r]+|[\s\n\r]+$/g, '').replace(/\s+/g, ' ').trim();
+          if (cleaned) {
+            quote = cleaned;
+            // eslint-disable-next-line no-console
+            console.log('[notes] block quote expanded', { pageIndex, startIdx: touched.startIdx, endIdx: touched.endIdx, origLen: picked.length, quoteLen: quote.length });
           }
         }
       }
 
-      // ── Fallback: old text-match-based anchoring ──
+      // ── Standard path: same as case 1 (MD manual selection) ──
+      const ensuredPath = await appendMdNoteByAnchor(noteId, quote, noteText);
       // eslint-disable-next-line no-console
-      console.log('[notes] falling back to text-match anchoring');
-      const ensuredPath = await appendMdNoteByAnchor(noteId, picked, noteText);
-      // eslint-disable-next-line no-console
-      console.log('[notes] pdf save done (fallback)', { ensuredPath });
+      console.log('[notes] pdf save done', { ensuredPath, quoteLen: quote.length });
       window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
       setSelectionUI((p) => ({ ...p, visible: false }));
     } catch (e) {

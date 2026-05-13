@@ -36,7 +36,6 @@ from kn_graph.models.chat import (
 from kn_graph.models.literature import (
     LiteratureAnswerRequest,
     LiteratureAnswerResponse,
-    LiteratureImportRequest,
     LiteratureLibrary,
     LiteratureSearchResponse,
     LiteratureSearchParams,
@@ -90,7 +89,6 @@ __all__ = [
     "SendMessageResponse",
     "LiteratureAnswerRequest",
     "LiteratureAnswerResponse",
-    "LiteratureImportRequest",
     "LiteratureLibrary",
     "LiteratureSearchResponse",
     "LiteratureSearchParams",

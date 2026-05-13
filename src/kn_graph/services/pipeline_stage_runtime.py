@@ -68,41 +68,32 @@ def _handler_paper_extract(service: PipelineService, task: dict[str, Any], _shou
     _, options, input_pdf, run_dir = _load_job_context(service, job_id)
     task_input = task.get("input_json", {})
     parse_meta = task_input.get("parse_meta", {}) if isinstance(task_input, dict) else {}
-    mode = str(options.get("extraction_mode", "fast") or "fast").strip().lower()
-    if mode == "agent":
-        import_result, workspace_path, library_id = pipeline_runtime._run_materialize_import(
-            job_id=job_id,
-            input_pdf=input_pdf,
-            parse_meta=parse_meta,
-            run_dir=run_dir,
-            store=store,
-            options=options,
-        )
-        imported_count = int(import_result.get("imported_count", 0) or 0)
-        if imported_count <= 0:
-            raise RuntimeError("import_noop:imported_count_is_zero")
-        mats = import_result.get("materialized_papers", []) or []
-        mat0 = mats[0] if isinstance(mats, list) and mats else {}
-        materialized_md_path = pipeline_runtime._resolve_materialized_md_path(mat0 if isinstance(mat0, dict) else {})
-        options["_workspace_path"] = workspace_path
-        options["_materialized_md_path"] = materialized_md_path
-        extract_result = pipeline_runtime._run_agent_extraction(job_id, parse_meta, run_dir, store, options)
-        next_input = {
-            "parse_meta": parse_meta,
-            "extract_result": extract_result,
-            "import_result": import_result,
-            "workspace_path": workspace_path,
-            "library_id": library_id,
-            "imported_count": imported_count,
-            "agent_mode": True,
-        }
-    else:
-        extract_result = pipeline_runtime._run_extract_entities(job_id, parse_meta, run_dir, store, options)
-        next_input = {
-            "parse_meta": parse_meta,
-            "extract_result": extract_result,
-            "agent_mode": False,
-        }
+    import_result, workspace_path, library_id = pipeline_runtime._run_materialize_import(
+        job_id=job_id,
+        input_pdf=input_pdf,
+        parse_meta=parse_meta,
+        run_dir=run_dir,
+        store=store,
+        options=options,
+    )
+    imported_count = int(import_result.get("imported_count", 0) or 0)
+    if imported_count <= 0:
+        raise RuntimeError("import_noop:imported_count_is_zero")
+    mats = import_result.get("materialized_papers", []) or []
+    mat0 = mats[0] if isinstance(mats, list) and mats else {}
+    materialized_md_path = pipeline_runtime._resolve_materialized_md_path(mat0 if isinstance(mat0, dict) else {})
+    options["_workspace_path"] = workspace_path
+    options["_materialized_md_path"] = materialized_md_path
+    extract_result = pipeline_runtime._run_agent_extraction(job_id, parse_meta, run_dir, store, options)
+    next_input = {
+        "parse_meta": parse_meta,
+        "extract_result": extract_result,
+        "import_result": import_result,
+        "workspace_path": workspace_path,
+        "library_id": library_id,
+        "imported_count": imported_count,
+        "agent_mode": True,
+    }
     _enqueue_next(service, job_id=job_id, stage="embedding", input_json=next_input)
     return next_input
 
@@ -116,22 +107,19 @@ def _handler_embedding(service: PipelineService, task: dict[str, Any], _should_s
         task_input = {}
     parse_meta = task_input.get("parse_meta", {}) if isinstance(task_input.get("parse_meta"), dict) else {}
     extract_result = task_input.get("extract_result", {}) if isinstance(task_input.get("extract_result"), dict) else {}
-    if bool(task_input.get("agent_mode")):
-        pipeline_runtime._run_finalize_after_import(
-            job_id=job_id,
-            input_pdf=input_pdf,
-            parse_meta=parse_meta,
-            extract_result=extract_result,
-            run_dir=run_dir,
-            store=store,
-            options=options,
-            import_result=task_input.get("import_result", {}) if isinstance(task_input.get("import_result"), dict) else {},
-            workspace_path=str(task_input.get("workspace_path", "") or ""),
-            library_id=str(task_input.get("library_id", "") or ""),
-            imported_count=int(task_input.get("imported_count", 0) or 0),
-        )
-    else:
-        pipeline_runtime._run_finalize(job_id, input_pdf, parse_meta, extract_result, run_dir, store, options)
+    pipeline_runtime._run_finalize_after_import(
+        job_id=job_id,
+        input_pdf=input_pdf,
+        parse_meta=parse_meta,
+        extract_result=extract_result,
+        run_dir=run_dir,
+        store=store,
+        options=options,
+        import_result=task_input.get("import_result", {}) if isinstance(task_input.get("import_result"), dict) else {},
+        workspace_path=str(task_input.get("workspace_path", "") or ""),
+        library_id=str(task_input.get("library_id", "") or ""),
+        imported_count=int(task_input.get("imported_count", 0) or 0),
+    )
     return {"finalized": True}
 
 
