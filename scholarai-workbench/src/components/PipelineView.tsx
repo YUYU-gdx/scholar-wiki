@@ -467,7 +467,7 @@ export default function PipelineView() {
         </button>
       </div>
 
-      <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-hidden glass-shadow mb-8">
+      <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-visible glass-shadow mb-8">
         <div className="p-4 bg-surface-container-lowest border-b border-outline-variant flex items-center gap-3">
           <CloudUpload className="w-5 h-5 text-secondary" />
           <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono">上传 PDF</h3>

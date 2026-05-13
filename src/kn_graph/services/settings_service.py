@@ -356,7 +356,7 @@ class SettingsService:
             "pipeline_skill": Path("skills/templates/scholarly-paper-extraction/SKILL.md"),
             "qa_skill": Path("skills/templates/answer_library_question/SKILL.md"),
             "claude_md": Path("skills/templates/agent-docs/CLAUDE.md"),
-            "agent_md": Path("skills/templates/agent-docs/AGENTS.md"),
+            "agent_md": Path("skills/templates/agent-docs/CLAUDE.md"),
         }
         rel = mapping.get(key)
         if rel is None:
@@ -364,11 +364,6 @@ class SettingsService:
         path = root / rel
         if key == "claude_md" and not path.exists():
             legacy = root / "CLAUDE.md"
-            if legacy.exists():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
-        if key == "agent_md" and not path.exists():
-            legacy = root / "AGENTS.md"
             if legacy.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")

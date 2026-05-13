@@ -123,3 +123,20 @@ def test_settings_api_agent_md_uses_template_path(tmp_path: Path) -> None:
             json={"content": original},
         )
         assert restore_resp.status_code == 200, restore_resp.text
+
+
+def test_settings_api_agent_md_shares_claude_template_path(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path)
+    svc = SettingsService(settings, _FakeChatService())  # type: ignore[arg-type]
+    app = FastAPI()
+    app.include_router(settings_router.create_router(svc))
+    client = TestClient(app)
+
+    a = client.get("/settings/agent-templates/claude_md")
+    b = client.get("/settings/agent-templates/agent_md")
+    assert a.status_code == 200, a.text
+    assert b.status_code == 200, b.text
+    pa = str(a.json().get("path", "")).replace("\\", "/")
+    pb = str(b.json().get("path", "")).replace("\\", "/")
+    assert pa.endswith("/skills/templates/agent-docs/CLAUDE.md")
+    assert pb == pa

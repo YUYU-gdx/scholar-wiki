@@ -80,20 +80,17 @@ def _copy_single_skill(src: Path, target: Path) -> None:
 
 
 def _sync_workspace_agent_docs(workspace: Path) -> None:
-    """Sync CLAUDE.md/AGENTS.md into workspace at the same time as skills."""
+    """Sync CLAUDE.md/AGENTS.md from a single template source."""
     docs_root = _agent_docs_template_root()
-    mapping = {
-        "CLAUDE.md": docs_root / "CLAUDE.md",
-        "AGENTS.md": docs_root / "AGENTS.md",
-    }
-    for name, template_path in mapping.items():
-        source = template_path
-        if not source.exists():
-            legacy = _repo_root() / name
-            if legacy.exists():
-                source = legacy
-        if not source.exists():
-            continue
+    source = docs_root / "CLAUDE.md"
+    if not source.exists():
+        legacy = _repo_root() / "CLAUDE.md"
+        if legacy.exists():
+            source = legacy
+    if not source.exists():
+        return
+
+    for name in ("CLAUDE.md", "AGENTS.md"):
         target = workspace / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
