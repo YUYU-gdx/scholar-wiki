@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -723,33 +723,36 @@ def _public_job_payload(job: dict[str, Any]) -> dict[str, Any]:
                 out[key[:-5]] = json.loads(raw)
             except Exception:
                 out[key[:-5]] = raw
+
     stage = str(out.get("stage", "") or "").strip().lower()
     stage_label_map = {
         "accepted": "排队中",
         "mineru_parse": "解析中",
+        "materialize_paper": "文献向量化中",
         "paper_extract": "实体抽取中",
         "embedding": "向量构建中",
         "parse_pdf": "解析中",
         "extract_entities": "实体抽取中",
         "finalize": "入库与索引中",
     }
+
     status = str(out.get("status", "") or "").strip().lower()
-    # UX rule: only completed jobs may show 100%.
     try:
-        p = int(out.get("progress", 0) or 0)
+        progress = int(out.get("progress", 0) or 0)
     except Exception:
-        p = 0
+        progress = 0
+    progress = min(100, max(0, progress))
     if status != "completed":
-        p = min(99, max(0, p))
-    else:
-        p = min(100, max(0, p))
-    out["progress"] = p
+        progress = min(99, progress)
+    out["progress"] = progress
+
     base_label = stage_label_map.get(stage, stage or "")
     if status == "completed":
         base_label = "完成"
     elif status == "failed":
         failed_label_map = {
             "mineru_parse": "解析失败",
+            "materialize_paper": "文献向量化失败",
             "paper_extract": "抽取失败",
             "embedding": "向量构建失败",
             "parse_pdf": "解析失败",
@@ -759,6 +762,7 @@ def _public_job_payload(job: dict[str, Any]) -> dict[str, Any]:
         base_label = failed_label_map.get(stage, f"{base_label}失败" if base_label else "失败")
     elif status == "cancelled":
         base_label = f"{base_label}已取消" if base_label else "已取消"
+
     display_name = str(out.get("file_name", "") or "").strip() or str(out.get("job_id", "") or "").strip()
     out["display_name"] = display_name
     out["status_code"] = status
@@ -766,6 +770,7 @@ def _public_job_payload(job: dict[str, Any]) -> dict[str, Any]:
     out["stage_label"] = base_label
     out["can_cancel"] = status in {"queued", "running"}
     out["can_retry"] = status in {"failed", "cancelled"}
+
     result_obj = out.get("result")
     if isinstance(result_obj, dict):
         out["final_verdict"] = str(result_obj.get("final_verdict", "") or "")
@@ -1136,3 +1141,4 @@ class PipelineService:
             "done": done,
             "total": total,
         }
+

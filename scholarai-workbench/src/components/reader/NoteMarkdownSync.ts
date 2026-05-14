@@ -18,7 +18,19 @@ function normalizeForMatch(s: string): string {
 function findReaderNoteBlockEnd(src: string, start: number): number {
   const marker = '> [!NOTE] Reader Note';
   const next = src.indexOf(marker, start + marker.length);
-  return next >= 0 ? next : src.length;
+  const upperBound = next >= 0 ? next : src.length;
+  const seg = src.slice(start, upperBound);
+  const m = seg.match(/\n>\s*Time:\s*\n>\s*[^\n]+\s*(?:\n|$)/);
+  if (m && typeof m.index === 'number') {
+    return start + m.index + m[0].length;
+  }
+  return upperBound;
+}
+
+function toQuotedLines(value: string): string {
+  const normalized = String(value || '').replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+  return lines.map((line) => `> ${line}`).join('\n');
 }
 
 function buildAnchorCandidates(anchorText: string, quote: string): string[] {
@@ -145,7 +157,9 @@ export function buildNoteBlock(
   const pageLine = opts?.pageIndex != null && opts.pageIndex >= 0 ? `>\n> Page: ${opts.pageIndex}\n` : '';
   const rectLine = opts?.rect ? `>\n> Rect: ${opts.rect}\n` : '';
   const quadsLine = opts?.quads ? `>\n> Quads: ${opts.quads}\n` : '';
-  return `\n\n> [!NOTE] Reader Note\n>\n> Note ID: ${id}\n${pageLine}${rectLine}${quadsLine}>\n> Quote:\n> ${String(quote || '').trim()}\n>\n> Note:\n> ${String(note || '').trim()}\n>\n> Time:\n> ${time}\n`;
+  const quoteLines = toQuotedLines(String(quote || ''));
+  const noteLines = toQuotedLines(String(note || ''));
+  return `\n\n> [!NOTE] Reader Note\n>\n> Note ID: ${id}\n${pageLine}${rectLine}${quadsLine}>\n> Quote:\n${quoteLines}\n>\n> Note:\n${noteLines}\n>\n> Time:\n> ${time}\n`;
 }
 
 export function extractNoteBlocks(raw: string): Array<{ id: string; start: number; end: number; text: string }> {

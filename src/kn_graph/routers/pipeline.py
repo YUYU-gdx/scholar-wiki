@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -53,6 +53,73 @@ def _now_iso() -> str:
 
 def create_router(pipeline_service: PipelineService) -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["pipeline"])
+
+    async def _retry_job_impl(job_id: str):
+        result = pipeline_service.retry_job(job_id)
+        if result is None:
+            row = pipeline_service.get_job(job_id)
+            if row is None:
+                return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
+
+            run_dir = pipeline_service.resolve_run_dir(row)
+            if run_dir and (run_dir / "parse_meta.json").exists():
+                source_path = pipeline_service.resolve_retry_source_pdf(row)
+                if source_path is None:
+                    return JSONResponse(status_code=404, content={"error": "retry_source_pdf_missing", "job_id": job_id})
+                raw_options = str(row.get("options_json", "") or "").strip()
+                parsed_options: dict[str, Any] = {}
+                if raw_options:
+                    try:
+                        parsed = json.loads(raw_options)
+                        if isinstance(parsed, dict):
+                            parsed_options = parsed
+                    except Exception:
+                        parsed_options = {}
+                parsed_options["_job_root"] = str(run_dir.parent)
+                parsed_options["library_id"] = str(row.get("library_id", "") or "").strip()
+                pipeline_service.update_job(job_id, {"status": "running", "stage": "accepted", "error_code": "", "error_detail": "", "progress": 0, "last_event": "retry_resume"})
+                from kn_graph.services.pipeline_runtime import dispatch_inline
+                dispatch_inline(
+                    pipeline_service.store, job_id,
+                    str(source_path.resolve()), parsed_options,
+                    pipeline_service.runs_root,
+                )
+                return JSONResponse(status_code=202, content={"job_id": job_id, "resumed": True})
+
+            source_path = pipeline_service.resolve_retry_source_pdf(row)
+            if source_path is None:
+                return JSONResponse(status_code=404, content={"error": "retry_source_pdf_missing", "job_id": job_id})
+            lib = str(row.get("library_id", "") or "").strip()
+            if not lib:
+                return JSONResponse(status_code=400, content={"error": "library_id_missing", "job_id": job_id})
+            raw_options = str(row.get("options_json", "") or "").strip()
+            parsed_options: dict[str, Any] = {}
+            if raw_options:
+                try:
+                    parsed = json.loads(raw_options)
+                    if isinstance(parsed, dict):
+                        parsed_options = parsed
+                except Exception:
+                    parsed_options = {}
+            parsed_options.pop("_job_root", None)
+            parsed_options.pop("_workspace_path", None)
+            with source_path.open("rb") as fp:
+                retry_upload = UploadFile(
+                    filename=str(row.get("file_name", "") or source_path.name),
+                    file=io.BytesIO(fp.read()),
+                )
+                created = await create_parse_extract_job(file=retry_upload, library_id=lib, options=json.dumps(parsed_options, ensure_ascii=False))
+            payload: dict[str, Any]
+            if isinstance(created.body, (bytes, bytearray)):
+                payload = json.loads(created.body.decode("utf-8"))
+            elif isinstance(created.body, str):
+                payload = json.loads(created.body)
+            else:
+                payload = {}
+            return JSONResponse(status_code=202, content={"source_job_id": job_id, "new_job": payload})
+        if isinstance(result, dict) and "error" in result and result.get("error") == "job_not_retryable":
+            return JSONResponse(status_code=400, content=result)
+        return result
 
     @router.get("/pipeline/health")
     async def pipeline_health():
@@ -274,74 +341,7 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
 
     @router.post("/jobs/{job_id}/retry")
     async def retry_job(job_id: str):
-        result = pipeline_service.retry_job(job_id)
-        if result is None:
-            row = pipeline_service.get_job(job_id)
-            if row is None:
-                return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
-
-            # Check if old run_dir still exists — if so, resume in-place (checkpoint restart)
-            run_dir = pipeline_service.resolve_run_dir(row)
-            if run_dir and (run_dir / "parse_meta.json").exists():
-                # In-place resume: reuse same job_id + run_dir, checkpoints auto-skip
-                source_path = pipeline_service.resolve_retry_source_pdf(row)
-                if source_path is None:
-                    return JSONResponse(status_code=404, content={"error": "retry_source_pdf_missing", "job_id": job_id})
-                raw_options = str(row.get("options_json", "") or "").strip()
-                parsed_options: dict[str, Any] = {}
-                if raw_options:
-                    try:
-                        parsed = json.loads(raw_options)
-                        if isinstance(parsed, dict):
-                            parsed_options = parsed
-                    except Exception:
-                        parsed_options = {}
-                parsed_options["_job_root"] = str(run_dir.parent)
-                parsed_options["library_id"] = str(row.get("library_id", "") or "").strip()
-                pipeline_service.update_job(job_id, {"status": "running", "stage": "accepted", "error_code": "", "error_detail": "", "progress": 0, "last_event": "retry_resume"})
-                from kn_graph.services.pipeline_runtime import dispatch_inline
-                dispatch_inline(
-                    pipeline_service.store, job_id,
-                    str(source_path.resolve()), parsed_options,
-                    pipeline_service.runs_root,
-                )
-                return JSONResponse(status_code=202, content={"job_id": job_id, "resumed": True})
-
-            source_path = pipeline_service.resolve_retry_source_pdf(row)
-            if source_path is None:
-                return JSONResponse(status_code=404, content={"error": "retry_source_pdf_missing", "job_id": job_id})
-            lib = str(row.get("library_id", "") or "").strip()
-            if not lib:
-                return JSONResponse(status_code=400, content={"error": "library_id_missing", "job_id": job_id})
-            raw_options = str(row.get("options_json", "") or "").strip()
-            parsed_options: dict[str, Any] = {}
-            if raw_options:
-                try:
-                    parsed = json.loads(raw_options)
-                    if isinstance(parsed, dict):
-                        parsed_options = parsed
-                except Exception:
-                    parsed_options = {}
-            parsed_options.pop("_job_root", None)
-            parsed_options.pop("_workspace_path", None)
-            with source_path.open("rb") as fp:
-                retry_upload = UploadFile(
-                    filename=str(row.get("file_name", "") or source_path.name),
-                    file=io.BytesIO(fp.read()),
-                )
-                created = await create_parse_extract_job(file=retry_upload, library_id=lib, options=json.dumps(parsed_options, ensure_ascii=False))
-            payload: dict[str, Any]
-            if isinstance(created.body, (bytes, bytearray)):
-                payload = json.loads(created.body.decode("utf-8"))
-            elif isinstance(created.body, str):
-                payload = json.loads(created.body)
-            else:
-                payload = {}
-            return JSONResponse(status_code=202, content={"source_job_id": job_id, "new_job": payload})
-        if isinstance(result, dict) and "error" in result:
-            if result.get("error") == "job_not_retryable":
-                return JSONResponse(status_code=400, content=result)
-        return result
+        return await _retry_job_impl(job_id)
 
     @router.delete("/jobs/{job_id}")
     async def delete_job(job_id: str):
@@ -358,15 +358,52 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             return JSONResponse(status_code=400, content={"error": "invalid_job_ids_json"})
         if not isinstance(parsed, list):
             return JSONResponse(status_code=400, content={"error": "job_ids_must_be_array"})
-        result = pipeline_service.batch_operate_jobs(action=action, job_ids=[str(x or "") for x in parsed])
-        if isinstance(result, dict) and result.get("error") == "invalid_action":
-            return JSONResponse(status_code=400, content=result)
-        if isinstance(result, dict) and result.get("error") == "job_ids_required":
-            return JSONResponse(status_code=400, content=result)
-        failure_count = int(result.get("failure_count", 0) or 0) if isinstance(result, dict) else 0
-        if failure_count > 0:
-            return JSONResponse(status_code=207, content=result)
-        return result
+        op = str(action or "").strip().lower()
+        clean_ids = [str(x or "").strip() for x in parsed if str(x or "").strip()]
+        if op not in {"cancel", "retry", "delete"}:
+            return JSONResponse(status_code=400, content={"error": "invalid_action", "action": op})
+        if not clean_ids:
+            return JSONResponse(status_code=400, content={"error": "job_ids_required"})
+
+        results: list[dict[str, Any]] = []
+        success_count = 0
+        for job_id in clean_ids:
+            if op == "cancel":
+                item = pipeline_service.cancel_job(job_id)
+                ok = isinstance(item, dict) and "error" not in item
+                payload = item if isinstance(item, dict) else {"job_id": job_id}
+            elif op == "delete":
+                item = pipeline_service.delete_job(job_id)
+                ok = isinstance(item, dict) and "error" not in item
+                payload = item if isinstance(item, dict) else {"error": "job_not_found", "job_id": job_id}
+            else:
+                resp = await _retry_job_impl(job_id)
+                status_code = int(getattr(resp, "status_code", 200) or 200) if hasattr(resp, "status_code") else 200
+                body = getattr(resp, "body", resp)
+                if isinstance(body, (bytes, bytearray)):
+                    payload = json.loads(body.decode("utf-8"))
+                elif isinstance(body, str):
+                    payload = json.loads(body)
+                elif isinstance(body, dict):
+                    payload = body
+                else:
+                    payload = {"job_id": job_id}
+                ok = status_code < 400 and "error" not in payload
+            payload["action"] = op
+            results.append(payload)
+            if ok:
+                success_count += 1
+
+        out = {
+            "action": op,
+            "total": len(clean_ids),
+            "success_count": success_count,
+            "failure_count": len(clean_ids) - success_count,
+            "results": results,
+        }
+        if out["failure_count"] > 0:
+            return JSONResponse(status_code=207, content=out)
+        return out
 
     @router.get("/jobs/{job_id}/events")
     async def stream_job_events(job_id: str):
@@ -420,3 +457,4 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
         return EventSourceResponse(event_generator())
 
     return router
+

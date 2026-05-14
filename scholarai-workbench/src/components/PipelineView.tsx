@@ -9,7 +9,7 @@ const STAGE_OPTIONS = [
   { value: '', label: '全部阶段' },
   { value: 'accepted', label: '已接受' },
   { value: 'parse_pdf', label: '解析 PDF' },
-  { value: 'materialize_paper', label: '实体化论文' },
+  { value: 'materialize_paper', label: '文献向量化中' },
   { value: 'extract_entities', label: '提取实体' },
   { value: 'finalize', label: '完成' },
 ] as const;

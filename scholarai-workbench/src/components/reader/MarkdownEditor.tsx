@@ -885,7 +885,11 @@ export default function MarkdownEditor({
 
       // Build note block
       const now = new Date().toISOString();
-      const block = `\n\n> [!NOTE] Reader Note\n> Note ID: ${noteId}\n> Quote:\n> ${picked}\n>\n> Note:\n> ${noteText}\n>\n> Time:\n> ${now}\n`;
+      const toQuotedLines = (value: string): string =>
+        String(value || '').replace(/\r\n/g, '\n').split('\n').map((x) => `> ${x}`).join('\n');
+      const quoteLines = toQuotedLines(picked);
+      const noteLines = toQuotedLines(noteText);
+      const block = `\n\n> [!NOTE] Reader Note\n> Note ID: ${noteId}\n> Quote:\n${quoteLines}\n>\n> Note:\n${noteLines}\n>\n> Time:\n> ${now}\n`;
       const src = String(read.data || '').replace(/\r\n/g, '\n');
 
       // Find insertion position: prefer text match (robust), fall back to line-based
