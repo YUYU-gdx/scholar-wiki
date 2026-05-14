@@ -72,16 +72,32 @@ function getRepoRoot() {
   return path.resolve(__dirname, "..", "..");
 }
 
+function getDefaultDataDir() {
+  const envDir = String(process.env.KN_GRAPH_DATA_DIR || "").trim();
+  if (envDir) return envDir;
+  if (process.platform === "win32") {
+    const base = process.env.LOCALAPPDATA
+      || process.env.APPDATA
+      || path.join(process.env.HOME || process.env.USERPROFILE || ".", "AppData", "Local");
+    const suffix = app.isPackaged ? "KNGraphApp" : "KNGraphApp-dev";
+    return path.join(base, suffix);
+  }
+  return path.join(process.env.HOME || process.env.USERPROFILE || ".", app.isPackaged ? ".kn_graph" : ".kn_graph-dev");
+}
+
 function buildPythonEnv(repoRoot) {
   const prev = String(process.env.PYTHONPATH || "").trim();
   const sep = process.platform === "win32" ? ";" : ":";
   const pythonPath = prev ? `${repoRoot}${sep}${prev}` : repoRoot;
-  // Dev uses real config (with keys); packaged gets clean data dir.
-  const suffix = app.isPackaged ? "KNGraphApp-dev" : "KNGraphApp";
-  const dataDir = process.env.KN_GRAPH_DATA_DIR || (process.platform === "win32"
-    ? path.join(process.env.LOCALAPPDATA || process.env.APPDATA || path.join(process.env.HOME || process.env.USERPROFILE || ".", "AppData", "Local"), suffix)
-    : path.join(process.env.HOME || process.env.USERPROFILE || ".", app.isPackaged ? ".kn_graph-dev" : ".kn_graph"));
-  return { ...process.env, PYTHONPATH: pythonPath, KN_GRAPH_DATA_DIR: dataDir };
+  const dataDir = getDefaultDataDir();
+  const installRoot = app.isPackaged ? path.dirname(process.execPath) : repoRoot;
+  const workspacesDir = path.join(installRoot, "workspaces");
+  return {
+    ...process.env,
+    PYTHONPATH: pythonPath,
+    KN_GRAPH_DATA_DIR: dataDir,
+    KN_GRAPH_WORKSPACES_DIR: workspacesDir,
+  };
 }
 
 function safeReadJson(filePath) {
@@ -182,8 +198,12 @@ async function startBackendServer() {
     console.log(`[desktop] backend_port=${runtimePort}`);
     console.log(`[desktop] cmd: ${exePath} ${args.join(" ")}`);
 
+    const installRoot = path.dirname(process.execPath);
     backendProc = spawn(exePath, args, {
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        KN_GRAPH_WORKSPACES_DIR: path.join(installRoot, "workspaces"),
+      },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -294,8 +314,6 @@ function createMainWindow() {
     menu.popup({ window: mainWindow || undefined });
   });
 
-  // Always open devtools for reader diagnostics in current development workflow.
-  mainWindow.webContents.openDevTools({ mode: "detach" });
 }
 
 function stopBackendServer() {
@@ -521,7 +539,7 @@ ipcMain.handle("grep-workspace", async (_evt, pattern, libraryId) => {
   const pat = String(pattern || "").trim();
   if (!pat) return { ok: false, error: "empty_pattern" };
   const libId = String(libraryId || "").trim();
-  const dataDir = process.env.KN_GRAPH_DATA_DIR || (process.platform === "win32" ? "D:\\KNGraphApp" : path.join(process.env.HOME || process.env.USERPROFILE || ".", ".kn_graph"));
+  const dataDir = getDefaultDataDir();
   const wsDir = path.join(dataDir, "libraries", "workspaces");
 
   let searchDirs = [];

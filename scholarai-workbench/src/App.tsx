@@ -175,14 +175,17 @@ export default function App() {
         return;
       }
 
-      const pdfFiles = files.filter((f) => String(f.name || '').toLowerCase().endsWith('.pdf'));
-      if (!pdfFiles.length) {
-        window.alert('仅支持拖拽 PDF 文件。');
+      const importFiles = files.filter((f) => {
+        const name = String(f.name || '').toLowerCase();
+        return name.endsWith('.pdf') || name.endsWith('.docx') || name.endsWith('.md') || name.endsWith('.html');
+      });
+      if (!importFiles.length) {
+        window.alert('仅支持拖拽 PDF / DOCX / MD / HTML 文件。');
         return;
       }
 
       try {
-        const result = await api.pipeline.submitJobsBatch(pdfFiles, libraryId);
+        const result = await api.pipeline.submitJobsBatch(importFiles, libraryId);
         if (result.accepted_count > 0) {
           setPipelineJobs((prev) => {
             const accepted = (result.accepted || []).map((job) => {

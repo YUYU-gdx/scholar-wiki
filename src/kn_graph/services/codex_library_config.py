@@ -82,11 +82,17 @@ def _copy_single_skill(src: Path, target: Path) -> None:
 def _sync_workspace_agent_docs(workspace: Path) -> None:
     """Sync CLAUDE.md/AGENTS.md from a single template source."""
     docs_root = _agent_docs_template_root()
-    source = docs_root / "CLAUDE.md"
+    source = docs_root / "template_agent.md"
     if not source.exists():
-        legacy = _repo_root() / "CLAUDE.md"
-        if legacy.exists():
-            source = legacy
+        for legacy in (
+            docs_root / "CLAUDE.md",
+            docs_root / "AGENTS.md",
+            _repo_root() / "CLAUDE.md",
+            _repo_root() / "AGENTS.md",
+        ):
+            if legacy.exists():
+                source = legacy
+                break
     if not source.exists():
         return
 

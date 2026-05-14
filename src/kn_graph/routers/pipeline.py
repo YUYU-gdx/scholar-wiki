@@ -15,6 +15,8 @@ from sse_starlette.sse import EventSourceResponse
 from kn_graph.services.pipeline_service import PipelineService
 from kn_graph.services import pipeline_runtime
 
+_ALLOWED_UPLOAD_EXTS = {".pdf", ".docx", ".md", ".html"}
+
 
 def _resolve_library_workspace(library_id: str, workspaces_dir: Path) -> Path:
     target = (Path(workspaces_dir).resolve() / str(library_id or "").strip()).resolve()
@@ -74,8 +76,12 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
 
         if not file.filename:
             return JSONResponse(status_code=400, content={"error": "file_required"})
-        if not str(file.filename).lower().endswith(".pdf"):
-            return JSONResponse(status_code=400, content={"error": "pdf_only"})
+        ext = Path(str(file.filename)).suffix.lower()
+        if ext not in _ALLOWED_UPLOAD_EXTS:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "unsupported_file_type", "allowed_extensions": sorted(_ALLOWED_UPLOAD_EXTS)},
+            )
 
         try:
             workspace_root = _resolve_library_workspace(lib, pipeline_service._settings.workspaces_dir)

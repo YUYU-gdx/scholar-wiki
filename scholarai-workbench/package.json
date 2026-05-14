@@ -25,8 +25,9 @@
   "build": {
     "appId": "com.scholar.wiki",
     "productName": "Scholar Wiki",
+    "icon": "build/icon.png",
     "directories": {
-      "output": "dist-electron"
+      "output": "../dist_exe"
     },
     "files": [
       "electron/main.cjs",
@@ -40,9 +41,9 @@
       }
     ],
     "win": {
+      "icon": "build/icon.png",
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ]
     },
     "nsis": {

@@ -1,10 +1,12 @@
 ﻿from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from kn_graph._compat import bundle_root
 from kn_graph.config import Settings
 from kn_graph.services.chat_service import ChatService
 from kn_graph.services.cherry_provider_catalog import attach_provider_meta, default_endpoint_url, provider_map
@@ -44,6 +46,7 @@ class SettingsService:
         self._settings = settings
         self._chat_service = chat_service
         self._store_path = self._settings.data_dir / "settings" / "global_settings.json"
+        self._ensure_template_layout()
 
     def _read_store(self) -> dict[str, Any]:
         if not self._store_path.exists():
@@ -351,20 +354,52 @@ class SettingsService:
 
     def _resolve_agent_template_path(self, target: str) -> Path:
         key = str(target or "").strip().lower()
-        root = Path.cwd()
+        template_root = (self._settings.data_dir / "templates").resolve()
         mapping: dict[str, Path] = {
-            "pipeline_skill": Path("skills/templates/scholarly-paper-extraction/SKILL.md"),
-            "qa_skill": Path("skills/templates/answer_library_question/SKILL.md"),
-            "claude_md": Path("skills/templates/agent-docs/CLAUDE.md"),
-            "agent_md": Path("skills/templates/agent-docs/CLAUDE.md"),
+            "pipeline_skill": template_root / "skills" / "scholarly-paper-extraction" / "SKILL.md",
+            "qa_skill": template_root / "skills" / "answer_library_question" / "SKILL.md",
+            "claude_md": template_root / "agent-docs" / "template_agent.md",
+            "agent_md": template_root / "agent-docs" / "template_agent.md",
         }
         rel = mapping.get(key)
         if rel is None:
             raise KeyError(f"unknown_agent_template_target:{key}")
-        path = root / rel
-        if key == "claude_md" and not path.exists():
-            legacy = root / "CLAUDE.md"
-            if legacy.exists():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
+        path = rel.resolve()
+        self._seed_template_if_missing(key, path)
         return path
+
+    def _ensure_template_layout(self) -> None:
+        root = (self._settings.data_dir / "templates").resolve()
+        (root / "skills" / "scholarly-paper-extraction").mkdir(parents=True, exist_ok=True)
+        (root / "skills" / "answer_library_question").mkdir(parents=True, exist_ok=True)
+        (root / "agent-docs").mkdir(parents=True, exist_ok=True)
+        for key in ("pipeline_skill", "qa_skill", "claude_md", "agent_md"):
+            path = self._resolve_agent_template_path(key)
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _seed_template_if_missing(self, key: str, dst: Path) -> None:
+        if dst.exists():
+            return
+        bundle = bundle_root().resolve()
+        defaults: dict[str, Path] = {
+            "pipeline_skill": bundle / "skills" / "templates" / "scholarly-paper-extraction" / "SKILL.md",
+            "qa_skill": bundle / "skills" / "templates" / "answer_library_question" / "SKILL.md",
+            "claude_md": bundle / "skills" / "templates" / "agent-docs" / "template_agent.md",
+            "agent_md": bundle / "skills" / "templates" / "agent-docs" / "template_agent.md",
+        }
+        legacy_candidates: list[Path] = []
+        if key in {"claude_md", "agent_md"}:
+            legacy_candidates = [
+                bundle / "skills" / "templates" / "agent-docs" / "CLAUDE.md",
+                bundle / "skills" / "templates" / "agent-docs" / "AGENTS.md",
+                bundle / "CLAUDE.md",
+                bundle / "AGENTS.md",
+            ]
+        src_candidates = [defaults[key], *legacy_candidates]
+        for src in src_candidates:
+            if src.exists() and src.is_file():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text("", encoding="utf-8")

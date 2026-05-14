@@ -719,8 +719,8 @@ export default function SettingsView() {
                   value={templateEditor.target}
                   onChange={(e) => switchMdTarget(e.target.value as AgentTemplateTarget)}
                 >
-                  <option value="claude_md">CLAUDE.md</option>
-                  <option value="agent_md">AGENTS.md</option>
+                  <option value="claude_md">template_agent.md</option>
+                  <option value="agent_md">template_agent.md（兼容别名）</option>
                 </select>
               </div>
             )}

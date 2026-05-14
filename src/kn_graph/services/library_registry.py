@@ -132,7 +132,6 @@ def ensure_registry(registry_path: Path | None = None, legacy_index_root: Path |
     migrate_legacy_workspace = not str(os.getenv("LITERATURE_LIBRARY_WORKSPACES_ROOT", "") or "").strip()
     legacy_workspace_root = _legacy_workspace_root_default()
     home_workspace_root = _home_workspace_root_default()
-    appdata_workspace_root = Path(r"D:\KNGraphAppData\libraries\workspaces").resolve()
 
     existing = load_registry(reg_path) if reg_path.exists() else {"version": 1, "updated_at": "", "default_library_id": "", "libraries": []}
     by_id = {str(item.get("library_id", "")): dict(item) for item in existing.get("libraries", []) if isinstance(item, dict)}
@@ -186,8 +185,6 @@ def ensure_registry(registry_path: Path | None = None, legacy_index_root: Path |
                         or legacy_workspace_root in root_path.parents
                         or root_path == home_workspace_root
                         or home_workspace_root in root_path.parents
-                        or root_path == appdata_workspace_root
-                        or appdata_workspace_root in root_path.parents
                     )
                     if in_legacy:
                         new_root = (workspace_base / str(lib_id)).resolve()
@@ -448,7 +445,7 @@ def delete_library(
             pass
 
         # Try legacy/default bases as fallback cleanup for old data layout.
-        for legacy_base in (_legacy_workspace_root_default(), _home_workspace_root_default(), Path(r"D:\KNGraphAppData\libraries\workspaces").resolve()):
+        for legacy_base in (_legacy_workspace_root_default(), _home_workspace_root_default()):
             try:
                 candidates.append((legacy_base / target).resolve())
             except Exception:

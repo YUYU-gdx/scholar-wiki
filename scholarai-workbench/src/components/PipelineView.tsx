@@ -470,7 +470,7 @@ export default function PipelineView() {
       <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-visible glass-shadow mb-8">
         <div className="p-4 bg-surface-container-lowest border-b border-outline-variant flex items-center gap-3">
           <CloudUpload className="w-5 h-5 text-secondary" />
-          <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono">上传 PDF</h3>
+          <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono">上传文档</h3>
         </div>
         <div className="p-6 space-y-3">
           <div
@@ -483,7 +483,7 @@ export default function PipelineView() {
             <FileText className="w-8 h-8 text-outline shrink-0" />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-on-surface">
-                {uploadFile ? uploadFile.name : '点击选择 PDF 文件，或拖拽 PDF 到此窗口进行批量导入'}
+                {uploadFile ? uploadFile.name : '点击选择文件，或拖拽 PDF / DOCX / MD / HTML 到此窗口进行批量导入'}
               </p>
               <p className="text-xs text-outline font-mono mt-0.5">
                 {uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : '支持单文件选择或多文件拖拽'}
@@ -496,7 +496,7 @@ export default function PipelineView() {
           <div className="flex flex-wrap items-center justify-end gap-3">
             <input
               type="file"
-              accept=".pdf"
+              accept=".pdf,.docx,.md,.html"
               onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
               className="hidden"
               id="pdf-upload"

@@ -14,12 +14,12 @@ def _default_data_dir() -> Path:
     env = os.getenv("KN_GRAPH_DATA_DIR", "").strip()
     if env:
         return Path(env)
-    # Dev uses the real config (with keys); packaged exe gets a clean data dir.
-    suffix = "KNGraphApp-dev" if _is_frozen() else "KNGraphApp"
+    # Packaged app uses the stable user data dir; dev mode uses an isolated dir.
+    suffix = "KNGraphApp" if _is_frozen() else "KNGraphApp-dev"
     if os.name == "nt":
         base = os.getenv("LOCALAPPDATA", "") or os.getenv("APPDATA", "") or Path.home() / "AppData" / "Local"
         return Path(base) / suffix
-    return Path.home() / (".kn_graph-dev" if _is_frozen() else ".kn_graph")
+    return Path.home() / (".kn_graph" if _is_frozen() else ".kn_graph-dev")
 
 
 class Settings(BaseModel):
@@ -197,39 +197,42 @@ class Settings(BaseModel):
 
     @property
     def libraries_dir(self) -> Path:
-        return self.data_dir / "libraries"
+        return (self.data_dir / "libraries").resolve()
 
     @property
     def workspaces_dir(self) -> Path:
-        return self.libraries_dir / "workspaces"
+        raw = os.getenv("KN_GRAPH_WORKSPACES_DIR", "").strip()
+        if raw:
+            return Path(raw).resolve()
+        return (self.libraries_dir / "workspaces").resolve()
 
     @property
     def registry_path(self) -> Path:
-        return self.libraries_dir / "registry.json"
+        return (self.libraries_dir / "registry.json").resolve()
 
     @property
     def indexes_dir(self) -> Path:
-        return self.libraries_dir / "indexes"
+        return (self.libraries_dir / "indexes").resolve()
 
     @property
     def runs_dir(self) -> Path:
-        return self.data_dir / "runs"
+        return (self.data_dir / "runs").resolve()
 
     @property
     def pipeline_db_path(self) -> Path:
-        return self.data_dir / "pipeline" / "jobs.sqlite"
+        return (self.data_dir / "pipeline" / "jobs.sqlite").resolve()
 
     @property
     def chat_store_path(self) -> Path:
-        return self.data_dir / "chat" / "store.sqlite"
+        return (self.data_dir / "chat" / "store.sqlite").resolve()
 
     @property
     def workspace_layouts_path(self) -> Path:
-        return self.data_dir / "workbench" / "layouts.json"
+        return (self.data_dir / "workbench" / "layouts.json").resolve()
 
     @property
     def codex_config_path(self) -> Path:
-        return self.data_dir / "chat" / "codex_runner_config.json"
+        return (self.data_dir / "chat" / "codex_runner_config.json").resolve()
 
     def resolve_graph_views_path(self, library_id: str = "") -> Path | None:
         lib = str(library_id or "").strip()

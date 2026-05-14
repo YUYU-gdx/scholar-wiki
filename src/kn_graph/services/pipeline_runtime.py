@@ -4,9 +4,11 @@ import json
 import os
 import threading
 import time
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+import html
 from typing import Any, Protocol
 
 from kn_graph.providers.registry import ProviderRegistry
@@ -96,6 +98,55 @@ def _merge_zotero_into_paper_record(record: dict[str, Any], options: dict[str, A
             if c.get("last_name") or c.get("first_name")
         ]
     return record
+
+
+def _strip_html_to_text(raw_html: str) -> str:
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", str(raw_html or ""))
+    text = re.sub(r"(?is)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?is)</p\s*>", "\n\n", text)
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _extract_docx_text(source: Path) -> str:
+    with zipfile.ZipFile(str(source), "r") as zf:
+        xml = zf.read("word/document.xml").decode("utf-8", errors="ignore")
+    paras = re.findall(r"(?is)<w:p\b.*?>.*?</w:p>", xml)
+    out: list[str] = []
+    for para in paras:
+        runs = re.findall(r"(?is)<w:t[^>]*>(.*?)</w:t>", para)
+        line = html.unescape("".join(runs)).strip()
+        if line:
+            out.append(line)
+    return "\n\n".join(out).strip()
+
+
+def _parse_non_pdf_input(source: Path, run_dir: Path) -> dict[str, Any]:
+    ext = source.suffix.lower()
+    if ext == ".md":
+        md_text = source.read_text(encoding="utf-8", errors="ignore")
+    elif ext == ".html":
+        html_raw = source.read_text(encoding="utf-8", errors="ignore")
+        md_text = _strip_html_to_text(html_raw)
+    elif ext == ".docx":
+        md_text = _extract_docx_text(source)
+    else:
+        raise RuntimeError(f"unsupported_file_type:{ext}")
+    title = source.stem.strip() or "document"
+    parse_dir = run_dir / "parse" / "non_pdf"
+    parse_dir.mkdir(parents=True, exist_ok=True)
+    md_path = parse_dir / f"{title}.md"
+    html_path = parse_dir / f"{title}.html"
+    md_path.write_text(md_text, encoding="utf-8")
+    html_path.write_text(f"<html><body><pre>{html.escape(md_text)}</pre></body></html>", encoding="utf-8")
+    return {
+        "markdown_path": str(md_path.resolve()),
+        "html_path": str(html_path.resolve()),
+        "zip_path": "",
+    }
 
 
 def _touch_marker(run_dir: Path, stage: str) -> None:
@@ -450,13 +501,18 @@ def _run_parse_pdf(job_id: str, input_pdf: Path, run_dir: Path, store: JobStore,
         return _is_cancel_requested(store, job_id)
 
     try:
-        meta = parse_single_pdf(
-            input_pdf,
-            run_dir,
-            options=merged,
-            progress_cb=_progress,
-            cancel_cb=_cancel,
-        )
+        if input_pdf.suffix.lower() == ".pdf":
+            meta = parse_single_pdf(
+                input_pdf,
+                run_dir,
+                options=merged,
+                progress_cb=_progress,
+                cancel_cb=_cancel,
+            )
+        else:
+            _progress(20, "parsing_non_pdf")
+            meta = _parse_non_pdf_input(input_pdf, run_dir)
+            _progress(45, "parsing_non_pdf_done")
     except Exception as exc:
         code = getattr(exc, "code", "")
         if str(code) == "job_cancelled":

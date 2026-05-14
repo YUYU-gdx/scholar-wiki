@@ -84,7 +84,6 @@ a = Analysis(
         'unittest',
         'tkinter',
         'matplotlib',
-        'numpy',
         'pandas',
         'IPython',
         'jupyter',
