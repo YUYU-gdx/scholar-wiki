@@ -181,13 +181,29 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
                 result = await create_parse_extract_job(file=f, library_id=lib, options=None)
                 body = result.body if hasattr(result, "body") else {}
                 if isinstance(body, dict):
-                    accepted.append(body)
+                    payload = body
                 elif isinstance(body, (bytes, bytearray)):
-                    accepted.append(json.loads(body.decode("utf-8")))
+                    payload = json.loads(body.decode("utf-8"))
                 elif isinstance(body, str):
-                    accepted.append(json.loads(body))
+                    payload = json.loads(body)
                 else:
-                    accepted.append({"file_name": str(getattr(f, "filename", "") or "")})
+                    payload = {"file_name": str(getattr(f, "filename", "") or "")}
+
+                status_code = int(getattr(result, "status_code", 500) or 500)
+                has_job_id = bool(str(payload.get("job_id", "") or "").strip()) if isinstance(payload, dict) else False
+                if status_code == 202 and has_job_id and isinstance(payload, dict):
+                    accepted.append(payload)
+                else:
+                    err = ""
+                    if isinstance(payload, dict):
+                        err = str(payload.get("error", "") or "").strip()
+                    rejected.append(
+                        {
+                            "file_name": str(getattr(f, "filename", "") or ""),
+                            "error": err or f"submit_failed_http_{status_code}",
+                            "detail": payload if isinstance(payload, dict) else {},
+                        }
+                    )
             except Exception as exc:
                 rejected.append({"file_name": str(getattr(f, "filename", "") or ""), "error": str(exc)})
         return JSONResponse(
