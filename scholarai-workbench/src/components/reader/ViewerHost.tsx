@@ -126,7 +126,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
         {document.type === 'html' && typeof document.data === 'string' && (
           <div className="flex-1 overflow-auto p-6 bg-surface-container-lowest">
             <div className="max-w-[800px] mx-auto p-4 border border-outline-variant rounded-xl bg-surface-container-low text-sm text-on-surface-variant">
-              HTML 闃呰鍣ㄥ凡涓存椂灏佸瓨銆傝浼樺厛浣跨敤 PDF 鎴?Markdown銆?
+              HTML 阅读器已临时封存。请优先使用 PDF 或 Markdown。
             </div>
           </div>
         )}

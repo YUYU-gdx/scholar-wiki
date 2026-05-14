@@ -125,3 +125,48 @@ class TestAgentExtraction:
                 _run_agent_extraction("job_1", parse_meta, run_dir, store, options)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_missing_extract_result_json_treated_as_not_extractable(self) -> None:
+        """If agent writes no extract_result.json, treat as not extractable and continue."""
+        import shutil
+
+        from kn_graph.services.pipeline_runtime import _run_agent_extraction
+
+        ws = Path(tempfile.mkdtemp())
+        run_dir = Path(tempfile.mkdtemp())
+        try:
+            paper_dir = ws / "corpus" / "papers" / "paper_a"
+            paper_dir.mkdir(parents=True, exist_ok=True)
+            md_path = paper_dir / "paper.md"
+            html_path = paper_dir / "paper.html"
+            md_path.write_text("# Paper A\n\nBody.", encoding="utf-8")
+            html_path.write_text("<html><body>Paper A</body></html>", encoding="utf-8")
+
+            parse_meta: dict[str, str] = {
+                "markdown_path": str(md_path),
+                "html_path": str(html_path),
+            }
+            store = self._mock_store()
+            options = self._make_options(_workspace_path=str(ws))
+
+            fake_runner = MagicMock()
+            fake_runner.run_turn.return_value = {"ok": True}
+            fake_factory = MagicMock()
+            fake_factory.build.return_value = fake_runner
+
+            with (
+                patch("kn_graph.services.agent_workspace_guard.ensure_agent_workspace_minimal_config", return_value=None),
+                patch("kn_graph.services.codex_library_config.bootstrap_workspace_project_skills", return_value=None),
+                patch("kn_graph.services.agent_runner.AgentRunnerFactory", return_value=fake_factory),
+            ):
+                payload = _run_agent_extraction("job_1", parse_meta, run_dir, store, options)
+
+            assert payload["summary"]["class_a_used"] == 0
+            assert payload["summary"]["class_b_skipped"] == 1
+            assert payload["metrics"]["extractable_rate"] == 0.0
+            assert "not_extractable_reason" in payload
+            assert (run_dir / "extract" / "extract_result.json").exists()
+            assert not (run_dir / "extract" / "raw_llm_outputs.jsonl").exists()
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+            shutil.rmtree(run_dir, ignore_errors=True)

@@ -83,7 +83,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
       hasPdfLocator ? { pageIndex: entry.pageIndex, rect: entry.rect, quads: entry.quads } : undefined,
     );
     if (!ok) {
-      window.alert('淇濆瓨绗旇澶辫触锛氬啓鍏?markdown 澶辫触');
+      window.alert('保存笔记失败：写入 markdown 失败');
       return;
     }
     notesCache.invalidate(paperId);
@@ -176,7 +176,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
                       onClick={(e) => e.stopPropagation()}
                     />
                     <div className="flex gap-2 justify-end">
-                      <button className="text-xs px-3 py-1 rounded-lg bg-primary-container text-on-primary-container font-medium" onClick={(e) => { e.stopPropagation(); handleEdit(entry); }}>淇濆瓨</button>
+                      <button className="text-xs px-3 py-1 rounded-lg bg-primary-container text-on-primary-container font-medium" onClick={(e) => { e.stopPropagation(); handleEdit(entry); }}>保存</button>
                       <button className="text-xs px-3 py-1 rounded-lg text-outline hover:text-on-surface" onClick={(e) => { e.stopPropagation(); setEditingId(null); }}>鍙栨秷</button>
                     </div>
                   </div>

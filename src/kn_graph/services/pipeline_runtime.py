@@ -734,7 +734,30 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     # Read agent output
     extract_result_path = extract_dir / "extract_result.json"
     if not extract_result_path.exists():
-        raise RuntimeError("agent_extraction_failed:missing_extract_result_json")
+        payload = {
+            "summary": {
+                "seen": 1,
+                "class_a_used": 0,
+                "class_b_skipped": 1,
+                "class_c_skipped": 0,
+                "denominator_used": 1,
+            },
+            "metrics": {
+                "extractable_rate": 0.0,
+                "mean_direct_effects_per_doc": 0.0,
+                "mean_moderations_per_doc": 0.0,
+                "mean_interactions_per_doc": 0.0,
+                "direct_effect_validation_rate": 0.0,
+            },
+            "report_path": str(report_path),
+            "raw_output_jsonl": str(raw_output_path),
+            "review_queue_jsonl": str(review_queue_path),
+            "not_extractable_reason": "missing_extract_result_json",
+        }
+        extract_result_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _stage_update(store, job_id, "extract_entities", 90, "stage_done_not_extractable", status="running")
+        _touch_marker(run_dir, "extract_entities")
+        return payload
 
     try:
         agent_bundle = json.loads(extract_result_path.read_text(encoding="utf-8"))

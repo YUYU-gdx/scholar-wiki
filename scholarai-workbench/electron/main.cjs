@@ -18,6 +18,18 @@ let runtimePort = BASE_PORT;
 let stoppingBackendPromise = null;
 let quitInProgress = false;
 let backendStartedByUs = false;
+const singleInstanceLock = app.requestSingleInstanceLock();
+
+if (!singleInstanceLock) {
+  app.quit();
+}
+
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
 
 function appUrl() {
   // Load built frontend from disk (no Vite dev server needed)

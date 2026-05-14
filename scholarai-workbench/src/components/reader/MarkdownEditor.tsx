@@ -737,7 +737,7 @@ export default function MarkdownEditor({
             : row.status === 'completed'
               ? '已完成'
               : row.status === 'failed'
-                ? '澶辫触'
+                ? '失败'
                 : String(row.status || ''),
         );
         if (row.status === 'completed') {
@@ -797,7 +797,7 @@ export default function MarkdownEditor({
         if (emsg.includes('http_405')) {
           window.sessionStorage.setItem(jobsUnsupportedKey, '1');
         }
-        setDocTranslationStatus('浠诲姟鎺ュ彛涓嶅彲鐢紝鍥為€€鍒板悓姝ョ炕璇?..');
+        setDocTranslationStatus('任务接口不可用，回退到同步翻译...');
         setDocTranslationProgress(20);
         setDocHasActiveTask(true);
         const syncResult = await api.chat.translate(currentContentRef.current, cfg, true);
@@ -819,9 +819,9 @@ export default function MarkdownEditor({
       }
     } catch (e) {
       const msg = String((e as Error).message || 'unknown_error');
-      setDocTranslationStatus(`澶辫触: ${msg}`);
+      setDocTranslationStatus(`失败: ${msg}`);
       setDocHasActiveTask(false);
-      setTranslationText(`鍏ㄦ枃缈昏瘧澶辫触: ${msg}`);
+      setTranslationText(`全文翻译失败: ${msg}`);
       window.alert(`全文翻译失败：${msg}`);
     } finally {
       setDocTranslationRunning(false);
@@ -835,8 +835,8 @@ export default function MarkdownEditor({
     setDocHasActiveTask(true);
     pollTranslationJobUntilDone(pending.job_id, pending.started_at).catch((e) => {
       const msg = String((e as Error).message || 'unknown_error');
-      setDocTranslationStatus(`澶辫触: ${msg}`);
-      setTranslationText(`鍏ㄦ枃缈昏瘧澶辫触: ${msg}`);
+      setDocTranslationStatus(`失败: ${msg}`);
+      setTranslationText(`全文翻译失败: ${msg}`);
       setDocHasActiveTask(false);
     });
     return () => {
@@ -878,7 +878,7 @@ export default function MarkdownEditor({
         // eslint-disable-next-line no-console
         console.log('[notes] create new file', { ok: created.ok, error: created.error });
         if (!created.ok) {
-          throw new Error(`鍒涘缓鏂囦欢澶辫触: ${created.error || 'unknown'}`);
+          throw new Error(`创建文件失败: ${created.error || 'unknown'}`);
         }
         read = { ok: true, data: init };
       }
@@ -924,7 +924,7 @@ export default function MarkdownEditor({
       console.log('[notes] write result', { ok: wr.ok, error: wr.error });
 
       if (!wr.ok) {
-        throw new Error(`鍐欏叆鏂囦欢澶辫触: ${wr.error || 'unknown'}`);
+        throw new Error(`写入文件失败: ${wr.error || 'unknown'}`);
       }
 
       // Verify
@@ -934,7 +934,7 @@ export default function MarkdownEditor({
       console.log('[notes] verify', { ok: verify.ok, markerFound });
 
       if (!markerFound) {
-        throw new Error('鍐欏叆楠岃瘉澶辫触锛氬洖璇绘枃浠舵湭鎵惧埌绗旇鏍囪');
+        throw new Error('写入验证失败：回读文件未找到笔记标记');
       }
 
       // Update state
@@ -1214,9 +1214,9 @@ export default function MarkdownEditor({
               className="px-3 py-1 text-xs rounded-md border border-outline-variant text-on-surface-variant hover:bg-surface-container-low"
               onClick={handleTranslateWholeDocument}
               disabled={docTranslationRunning}
-              title="鍏ㄦ枃娈佃惤瀵圭収缈昏瘧"
+              title="全文段落对照翻译"
             >
-              鍏ㄦ枃瀵圭収缈昏瘧
+              全文对照翻译
             </button>
           )}
           {(docTranslationRunning || docHasActiveTask) && (

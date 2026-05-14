@@ -11,7 +11,20 @@ from typing import Any
 from filelock import FileLock, Timeout
 
 
-_LOCK_TIMEOUT: float = float(os.getenv("KN_PIPELINE_LOCK_TIMEOUT", "300"))
+def _read_lock_timeout() -> float:
+    """Read lock timeout from env.
+
+    - default: -1 (wait forever, queue instead of timeout-fail)
+    - invalid value: fallback to -1
+    """
+    raw = str(os.getenv("KN_PIPELINE_LOCK_TIMEOUT", "-1") or "-1").strip()
+    try:
+        return float(raw)
+    except Exception:
+        return -1.0
+
+
+_LOCK_TIMEOUT: float = _read_lock_timeout()
 
 
 class LibraryLock:

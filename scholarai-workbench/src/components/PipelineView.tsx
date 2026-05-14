@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CloudUpload, FileText, RefreshCw, XCircle, Info, Terminal, Trash2, ChevronDown, Database } from 'lucide-react';
 import ZoteroImportModal from './ZoteroImportModal';
 import { useApp } from '../app-context';
@@ -25,6 +25,18 @@ const STATUS_OPTIONS = [
 
 type JobLogRow = { time: string; level: 'info' | 'warn' | 'error'; text: string; detail?: string };
 
+function stageDisplayLabel(stage?: string): string {
+  const key = String(stage || '').trim().toLowerCase();
+  const map: Record<string, string> = {
+    accepted: '排队中',
+    parse_pdf: '解析中',
+    materialize_paper: '文献向量化中',
+    extract_entities: '实体抽取中',
+    finalize: '入库与索引中',
+  };
+  return map[key] || (stage || '-');
+}
+
 function formatTs(ts?: string): string {
   if (!ts) return '-';
   const d = new Date(ts);
@@ -47,7 +59,7 @@ function parseMaybeJson(raw: unknown): Record<string, unknown> | null {
 function buildJobLogs(job: PipelineJob): JobLogRow[] {
   const rows: JobLogRow[] = [];
   rows.push({ time: formatTs(job.created_at), level: 'info', text: '[解析] 已上传并创建任务' });
-  rows.push({ time: formatTs(job.updated_at), level: 'info', text: `[${job.stage_code || job.stage || 'stage'}] 当前进度 ${job.progress ?? 0}%` });
+  rows.push({ time: formatTs(job.updated_at), level: 'info', text: `[${stageDisplayLabel(job.stage_code || job.stage || '')}] 当前进度 ${job.progress ?? 0}%` });
 
   const options = parseMaybeJson((job as unknown as Record<string, unknown>).options_json);
   const extractionMode = String(options?.extraction_mode || '').trim().toLowerCase();
@@ -322,7 +334,13 @@ export default function PipelineView() {
       appendLog('info', `Job accepted: ${jobId}`);
     });
     es.addEventListener('stage_started', (evt) => {
-      try { const p = JSON.parse(evt.data || '{}'); updateJobInList(jobId, p); appendLog('event', `Stage started: ${p.stage || p.stage_code || ''}`); } catch { appendLog('event', 'Stage started'); }
+      try {
+        const p = JSON.parse(evt.data || '{}');
+        updateJobInList(jobId, p);
+        appendLog('event', `Stage started: ${stageDisplayLabel(String(p.stage_label || p.stage_code || p.stage || ''))}`);
+      } catch {
+        appendLog('event', 'Stage started');
+      }
     });
     es.addEventListener('stage_progress', (evt) => {
       try { const p = JSON.parse(evt.data || '{}'); updateJobInList(jobId, p); appendLog('data', `Progress: ${p.progress ?? 0}%`); } catch { appendLog('data', 'Progress update'); }
@@ -617,7 +635,7 @@ export default function PipelineView() {
                   </td>
                   <td className="px-6 py-4 shrink-0">
                     <span className={`text-xs font-mono font-black uppercase px-2 py-0.5 rounded-full whitespace-nowrap ${statusBadge(job.status || '')}`}>
-                      {job.stage_label || job.stage || '-'}
+                      {job.stage_label || stageDisplayLabel(job.stage_code || job.stage || '')}
                     </span>
                   </td>
                   <td className="px-6 py-4 shrink-0" style={{ minWidth: 140 }}>
@@ -679,7 +697,7 @@ export default function PipelineView() {
             <div className="space-y-3 text-sm">
               <div className="flex justify-between"><span className="text-on-surface-variant">任务ID</span><span className="font-mono text-on-surface">{selectedJob.job_id}</span></div>
               <div className="flex justify-between"><span className="text-on-surface-variant">状态</span><span className="font-mono text-on-surface">{selectedJob.status}</span></div>
-              <div className="flex justify-between"><span className="text-on-surface-variant">阶段</span><span className="font-mono text-on-surface">{selectedJob.stage_label || selectedJob.stage || '-'}</span></div>
+              <div className="flex justify-between"><span className="text-on-surface-variant">阶段</span><span className="font-mono text-on-surface">{selectedJob.stage_label || stageDisplayLabel(selectedJob.stage_code || selectedJob.stage || '')}</span></div>
               <div className="flex justify-between"><span className="text-on-surface-variant">文献库</span><span className="font-mono text-on-surface">{selectedJob.library_id}</span></div>
               {selectedJob.error_detail && <div className="bg-error-container/10 border border-error/20 rounded-lg p-3 text-sm text-error">{selectedJob.error_detail}</div>}
             </div>
@@ -698,7 +716,7 @@ export default function PipelineView() {
             <div className="text-xs font-mono text-on-surface-variant mb-4">
               <div>任务: {logJob.job_id}</div>
               <div>文件: {logJob.display_name || logJob.file_name || '-'}</div>
-              <div>状态: {logJob.status} / 阶段: {logJob.stage_code || logJob.stage || '-'}</div>
+              <div>状态: {logJob.status} / 阶段: {logJob.stage_label || stageDisplayLabel(logJob.stage_code || logJob.stage || '')}</div>
               <div>事件流: {liveLogConnected ? '已连接' : '已断开'}</div>
             </div>
             <div className="space-y-2">
