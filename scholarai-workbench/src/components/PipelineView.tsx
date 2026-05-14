@@ -137,8 +137,10 @@ function agentEventToLogRow(e: PipelineAgentEvent): JobLogRow {
 }
 
 export default function PipelineView() {
+  const PAGE_SIZE = 25;
   const { activeLibraryId, pipelineJobs, setPipelineJobs } = useApp();
   const [page, setPage] = useState(1);
+  const [totalJobs, setTotalJobs] = useState(0);
   const [statusFilter, setStatusFilter] = useState('');
   const [stageFilter, setStageFilter] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -161,9 +163,10 @@ export default function PipelineView() {
 
   const fetchJobs = useCallback(async () => {
     try {
-      const res = await api.pipeline.listJobs(page, 25, statusFilter || undefined, activeLibraryId);
+      const res = await api.pipeline.listJobs(page, PAGE_SIZE, statusFilter || undefined, activeLibraryId);
       const filtered = (res.jobs || []).filter((j) => !stageFilter || (j.stage_code || j.stage || '') === stageFilter);
       setPipelineJobs(filtered);
+      setTotalJobs(Number(res.total || 0));
       for (const j of filtered) {
         if (j.status === 'completed' && !completedDispatchedRef.current.has(j.job_id)) {
           completedDispatchedRef.current.add(j.job_id);
@@ -179,6 +182,8 @@ export default function PipelineView() {
       }
     } catch { /* ignore */ }
   }, [page, statusFilter, stageFilter, activeLibraryId, setPipelineJobs]);
+
+  const totalPages = Math.max(1, Math.ceil(totalJobs / PAGE_SIZE));
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
 
@@ -645,6 +650,25 @@ export default function PipelineView() {
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+      <div className="flex items-center justify-between mb-8 text-xs text-on-surface-variant">
+        <span>总任务 {totalJobs} 条 · 第 {page} / {totalPages} 页</span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            className="bg-surface-container border border-outline-variant rounded-lg px-3 py-1.5 disabled:opacity-50"
+          >
+            上一页
+          </button>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+            className="bg-surface-container border border-outline-variant rounded-lg px-3 py-1.5 disabled:opacity-50"
+          >
+            下一页
+          </button>
         </div>
       </div>
 
