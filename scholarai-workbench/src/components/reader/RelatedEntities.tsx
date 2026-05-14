@@ -175,7 +175,7 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
           <h4 className="text-sm font-semibold text-on-surface">
             实体信息（变量 {variableCards.length}，关系 {relationCount}）
           </h4>
-          <button className="text-xs text-outline hover:text-on-surface" onClick={onToggle}>脳</button>
+          <button className="text-xs text-outline hover:text-on-surface" onClick={onToggle}>×</button>
         </div>
 
         {variableCards.length === 0 && relationCount === 0 && (

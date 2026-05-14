@@ -489,6 +489,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     const recompute = () => {
       const hostRect = host.getBoundingClientRect();
       const cards: Array<{ noteId: string; x: number; y: number; noteText: string; quote: string }> = [];
+      const cardX = host.scrollLeft + Math.max(12, host.clientWidth - 340);
       for (const [noteId, meta] of noteMeta.entries()) {
         const pageEl = host.querySelector(`[data-page-number="${meta.pageIndex + 1}"]`) as HTMLElement | null;
         if (!pageEl) continue;
@@ -497,7 +498,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
         const hr = hit.getBoundingClientRect();
         cards.push({
           noteId,
-          x: (hr.right - hostRect.left) + host.scrollLeft + 12,
+          x: cardX,
           y: (hr.top - hostRect.top) + host.scrollTop,
           noteText: meta.noteText,
           quote: meta.quote,
@@ -591,7 +592,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
         </div>
       </div>
 
-      <div ref={selectionHostRef} className="relative flex-1 overflow-auto flex justify-center p-4">
+      <div ref={selectionHostRef} className="relative flex-1 overflow-auto flex justify-center p-4 md:pr-[22rem]">
         {pdfDocumentNode}
 
         {noteCards.map((card) => (

@@ -31,7 +31,7 @@ function parseReaderNoteFields(seg: string): {
   const lines = String(seg || '').replace(/\r\n/g, '\n').split('\n')
     .map((ln) => ln.replace(/^\s*>\s?/, '').trimEnd());
   let id = '';
-  let pageIndex = 0;
+  let pageIndex = -1;
   let rect = '';
   let quads = '';
   let quote = '';

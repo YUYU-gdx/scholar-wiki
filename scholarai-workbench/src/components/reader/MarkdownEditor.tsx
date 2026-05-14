@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+﻿import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import MarkdownIt from 'markdown-it';
 import markdownItFootnote from 'markdown-it-footnote';
 import markdownItTaskLists from 'markdown-it-task-lists';
@@ -12,7 +12,7 @@ import type { ViewerMode } from './types';
 import SelectionActionPopover from './SelectionActionPopover';
 import { api } from '../../api';
 import Outline from './Outline';
-import { deleteNoteFromMarkdownAny, extractNoteBlocks, readMarkdownText } from './NoteMarkdownSync';
+import { deleteNoteFromMarkdownAny, extractNoteBlocks, readMarkdownText, upsertNoteInMarkdown } from './NoteMarkdownSync';
 
 // CodeMirror 6 imports
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, rectangularSelection, crosshairCursor, highlightActiveLine } from '@codemirror/view';
@@ -228,7 +228,16 @@ export default function MarkdownEditor({
   const [docTranslationStatus, setDocTranslationStatus] = useState('');
   const [docHasActiveTask, setDocHasActiveTask] = useState(false);
   const docTranslationPollingRef = useRef(false);
-  const [noteRanges, setNoteRanges] = useState<Array<{ start: number; end: number; id: string; quote: string; note: string }>>([]);
+  const [noteRanges, setNoteRanges] = useState<Array<{
+    start: number;
+    end: number;
+    id: string;
+    quote: string;
+    note: string;
+    pageIndex: number;
+    rect: string;
+    quads: string;
+  }>>([]);
   const flashTimerRef = useRef<number | null>(null);
 
   // CM6 refs
@@ -329,18 +338,45 @@ export default function MarkdownEditor({
     }
   }, [md]);
 
-  const findReaderNoteRanges = (raw: string): Array<{ start: number; end: number; id: string; quote: string; note: string }> =>
+  const findReaderNoteRanges = (raw: string): Array<{
+    start: number;
+    end: number;
+    id: string;
+    quote: string;
+    note: string;
+    pageIndex: number;
+    rect: string;
+    quads: string;
+  }> =>
     extractNoteBlocks(raw).map((x) => {
       const lines = String(x.text || '').replace(/\r\n/g, '\n').split('\n').map((ln) => ln.replace(/^\s*>\s?/, '').trimEnd());
       let mode: '' | 'quote' | 'note' = '';
       const quoteLines: string[] = [];
       const noteLines: string[] = [];
+      let pageIndex = -1;
+      let rect = '';
+      let quads = '';
       for (const rawLine of lines) {
         const line = String(rawLine || '').trim();
         if (!line) continue;
         if (/^Quote:\s*$/i.test(line)) { mode = 'quote'; continue; }
         if (/^Note:\s*$/i.test(line)) { mode = 'note'; continue; }
         if (/^Time:\s*/i.test(line)) { mode = ''; continue; }
+        const pageMatch = line.match(/^Page:\s*(\d+)/i);
+        if (pageMatch) {
+          pageIndex = Number.parseInt(String(pageMatch[1] || '-1'), 10);
+          continue;
+        }
+        const rectMatch = line.match(/^Rect:\s*(.+)$/i);
+        if (rectMatch) {
+          rect = String(rectMatch[1] || '').trim();
+          continue;
+        }
+        const quadsMatch = line.match(/^Quads:\s*(.+)$/i);
+        if (quadsMatch) {
+          quads = String(quadsMatch[1] || '').trim();
+          continue;
+        }
         if (/^(Note ID|Page|Rect|Quads):/i.test(line)) continue;
         if (mode === 'quote') quoteLines.push(line);
         else if (mode === 'note') noteLines.push(line);
@@ -351,6 +387,9 @@ export default function MarkdownEditor({
         id: x.id,
         quote: quoteLines.join('\n').trim(),
         note: noteLines.join('\n').trim(),
+        pageIndex,
+        rect,
+        quads,
       };
     });
 
@@ -416,18 +455,25 @@ export default function MarkdownEditor({
         const titleEl = callout.querySelector('.callout-title');
         const titleText = String(titleEl?.textContent || '').trim();
         if (titleText !== 'Reader Note') continue;
-        // Keep metadata in markdown source, but hide Rect/Quads in rendered reader UI.
+        // Keep metadata in markdown source, but hide meta fields in rendered reader UI.
         for (const p of Array.from(callout.querySelectorAll('p'))) {
           const t = String(p.textContent || '').trim();
-          if (/^(Rect|Quads):/i.test(t)) p.remove();
+          if (/^(Note ID|Page|Rect|Quads):/i.test(t)) p.remove();
         }
         const idx = noteIdx;
         const noteId = notes[idx]?.id || '';
         noteIdx += 1;
         callout.setAttribute('data-reader-note-idx', String(idx));
         callout.setAttribute('style', 'position:relative;');
+        const editBtn = doc.createElement('button');
+        editBtn.textContent = '编辑笔记';
+        editBtn.setAttribute('type', 'button');
+        editBtn.setAttribute('data-reader-note-edit', String(idx));
+        if (noteId) editBtn.setAttribute('data-reader-note-id', noteId);
+        editBtn.setAttribute('style', 'position:absolute;top:6px;right:74px;font-size:11px;padding:2px 6px;border:1px solid #94a3b8;border-radius:6px;background:#fff;cursor:pointer;');
+        callout.appendChild(editBtn);
         const delBtn = doc.createElement('button');
-        delBtn.textContent = '删除笔记';
+        delBtn.textContent = '鍒犻櫎绗旇';
         delBtn.setAttribute('type', 'button');
         delBtn.setAttribute('data-reader-note-delete', String(idx));
         if (noteId) delBtn.setAttribute('data-reader-note-id', noteId);
@@ -446,8 +492,19 @@ export default function MarkdownEditor({
         const wrapper = doc.createElement('div');
         wrapper.setAttribute('data-reader-note-idx', String(idx));
         wrapper.setAttribute('style', 'position:relative;');
+        for (const p of Array.from(bq.querySelectorAll('p'))) {
+          const pt = String(p.textContent || '').trim();
+          if (/^(Note ID|Page|Rect|Quads):/i.test(pt)) p.remove();
+        }
+        const editBtn = doc.createElement('button');
+        editBtn.textContent = '编辑笔记';
+        editBtn.setAttribute('type', 'button');
+        editBtn.setAttribute('data-reader-note-edit', String(idx));
+        if (noteId) editBtn.setAttribute('data-reader-note-id', noteId);
+        editBtn.setAttribute('style', 'position:absolute;top:6px;right:74px;font-size:11px;padding:2px 6px;border:1px solid #94a3b8;border-radius:6px;background:#fff;cursor:pointer;');
+        wrapper.appendChild(editBtn);
         const delBtn = doc.createElement('button');
-        delBtn.textContent = '删除笔记';
+        delBtn.textContent = '鍒犻櫎绗旇';
         delBtn.setAttribute('type', 'button');
         delBtn.setAttribute('data-reader-note-delete', String(idx));
         if (noteId) delBtn.setAttribute('data-reader-note-id', noteId);
@@ -506,7 +563,7 @@ export default function MarkdownEditor({
       // (prevents triple-click from overflowing into the next block)
       if (focusLineEnd >= 0) {
         if (anchorBlockEnd >= 0 && focusLineEnd > anchorBlockEnd + 2) {
-          // focusLineEnd is in a distant block — ignore, use anchorBlockEnd as cap
+          // focusLineEnd is in a distant block 鈥?ignore, use anchorBlockEnd as cap
           lineEnd = Math.max(lineEnd, anchorBlockEnd);
         } else {
           lineEnd = Math.max(lineEnd, focusLineEnd);
@@ -676,11 +733,11 @@ export default function MarkdownEditor({
         setDocTranslationProgress(Math.max(0, Math.min(100, Number(row.progress || 0))));
         setDocTranslationStatus(
           row.status === 'running' || row.status === 'queued'
-            ? `进行中 ${Math.max(0, Math.min(100, Number(row.progress || 0)))}%`
+            ? `杩涜涓?${Math.max(0, Math.min(100, Number(row.progress || 0)))}%`
             : row.status === 'completed'
               ? '已完成'
               : row.status === 'failed'
-                ? '失败'
+                ? '澶辫触'
                 : String(row.status || ''),
         );
         if (row.status === 'completed') {
@@ -721,7 +778,7 @@ export default function MarkdownEditor({
     try {
       setDocTranslationRunning(true);
       setDocTranslationProgress(0);
-      setDocTranslationStatus('提交中 0%');
+      setDocTranslationStatus('鎻愪氦涓?0%');
       const cfg = await api.chat.getTranslationProviderConfig();
       const jobsUnsupportedKey = 'reader_translate_jobs_unsupported';
       const jobsUnsupported = window.sessionStorage.getItem(jobsUnsupportedKey) === '1';
@@ -740,7 +797,7 @@ export default function MarkdownEditor({
         if (emsg.includes('http_405')) {
           window.sessionStorage.setItem(jobsUnsupportedKey, '1');
         }
-        setDocTranslationStatus('任务接口不可用，回退到同步翻译...');
+        setDocTranslationStatus('浠诲姟鎺ュ彛涓嶅彲鐢紝鍥為€€鍒板悓姝ョ炕璇?..');
         setDocTranslationProgress(20);
         setDocHasActiveTask(true);
         const syncResult = await api.chat.translate(currentContentRef.current, cfg, true);
@@ -762,9 +819,9 @@ export default function MarkdownEditor({
       }
     } catch (e) {
       const msg = String((e as Error).message || 'unknown_error');
-      setDocTranslationStatus(`失败: ${msg}`);
+      setDocTranslationStatus(`澶辫触: ${msg}`);
       setDocHasActiveTask(false);
-      setTranslationText(`全文翻译失败: ${msg}`);
+      setTranslationText(`鍏ㄦ枃缈昏瘧澶辫触: ${msg}`);
       window.alert(`全文翻译失败：${msg}`);
     } finally {
       setDocTranslationRunning(false);
@@ -778,8 +835,8 @@ export default function MarkdownEditor({
     setDocHasActiveTask(true);
     pollTranslationJobUntilDone(pending.job_id, pending.started_at).catch((e) => {
       const msg = String((e as Error).message || 'unknown_error');
-      setDocTranslationStatus(`失败: ${msg}`);
-      setTranslationText(`全文翻译失败: ${msg}`);
+      setDocTranslationStatus(`澶辫触: ${msg}`);
+      setTranslationText(`鍏ㄦ枃缈昏瘧澶辫触: ${msg}`);
       setDocHasActiveTask(false);
     });
     return () => {
@@ -797,9 +854,9 @@ export default function MarkdownEditor({
     // eslint-disable-next-line no-console
     console.log('[notes] save start', { noteId, absolutePath, hasShell: !!sh, runtime: sh?.runtime, pickedLen: picked.length, noteLen: noteText.length });
 
-    // ── Direct file write ──
+    // 鈹€鈹€ Direct file write 鈹€鈹€
     if (!sh || sh.runtime !== 'electron' || !absolutePath) {
-      window.alert('文件写入不可用（非Electron环境）');
+      window.alert('文件写入不可用（非 Electron 环境）');
       setTimeout(() => {
         setSelectionUI((p) => ({ ...p, visible: false, lineStart: -1, lineEnd: -1 }));
       }, 600);
@@ -815,13 +872,13 @@ export default function MarkdownEditor({
       console.log('[notes] read result', { ok: read.ok, dataLen: read.data?.length, error: read.error });
 
       if (!read.ok) {
-        // File doesn't exist or can't be read — create new
+        // File doesn't exist or can't be read 鈥?create new
         const init = `## Reader Notes\n\n`;
         const created = await sh.writeLocalText(absolutePath, init);
         // eslint-disable-next-line no-console
         console.log('[notes] create new file', { ok: created.ok, error: created.error });
         if (!created.ok) {
-          throw new Error(`创建文件失败: ${created.error || 'unknown'}`);
+          throw new Error(`鍒涘缓鏂囦欢澶辫触: ${created.error || 'unknown'}`);
         }
         read = { ok: true, data: init };
       }
@@ -834,7 +891,7 @@ export default function MarkdownEditor({
       // Find insertion position: prefer text match (robust), fall back to line-based
       let insertAt = src.length;
       const lineEnd = selectionUI.lineEnd;
-      // Try exact text match first — works regardless of DOM selection quirks
+      // Try exact text match first 鈥?works regardless of DOM selection quirks
       const textIdx = src.indexOf(picked);
       if (textIdx >= 0) {
         const after = src.slice(textIdx + picked.length);
@@ -863,7 +920,7 @@ export default function MarkdownEditor({
       console.log('[notes] write result', { ok: wr.ok, error: wr.error });
 
       if (!wr.ok) {
-        throw new Error(`写入文件失败: ${wr.error || 'unknown'}`);
+        throw new Error(`鍐欏叆鏂囦欢澶辫触: ${wr.error || 'unknown'}`);
       }
 
       // Verify
@@ -873,7 +930,7 @@ export default function MarkdownEditor({
       console.log('[notes] verify', { ok: verify.ok, markerFound });
 
       if (!markerFound) {
-        throw new Error('写入验证失败：回读文件未找到笔记标记');
+        throw new Error('鍐欏叆楠岃瘉澶辫触锛氬洖璇绘枃浠舵湭鎵惧埌绗旇鏍囪');
       }
 
       // Update state
@@ -910,6 +967,42 @@ export default function MarkdownEditor({
       onContentChange?.(latest);
     }
     window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId, noteId: range.id || '', action: 'delete' } }));
+  };
+
+  const handleEditNoteByIndex = async (index: number) => {
+    if (!Number.isInteger(index) || index < 0 || index >= noteRanges.length) return;
+    const range = noteRanges[index];
+    if (!range?.id) return;
+    const nextQuote = window.prompt('编辑 Quote：', range.quote || '');
+    if (nextQuote === null) return;
+    const nextNote = window.prompt('编辑 Note：', range.note || '');
+    if (nextNote === null) return;
+    const quote = String(nextQuote || '').trim();
+    const note = String(nextNote || '').trim();
+    if (!quote || !note) {
+      window.alert('Quote 和 Note 不能为空。');
+      return;
+    }
+    const hasPdfLocator = range.pageIndex >= 0 || !!String(range.rect || '').trim() || !!String(range.quads || '').trim();
+    const ok = await upsertNoteInMarkdown(
+      String(absolutePath || '').trim(),
+      range.id,
+      quote,
+      note,
+      hasPdfLocator
+        ? { pageIndex: range.pageIndex, rect: range.rect, quads: range.quads, anchorText: quote }
+        : { anchorText: quote },
+    );
+    if (!ok) {
+      window.alert('编辑笔记失败：写入 Markdown 失败。');
+      return;
+    }
+    const latest = await readMarkdownText(String(absolutePath || '').trim());
+    if (latest) {
+      setText(latest);
+      onContentChange?.(latest);
+    }
+    window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
   };
 
   const renderedMarkdownNode = useMemo(() => (
@@ -969,7 +1062,7 @@ export default function MarkdownEditor({
     },
   }), []);
 
-  // CM6 theme for live preview — matches Read mode typography
+  // CM6 theme for live preview 鈥?matches Read mode typography
   const cm6LivePreviewTheme = useMemo(() => EditorView.theme({
     '&': {
       backgroundColor: 'transparent',
@@ -1117,9 +1210,9 @@ export default function MarkdownEditor({
               className="px-3 py-1 text-xs rounded-md border border-outline-variant text-on-surface-variant hover:bg-surface-container-low"
               onClick={handleTranslateWholeDocument}
               disabled={docTranslationRunning}
-              title="全文段落对照翻译"
+              title="鍏ㄦ枃娈佃惤瀵圭収缈昏瘧"
             >
-              全文对照翻译
+              鍏ㄦ枃瀵圭収缈昏瘧
             </button>
           )}
           {(docTranslationRunning || docHasActiveTask) && (
@@ -1175,6 +1268,12 @@ export default function MarkdownEditor({
                       }
                       return;
                     }
+                    const editBtn = elem?.closest('[data-reader-note-edit]') as HTMLElement | null;
+                    if (editBtn) {
+                      const idx = Number(editBtn.getAttribute('data-reader-note-edit') || '-1');
+                      if (idx >= 0) void handleEditNoteByIndex(idx);
+                      return;
+                    }
                     const btn = elem?.closest('[data-reader-note-delete]') as HTMLElement | null;
                     if (!btn) return;
                     const idx = Number(btn.getAttribute('data-reader-note-delete') || '-1');
@@ -1203,3 +1302,4 @@ export default function MarkdownEditor({
     </div>
   );
 }
+

@@ -76,7 +76,10 @@ export default function GraphView() {
     if (selectedNodeId) qs.set('selected_node_id', selectedNodeId);
     if (selectedNodeLibraryId) qs.set('selected_node_library_id', selectedNodeLibraryId);
     qs.set('ui_rev', iframeRevRef.current);
-    return `/frontend_legacy/graph_3d/index.html?${qs.toString()}`;
+    const w = window as unknown as { desktopShell?: { getBackendUrlSync?: () => string } };
+    const backendBase = String(w.desktopShell?.getBackendUrlSync?.() || '').trim().replace(/\/+$/, '');
+    const relative = `/frontend_legacy/graph_3d/index.html?${qs.toString()}`;
+    return backendBase ? `${backendBase}${relative}` : relative;
   }, [activeLibraryId, selectedLibraryIds]);
 
   const libraryIds = useMemo(() => {
