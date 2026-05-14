@@ -20,8 +20,11 @@ _ALLOWED_UPLOAD_EXTS = {".pdf", ".docx", ".md", ".html"}
 
 def _resolve_library_workspace(library_id: str, workspaces_dir: Path) -> Path:
     target = (Path(workspaces_dir).resolve() / str(library_id or "").strip()).resolve()
-    if not target.exists() or not target.is_dir():
-        raise RuntimeError(f"library_workspace_missing:{library_id}")
+    # Auto-create workspace directory for existing library ids to avoid
+    # import hard-fail after reinstall/path migration.
+    target.mkdir(parents=True, exist_ok=True)
+    if not target.is_dir():
+        raise RuntimeError(f"library_workspace_invalid:{library_id}")
     return target
 
 

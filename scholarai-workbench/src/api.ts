@@ -302,7 +302,21 @@ export const api = {
       formData.append('library_id', libraryId);
       return fetch(`${API_BASE}/v1/pipeline/parse-extract/batch`, { method: 'POST', body: formData }).then(async (resp) => {
         const payload = await resp.json();
-        if (!resp.ok) throw new Error(payload.error || `http_${resp.status}`);
+        if (!resp.ok) {
+          const error = String((payload as Record<string, unknown>)?.error || `http_${resp.status}`);
+          const rejected = Array.isArray((payload as Record<string, unknown>)?.rejected)
+            ? ((payload as Record<string, unknown>).rejected as Array<Record<string, unknown>>)
+            : [];
+          const rejectedDetail = rejected
+            .map((item) => {
+              const fileName = String(item?.file_name || 'unknown_file');
+              const reason = String(item?.error || 'unknown_error');
+              return `${fileName}: ${reason}`;
+            })
+            .join('\n');
+          const detail = rejectedDetail ? `\n${rejectedDetail}` : '';
+          throw new Error(`${error}${detail}`);
+        }
         return payload as PipelineBatchSubmitResponse;
       });
     },
