@@ -1,4 +1,4 @@
-import { FileText, ExternalLink, Library, Layers, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+﻿import { FileText, ExternalLink, Library, Layers, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useApp } from '../app-context';
 import { api } from '../api';
@@ -208,7 +208,7 @@ export default function LibraryView() {
     return () => { cancelled = true; };
   }, [paperList, paperFileCache, setPaperFileCache]);
 
-  // ── Selection logic ──
+  // 鈹€鈹€ Selection logic 鈹€鈹€
 
   const isSelected = useCallback((index: number) => {
     return selRef.current.selected.has(index);
@@ -266,7 +266,7 @@ export default function LibraryView() {
     return Array.from(selRef.current.selected).map((i) => paperList[i]).filter(Boolean);
   }, [paperList]);
 
-  // ── Existing helpers ──
+  // 鈹€鈹€ Existing helpers 鈹€鈹€
 
   const setSelectedPaper = (paperId: string, libraryId: string) => {
     setSelectedPaperId(paperId);
@@ -282,14 +282,23 @@ export default function LibraryView() {
   };
 
   const variableRows = useMemo(() => {
+    const paperTitleById = new Map<string, string>();
+    for (const p of paperList) {
+      const pid = String(p.paperId || '').trim();
+      const ptitle = String(p.title || '').trim();
+      if (pid && ptitle && !paperTitleById.has(pid)) paperTitleById.set(pid, ptitle);
+    }
     return variables.map((v) => ({
       id: v.id,
       libraryId: String(v.library_id || ''),
       name: v.label || v.name || v.id,
       concept: String(v.latest_concept || '').trim() || '暂无概念定义',
       sourcePaperId: String(v.latest_concept_source?.paper_id || v.dominant_paper_id || '-'),
+      sourcePaperTitle: String(
+        paperTitleById.get(String(v.latest_concept_source?.paper_id || v.dominant_paper_id || '').trim()) || '',
+      ).trim(),
     })).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
-  }, [variables]);
+  }, [variables, paperList]);
 
   const openVariableSourceInReader = (row: { id: string; libraryId: string; sourcePaperId: string }) => {
     const sourcePaperId = String(row.sourcePaperId || '').trim();
@@ -513,7 +522,7 @@ export default function LibraryView() {
                   <tr key={`${row.libraryId}-${row.id}`} className="hover:bg-surface-container-low transition-colors">
                     <td className="px-4 py-3 text-sm text-on-surface font-medium">{row.name}</td>
                     <td className="px-4 py-3 text-xs text-on-surface-variant">{row.concept}</td>
-                    <td className="px-4 py-3 text-xs font-mono text-on-surface-variant">{row.sourcePaperId}</td>
+                    <td className="px-4 py-3 text-xs text-on-surface-variant">{row.sourcePaperTitle || row.sourcePaperId}</td>
                     <td className="px-4 py-3 text-right"><button onClick={() => openVariableSourceInReader(row)} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary">跳转</button></td>
                   </tr>
                 ))}
@@ -525,4 +534,6 @@ export default function LibraryView() {
     </div>
   );
 }
+
+
 
