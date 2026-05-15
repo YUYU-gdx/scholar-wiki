@@ -3,6 +3,7 @@ interface DesktopShell {
   runtime: string;
   getBackendPort(): Promise<number>;
   getBackendUrl(): Promise<string>;
+  getBackendUrlSync(): string;
   restartBackend(): Promise<number>;
   openLocalPath(targetPath: string): Promise<{ ok: boolean; error?: string }>;
   readLocalFile(filePath: string): Promise<{ ok: boolean; data?: string; size?: number; error?: string }>;

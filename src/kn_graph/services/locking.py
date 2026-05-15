@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -11,20 +10,9 @@ from typing import Any
 from filelock import FileLock, Timeout
 
 
-def _read_lock_timeout() -> float:
-    """Read lock timeout from env.
-
-    - default: -1 (wait forever, queue instead of timeout-fail)
-    - invalid value: fallback to -1
-    """
-    raw = str(os.getenv("KN_PIPELINE_LOCK_TIMEOUT", "-1") or "-1").strip()
-    try:
-        return float(raw)
-    except Exception:
-        return -1.0
-
-
-_LOCK_TIMEOUT: float = _read_lock_timeout()
+# Lock timeout is hard-coded to infinite wait.
+# Do not read from environment to avoid accidental 300s timeout regressions.
+_LOCK_TIMEOUT: float = -1.0
 
 
 class LibraryLock:

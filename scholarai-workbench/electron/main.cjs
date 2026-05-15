@@ -7,7 +7,9 @@ const { promisify } = require("node:util");
 const execFileAsync = promisify(execFile);
 
 const HOST = "127.0.0.1";
-const BASE_PORT = Number(process.env.KN_GRAPH_PORT || 8013);
+// Reserve 8013 for local dev backend; packaged app defaults to 8014 to avoid cross-connecting.
+const BASE_PORT = Number(process.env.KN_GRAPH_PORT || 8014);
+const DEV_DATA_DIR_WIN = "D:\\AppData\\KNGraphApp-dev";
 const START_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 800;
 const MAX_PORT_SCAN = 20;
@@ -84,17 +86,19 @@ function getRepoRoot() {
   return path.resolve(__dirname, "..", "..");
 }
 
-function getDefaultDataDir() {
-  const envDir = String(process.env.KN_GRAPH_DATA_DIR || "").trim();
+function getDefaultDataDir(opts = {}) {
+  const ignoreEnv = Boolean(opts && opts.ignoreEnv);
+  if (app.isPackaged) {
+    // Packaged app data is pinned under installation directory.
+    return path.join(path.dirname(process.execPath), "data");
+  }
+  const envDir = ignoreEnv ? "" : String(process.env.KN_GRAPH_DATA_DIR || "").trim();
   if (envDir) return envDir;
   if (process.platform === "win32") {
-    const base = process.env.LOCALAPPDATA
-      || process.env.APPDATA
-      || path.join(process.env.HOME || process.env.USERPROFILE || ".", "AppData", "Local");
-    const suffix = app.isPackaged ? "KNGraphApp" : "KNGraphApp-dev";
-    return path.join(base, suffix);
+    // Dev data directory is fixed to avoid any mix-up with packaged data.
+    return DEV_DATA_DIR_WIN;
   }
-  return path.join(process.env.HOME || process.env.USERPROFILE || ".", app.isPackaged ? ".kn_graph" : ".kn_graph-dev");
+  return path.join(process.env.HOME || process.env.USERPROFILE || ".", ".kn_graph-dev");
 }
 
 function buildPythonEnv(repoRoot) {
@@ -188,13 +192,16 @@ function chooseViewsJson(repoRoot) {
 async function startBackendServer() {
   if (backendProc) return;
 
-  // Check if a backend is already running on BASE_PORT or nearby ports
-  for (let port = BASE_PORT; port < BASE_PORT + 5; port += 1) {
-    if (await isBackendAlive(port)) {
-      runtimePort = port;
-      backendStartedByUs = false;
-      console.log(`[desktop] Found existing backend on port ${port}, reusing it`);
-      return;
+  // Development-only reuse: avoid connecting packaged app to a stray dev backend.
+  if (!app.isPackaged) {
+    // Check if a backend is already running on BASE_PORT or nearby ports
+    for (let port = BASE_PORT; port < BASE_PORT + 5; port += 1) {
+      if (await isBackendAlive(port)) {
+        runtimePort = port;
+        backendStartedByUs = false;
+        console.log(`[desktop] Found existing backend on port ${port}, reusing it`);
+        return;
+      }
     }
   }
 
@@ -206,8 +213,11 @@ async function startBackendServer() {
     // Production: launch the bundled kn_graph.exe
     const exePath = path.join(process.resourcesPath, "kn_graph.exe");
     const args = ["serve", "--host", HOST, "--port", String(runtimePort)];
+    const dataDir = getDefaultDataDir({ ignoreEnv: true });
+    args.push("--data-dir", dataDir);
     console.log(`[desktop] backend_exe=${exePath}`);
     console.log(`[desktop] backend_port=${runtimePort}`);
+    console.log(`[desktop] backend_data_dir=${dataDir}`);
     console.log(`[desktop] cmd: ${exePath} ${args.join(" ")}`);
 
     const installRoot = path.dirname(process.execPath);
@@ -222,10 +232,12 @@ async function startBackendServer() {
   } else {
     // Development: use uv run python
     const repoRoot = getRepoRoot();
+    const dataDir = getDefaultDataDir();
     const args = [
       "run", "python", "-m", "kn_graph", "serve",
       "--host", HOST,
       "--port", String(runtimePort),
+      "--data-dir", dataDir,
     ];
     if (process.env.NODE_ENV === "development" && !process.env.DISABLE_BACKEND_RELOAD) {
       args.push("--reload");
@@ -379,6 +391,9 @@ function stopBackendServer() {
 // IPC handlers for renderer process
 ipcMain.handle("get-backend-port", () => runtimePort);
 ipcMain.handle("get-backend-url", () => `http://${HOST}:${runtimePort}`);
+ipcMain.on("get-backend-url-sync", (event) => {
+  event.returnValue = `http://${HOST}:${runtimePort}`;
+});
 ipcMain.handle("restart-backend", async () => {
   await stopBackendServer();
   await startBackendServer();

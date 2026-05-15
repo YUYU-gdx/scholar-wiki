@@ -14,11 +14,12 @@ def _default_data_dir() -> Path:
     env = os.getenv("KN_GRAPH_DATA_DIR", "").strip()
     if env:
         return Path(env)
-    # Packaged app uses the stable user data dir; dev mode uses an isolated dir.
-    suffix = "KNGraphApp" if _is_frozen() else "KNGraphApp-dev"
     if os.name == "nt":
-        base = os.getenv("LOCALAPPDATA", "") or os.getenv("APPDATA", "") or Path.home() / "AppData" / "Local"
-        return Path(base) / suffix
+        if _is_frozen():
+            base = os.getenv("LOCALAPPDATA", "") or os.getenv("APPDATA", "") or Path.home() / "AppData" / "Local"
+            return Path(base) / "KNGraphApp"
+        # Dev mode is pinned to a fixed directory to isolate from packaged data.
+        return Path("D:/AppData/KNGraphApp-dev")
     return Path.home() / (".kn_graph" if _is_frozen() else ".kn_graph-dev")
 
 

@@ -1,7 +1,7 @@
 {
     "name":  "scholar-wiki",
     "private":  true,
-    "version":  "0.1.3",
+    "version": "0.1.5",
     "description":  "Scholar Wiki - Desktop app for academic knowledge graph exploration and AI-powered research",
     "main":  "electron/main.cjs",
     "type":  "module",
@@ -20,7 +20,7 @@
                     "electron":  "electron .",
                     "electron:dev":  "npm run dev:electron",
                     "pack":  "electron-builder --dir",
-                    "dist":  "electron-builder"
+                    "dist":  "uv run pyinstaller --distpath .\\dist --workpath .\\build ..\\kn_graph.spec && copy /Y .\\dist\\kn_graph.exe ..\\dist_exe\\kn_graph.exe && electron-builder"
                 },
     "build":  {
                   "appId":  "com.scholar.wiki",
@@ -115,3 +115,4 @@
                             "vitest":  "^4.1.5"
                         }
 }
+
