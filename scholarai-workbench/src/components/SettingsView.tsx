@@ -236,21 +236,117 @@ export default function SettingsView() {
         return;
       }
       const w = window as unknown as { desktopShell?: { runInTerminal?: (pkg: string, bin: string, name: string) => Promise<{ ok: boolean; error?: string }> } };
-      const shell = w.desktopShell?.runInTerminal;
-      if (!shell) return;
-      // Extract package name from "npm install -g <pkg>"
-      const pkg = info.command.replace(/^npm\s+install\s+-g\s+/, '').trim();
-      const result = await shell(pkg, info.binary, info.display_name);
-      if (!result.ok) {
+      const ds = w.desktopShell as unknown as {
+        runInTerminal?: (pkg: string, bin: string, name: string) => Promise<{ ok: boolean; error?: string }>;
+        agentPrecheck?: () => Promise<any>;
+        agentInstallNode?: () => Promise<any>;
+        agentInstallClaude?: () => Promise<any>;
+        agentPostcheck?: () => Promise<any>;
+      };
+      if (agentId !== 'claude_code' || !ds?.agentPrecheck || !ds?.agentInstallNode || !ds?.agentInstallClaude || !ds?.agentPostcheck) {
+        const shell = ds?.runInTerminal;
+        if (!shell) return;
+        const pkg = info.command.replace(/^npm\s+install\s+-g\s+/, '').trim();
+        const result = await shell(pkg, info.binary, info.display_name);
+        if (!result.ok) {
+          setAgentTestResult({
+            agent_id: agentId,
+            ok: false,
+            passed_count: 0,
+            failed_count: 1,
+            checks: [{ name: 'install_launch', passed: false, stage: 'install', error: result.error || '无法打开终端' }],
+            checked_at: new Date().toISOString(),
+          });
+        }
+        return;
+      }
+
+      setAgentTestResult({
+        agent_id: agentId,
+        ok: false,
+        passed_count: 0,
+        failed_count: 0,
+        checks: [{ name: 'precheck', passed: true, stage: 'install', suggestion: '正在检查 Node.js / Claude Code...' }],
+        checked_at: new Date().toISOString(),
+      });
+
+      const pre = await ds.agentPrecheck();
+      const needsNode = !Boolean(pre?.node?.installed);
+      const needsClaude = !Boolean(pre?.claude?.installed);
+      if (!needsNode && !needsClaude) {
+        setAgentTestResult({
+          agent_id: agentId,
+          ok: true,
+          passed_count: 1,
+          failed_count: 0,
+          checks: [{ name: 'already_installed', passed: true, stage: 'install', suggestion: '检测到 Node.js 和 Claude Code 已安装，可直接点击测试。' }],
+          checked_at: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (needsNode) {
         setAgentTestResult({
           agent_id: agentId,
           ok: false,
           passed_count: 0,
-          failed_count: 1,
-          checks: [{ name: 'install_launch', passed: false, stage: 'install', error: result.error || '无法打开终端' }],
+          failed_count: 0,
+          checks: [{ name: 'install_node', passed: true, stage: 'install', suggestion: '缺少 Node.js，正在安装...' }],
           checked_at: new Date().toISOString(),
         });
+        const n = await ds.agentInstallNode();
+        if (!n?.ok || !n?.node?.installed) {
+          setAgentTestResult({
+            agent_id: agentId,
+            ok: false,
+            passed_count: 0,
+            failed_count: 1,
+            checks: [{ name: 'install_node', passed: false, stage: 'install', error: String(n?.error || 'node_install_failed') }],
+            checked_at: new Date().toISOString(),
+          });
+          return;
+        }
       }
+
+      if (needsClaude || !Boolean((await ds.agentPrecheck())?.claude?.installed)) {
+        setAgentTestResult({
+          agent_id: agentId,
+          ok: false,
+          passed_count: 0,
+          failed_count: 0,
+          checks: [{ name: 'install_claude', passed: true, stage: 'install', suggestion: '正在安装 Claude Code...' }],
+          checked_at: new Date().toISOString(),
+        });
+        const c = await ds.agentInstallClaude();
+        if (!c?.ok || !c?.claude?.installed) {
+          setAgentTestResult({
+            agent_id: agentId,
+            ok: false,
+            passed_count: 0,
+            failed_count: 1,
+            checks: [{ name: 'install_claude', passed: false, stage: 'install', error: String(c?.error || 'claude_install_failed') }],
+            checked_at: new Date().toISOString(),
+          });
+          return;
+        }
+      }
+
+      const post = await ds.agentPostcheck();
+      const done = Boolean(post?.node?.installed) && Boolean(post?.claude?.installed);
+      setAgentTestResult({
+        agent_id: agentId,
+        ok: done,
+        passed_count: done ? 1 : 0,
+        failed_count: done ? 0 : 1,
+        checks: [{
+          name: 'install_done',
+          passed: done,
+          stage: 'install',
+          suggestion: done ? '安装完成，可点击测试。' : '安装后校验失败，请重试或手动检查环境。',
+          error: done ? undefined : 'postcheck_failed',
+        }],
+        checked_at: new Date().toISOString(),
+      });
     } catch (err) {
       setAgentTestResult({
         agent_id: agentId,

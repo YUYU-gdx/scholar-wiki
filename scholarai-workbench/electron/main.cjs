@@ -13,6 +13,7 @@ const DEV_DATA_DIR_WIN = "D:\\AppData\\KNGraphApp-dev";
 const START_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 800;
 const MAX_PORT_SCAN = 20;
+const DESKTOP_CONFIG_NAME = "desktop_config.json";
 
 let backendProc = null;
 let mainWindow = null;
@@ -88,12 +89,15 @@ function getRepoRoot() {
 
 function getDefaultDataDir(opts = {}) {
   const ignoreEnv = Boolean(opts && opts.ignoreEnv);
-  if (app.isPackaged) {
-    // Packaged app data is pinned under installation directory.
-    return path.join(path.dirname(process.execPath), "data");
-  }
   const envDir = ignoreEnv ? "" : String(process.env.KN_GRAPH_DATA_DIR || "").trim();
   if (envDir) return envDir;
+  const cfg = readDesktopConfig();
+  const cfgDir = String(cfg.data_dir || "").trim();
+  if (cfgDir) return cfgDir;
+  if (app.isPackaged) {
+    // Packaged app data must live in a user-writable directory.
+    return path.join(app.getPath("userData"), "data");
+  }
   if (process.platform === "win32") {
     // Dev data directory is fixed to avoid any mix-up with packaged data.
     return DEV_DATA_DIR_WIN;
@@ -106,14 +110,78 @@ function buildPythonEnv(repoRoot) {
   const sep = process.platform === "win32" ? ";" : ":";
   const pythonPath = prev ? `${repoRoot}${sep}${prev}` : repoRoot;
   const dataDir = getDefaultDataDir();
-  const installRoot = app.isPackaged ? path.dirname(process.execPath) : repoRoot;
-  const workspacesDir = path.join(installRoot, "workspaces");
+  const workspacesDir = path.join(dataDir, "libraries", "workspaces");
   return {
     ...process.env,
     PYTHONPATH: pythonPath,
     KN_GRAPH_DATA_DIR: dataDir,
     KN_GRAPH_WORKSPACES_DIR: workspacesDir,
   };
+}
+
+function desktopConfigPath() {
+  return path.join(app.getPath("userData"), DESKTOP_CONFIG_NAME);
+}
+
+function readDesktopConfig() {
+  try {
+    const p = desktopConfigPath();
+    if (!fs.existsSync(p)) return {};
+    const raw = fs.readFileSync(p, "utf8");
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === "object" ? obj : {};
+  } catch (_err) {
+    return {};
+  }
+}
+
+function writeDesktopConfig(nextCfg) {
+  const current = readDesktopConfig();
+  const merged = { ...current, ...(nextCfg || {}) };
+  const p = desktopConfigPath();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(merged, null, 2), "utf8");
+  return merged;
+}
+
+function migrateDirectoryContents(srcDir, dstDir) {
+  const src = path.resolve(String(srcDir || "").trim());
+  const dst = path.resolve(String(dstDir || "").trim());
+  if (!src || !dst) throw new Error("invalid_migrate_path");
+  if (src.toLowerCase() === dst.toLowerCase()) return { moved: 0 };
+  if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) return { moved: 0 };
+
+  fs.mkdirSync(dst, { recursive: true });
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+  if (entries.length === 0) return { moved: 0 };
+
+  const copiedTargets = [];
+  try {
+    for (const entry of entries) {
+      const from = path.join(src, entry.name);
+      const to = path.join(dst, entry.name);
+      if (fs.existsSync(to)) {
+        throw new Error(`target_conflict:${to}`);
+      }
+      fs.cpSync(from, to, { recursive: true, force: false, errorOnExist: true });
+      copiedTargets.push(to);
+    }
+  } catch (e) {
+    for (let i = copiedTargets.length - 1; i >= 0; i -= 1) {
+      try {
+        fs.rmSync(copiedTargets[i], { recursive: true, force: true });
+      } catch (_rollbackErr) {
+        // ignore rollback error
+      }
+    }
+    throw e;
+  }
+
+  for (const entry of entries) {
+    const from = path.join(src, entry.name);
+    fs.rmSync(from, { recursive: true, force: true });
+  }
+  return { moved: entries.length };
 }
 
 function safeReadJson(filePath) {
@@ -390,6 +458,79 @@ function stopBackendServer() {
 
 // IPC handlers for renderer process
 ipcMain.handle("get-backend-port", () => runtimePort);
+ipcMain.handle("agent-precheck", async () => {
+  const state = await detectNodeAndClaude();
+  return { ok: true, stage: "precheck", ...state };
+});
+ipcMain.handle("agent-install-node", async () => {
+  const before = await detectNodeAndClaude();
+  if (before.node.installed) {
+    return { ok: true, stage: "install_node", skipped: true, reason: "node_already_installed", ...before };
+  }
+  const install = await runExecFile("winget", ["install", "OpenJS.NodeJS.LTS", "--silent", "--accept-package-agreements"], {
+    timeoutMs: 20 * 60 * 1000,
+  });
+  const after = await detectNodeAndClaude();
+  return {
+    ok: after.node.installed,
+    stage: "install_node",
+    skipped: false,
+    install,
+    ...after,
+    error: after.node.installed ? "" : "node_install_not_detected",
+  };
+});
+ipcMain.handle("agent-install-claude", async () => {
+  const before = await detectNodeAndClaude();
+  if (!before.node.installed || !before.npm.installed) {
+    return { ok: false, stage: "install_claude", error: "node_or_npm_missing", ...before };
+  }
+  if (before.claude.installed) {
+    return { ok: true, stage: "install_claude", skipped: true, reason: "claude_already_installed", ...before };
+  }
+  const env = {
+    ...process.env,
+    PATH: `${path.dirname(before.node.path || "")};${path.join(String(process.env.APPDATA || "").trim(), "npm")};${process.env.PATH || ""}`,
+    NPM_CONFIG_PREFIX: path.join(String(process.env.APPDATA || "").trim(), "npm"),
+  };
+  const install = await runExecFile(before.npm.path, ["install", "-g", "@anthropic-ai/claude-code"], {
+    timeoutMs: 20 * 60 * 1000,
+    env,
+  });
+  const after = await detectNodeAndClaude();
+  return {
+    ok: after.claude.installed,
+    stage: "install_claude",
+    skipped: false,
+    install,
+    ...after,
+    error: after.claude.installed ? "" : "claude_install_not_detected",
+  };
+});
+ipcMain.handle("agent-postcheck", async () => {
+  const state = await detectNodeAndClaude();
+  return { ok: true, stage: "postcheck", ...state };
+});
+ipcMain.handle("get-data-dir", () => ({ ok: true, data_dir: getDefaultDataDir() }));
+ipcMain.handle("set-data-dir", async (_evt, value) => {
+  const next = String(value || "").trim();
+  if (!next) return { ok: false, error: "data_dir_required" };
+  try {
+    const prev = getDefaultDataDir();
+    fs.mkdirSync(next, { recursive: true });
+    const migration = migrateDirectoryContents(prev, next);
+    writeDesktopConfig({ data_dir: next });
+    return {
+      ok: true,
+      data_dir: next,
+      restart_required: true,
+      migrated: true,
+      migrated_entries: migration.moved,
+    };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
 ipcMain.handle("get-backend-url", () => `http://${HOST}:${runtimePort}`);
 ipcMain.on("get-backend-url-sync", (event) => {
   event.returnValue = `http://${HOST}:${runtimePort}`;
@@ -413,24 +554,30 @@ ipcMain.handle("run-in-terminal", async (_evt, packageName, binary, displayName)
 
   const script = [
     "@echo off",
+    "setlocal EnableExtensions",
     "echo.",
     "echo   ╔══════════════════════════════════════════╗",
     `echo   ║   ${label} 一键安装向导              ║`,
     "echo   ╚══════════════════════════════════════════╝",
     "echo.",
-    "echo   [1/2] 检查 Node.js ...",
-    "echo.",
+    "set \"NODE_OK=0\"",
+    "set \"AGENT_OK=0\"",
+    "echo   [1/3] 检查 Node.js ...",
     "where node >nul 2>nul",
-    "if %errorlevel% neq 0 (",
+    "if %errorlevel% equ 0 (",
+    "    set \"NODE_OK=1\"",
+    "    echo   Node.js 已安装。",
+    ") else (",
     "    echo   Node.js 未安装，正在通过 winget 安装，请稍候 ...",
     "    winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements 2>&1",
-    "    echo.",
     "    REM winget installs to %%ProgramFiles%%\\nodejs, add it to PATH for this session",
     "    if exist \"%ProgramFiles%\\nodejs\\node.exe\" set \"PATH=%ProgramFiles%\\nodejs;%PATH%\"",
     "    if exist \"%SystemDrive%\\Program Files\\nodejs\\node.exe\" set \"PATH=%SystemDrive%\\Program Files\\nodejs;%PATH%\"",
-    "    echo.",
     "    where node >nul 2>nul",
-    "    if %errorlevel% neq 0 (",
+    "    if %errorlevel% equ 0 (",
+    "        set \"NODE_OK=1\"",
+    "        echo   Node.js 安装成功！",
+    "    ) else (",
     "        echo.",
     "        echo   ╔══════════════════════════════════════════╗",
     "        echo   ║   Node.js 安装失败                    ║",
@@ -442,55 +589,98 @@ ipcMain.handle("run-in-terminal", async (_evt, packageName, binary, displayName)
     "        pause",
     "        exit /b 1",
     "    )",
-    "    echo   Node.js 安装成功！",
     ")",
     "echo   Node.js 版本:",
     "node --version 2>nul",
     "echo   npm 版本:",
     "npm --version 2>nul",
-    "echo.",
-    `echo   [2/2] 安装 ${label} ...`,
-    "echo   正在下载，请耐心等待 ...",
-    "echo.",
-    `npm install -g ${pkg} 2>&1`,
-    "set INSTALL_RESULT=%errorlevel%",
-    "echo.",
-    "if %INSTALL_RESULT% equ 0 (",
+    "where npm >nul 2>nul",
+    "if %errorlevel% neq 0 (",
     "    echo.",
-    "    echo   ╔══════════════════════════════════════════╗",
-    "    echo   ║                                      ║",
-    `    echo   ║   ${label} 安装成功！              ║`,
-    "    echo   ║                                      ║",
-    "    echo   ╚══════════════════════════════════════════╝",
+    "    echo   npm 不可用，请重新安装 Node.js LTS 后重试。",
+    "    pause",
+    "    exit /b 1",
+    ")",
+    "echo.",
+    "where bash >nul 2>nul",
+    "if %errorlevel% neq 0 (",
+    "    echo   提示：未检测到 Git Bash。Claude Code 在 Windows 上建议安装 Git for Windows。",
+    "    echo   下载地址：https://git-scm.com/download/win",
+    ")",
+    "echo.",
+    "REM Use per-user npm global prefix to avoid admin-permission issues.",
+    "set \"NPM_CONFIG_PREFIX=%APPDATA%\\npm\"",
+    "if not exist \"%NPM_CONFIG_PREFIX%\" mkdir \"%NPM_CONFIG_PREFIX%\"",
+    "set \"PATH=%NPM_CONFIG_PREFIX%;%PATH%\"",
+    "echo   npm 全局安装目录: %NPM_CONFIG_PREFIX%",
+    "echo.",
+    `echo   [2/3] 检查 ${label} ...`,
+    `where ${bin} >nul 2>nul`,
+    "if %errorlevel% equ 0 (",
+    "    set \"AGENT_OK=1\"",
+    `    echo   已检测到 ${label}。`,
+    `    ${bin} --version 2>nul || echo   (已检测到命令，但版本读取失败)`,
+    ")",
+    "echo.",
+    "if %AGENT_OK% neq 1 (",
+    `    echo   [3/3] 安装 ${label} ...`,
+    "    echo   正在下载，请耐心等待 ...",
     "    echo.",
-    `    echo   版本：`,
-    `    ${bin} --version 2>nul || echo   (请关闭窗口后重新打开终端验证)`,
-    "    echo.",
-    "    echo   可以关掉这个窗口了。",
-    "    echo   回到设置页面点击【测试】按钮确认配置是否正常。",
+    `    npm install -g ${pkg} 2>&1`,
+    "    set INSTALL_RESULT=%errorlevel%",
+    `    where ${bin} >nul 2>nul`,
+    "    set BIN_RESULT=%errorlevel%",
+    "    if %INSTALL_RESULT% equ 0 if %BIN_RESULT% equ 0 (",
+    "        set \"AGENT_OK=1\"",
+    "        echo.",
+    "        echo   ╔══════════════════════════════════════════╗",
+    "        echo   ║                                      ║",
+    `        echo   ║   ${label} 安装成功！              ║`,
+    "        echo   ║                                      ║",
+    "        echo   ╚══════════════════════════════════════════╝",
+    "        echo.",
+    `        echo   版本：`,
+    `        ${bin} --version 2>nul || echo   (请关闭窗口后重新打开终端验证)`,
+    "    ) else (",
+    "        echo.",
+    "        echo   ╔══════════════════════════════════════════╗",
+    "        echo   ║                                      ║",
+    `        echo   ║   ${label} 安装失败              ║`,
+    "        echo   ║                                      ║",
+    "        echo   ╚══════════════════════════════════════════╝",
+    "        echo.",
+    "        echo   请查看上面红色报错信息，常见原因：",
+    "        echo     1. 网络不通，无法访问 npm 仓库",
+    "        echo     2. npm 缓存损坏（可运行 npm cache clean --force 后重试）",
+    "        echo     3. 磁盘空间不足或权限不够",
+    "        echo.",
+    "        echo   解决问题后重新点击【安装】按钮即可。",
+    "        echo.",
+    `        where ${bin} >nul 2>nul`,
+    "        if %errorlevel% neq 0 echo   未检测到命令，请确认 npm 全局目录已在 PATH（当前会话已临时添加）。",
+    "    )",
     ") else (",
-    "    echo.",
-    "    echo   ╔══════════════════════════════════════════╗",
-    "    echo   ║                                      ║",
-    `    echo   ║   ${label} 安装失败              ║`,
-    "    echo   ║                                      ║",
-    "    echo   ╚══════════════════════════════════════════╝",
-    "    echo.",
-    "    echo   请查看上面红色报错信息，常见原因：",
-    "    echo     1. 网络不通，无法访问 npm 仓库",
-    "    echo     2. npm 缓存损坏（可运行 npm cache clean --force 后重试）",
-    "    echo     3. 磁盘空间不足或权限不够",
-    "    echo.",
-    "    echo   解决问题后重新点击【安装】按钮即可。",
+    `    echo   [3/3] ${label} 已安装，跳过安装步骤。`,
+    ")",
+    "echo.",
+    "if %NODE_OK% equ 1 if %AGENT_OK% equ 1 (",
+    "    echo   环境已就绪：Node.js 与 Agent CLI 均可用。",
+    "    echo   回到设置页面点击【测试】按钮确认配置是否正常。",
     ")",
     "echo.",
     "pause",
+    "endlocal",
   ].join("\r\n");
 
   try {
     fs.writeFileSync(batPath, script, "utf-8");
-    // Use cmd /K to keep window open; start to open in a new window
-    execFile("cmd.exe", ["/C", `start "安装 ${label}" cmd.exe /K "${batPath}"`], { windowsHide: false });
+    // Launch cmd directly to avoid fragile `start` quoting on paths/titles.
+    const child = spawn("cmd.exe", ["/K", batPath], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    child.unref();
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -666,6 +856,103 @@ function normalizeAssetRel(raw) {
     }
   }
   return s;
+}
+
+function firstExistingPath(candidates) {
+  for (const p of candidates || []) {
+    const cur = String(p || "").trim();
+    if (!cur) continue;
+    try {
+      if (fs.existsSync(cur)) return cur;
+    } catch (_err) {
+      // ignore
+    }
+  }
+  return "";
+}
+
+function resolveNodeExe() {
+  const pf = String(process.env.ProgramFiles || "").trim();
+  const pf86 = String(process.env["ProgramFiles(x86)"] || "").trim();
+  const lad = String(process.env.LocalAppData || "").trim();
+  return firstExistingPath([
+    pf ? path.join(pf, "nodejs", "node.exe") : "",
+    pf86 ? path.join(pf86, "nodejs", "node.exe") : "",
+    lad ? path.join(lad, "Programs", "nodejs", "node.exe") : "",
+  ]);
+}
+
+function resolveNpmCmd(nodeExePath = "") {
+  const nodeExe = String(nodeExePath || "").trim();
+  const nodeDir = nodeExe ? path.dirname(nodeExe) : "";
+  const pf = String(process.env.ProgramFiles || "").trim();
+  const pf86 = String(process.env["ProgramFiles(x86)"] || "").trim();
+  return firstExistingPath([
+    nodeDir ? path.join(nodeDir, "npm.cmd") : "",
+    pf ? path.join(pf, "nodejs", "npm.cmd") : "",
+    pf86 ? path.join(pf86, "nodejs", "npm.cmd") : "",
+  ]);
+}
+
+function resolveClaudeCmd() {
+  const appData = String(process.env.APPDATA || "").trim();
+  return firstExistingPath([
+    appData ? path.join(appData, "npm", "claude.cmd") : "",
+  ]);
+}
+
+async function runExecFile(file, args, opts = {}) {
+  const timeoutMs = Number(opts.timeoutMs || 10 * 60 * 1000);
+  const cwd = String(opts.cwd || process.cwd());
+  const env = opts.env || process.env;
+  try {
+    const out = await execFileAsync(file, args, {
+      cwd,
+      env,
+      windowsHide: true,
+      timeout: timeoutMs,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    return {
+      ok: true,
+      code: 0,
+      stdout: String(out.stdout || ""),
+      stderr: String(out.stderr || ""),
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      code: Number(e?.code ?? -1),
+      stdout: String(e?.stdout || ""),
+      stderr: String(e?.stderr || e?.message || ""),
+    };
+  }
+}
+
+async function detectNodeAndClaude() {
+  const nodeExe = resolveNodeExe();
+  const npmCmd = resolveNpmCmd(nodeExe);
+  const claudeCmd = resolveClaudeCmd();
+  let nodeVersion = "";
+  let npmVersion = "";
+  let claudeVersion = "";
+  if (nodeExe) {
+    const n = await runExecFile(nodeExe, ["--version"], { timeoutMs: 20_000 });
+    nodeVersion = String((n.stdout || n.stderr || "").trim().split(/\r?\n/)[0] || "");
+  }
+  if (npmCmd) {
+    const n = await runExecFile(npmCmd, ["--version"], { timeoutMs: 20_000 });
+    npmVersion = String((n.stdout || n.stderr || "").trim().split(/\r?\n/)[0] || "");
+  }
+  if (claudeCmd) {
+    const c = await runExecFile(claudeCmd, ["--version"], { timeoutMs: 20_000 });
+    claudeVersion = String((c.stdout || c.stderr || "").trim().split(/\r?\n/)[0] || "");
+  }
+  return {
+    node: { installed: Boolean(nodeExe), path: nodeExe, version: nodeVersion },
+    npm: { installed: Boolean(npmCmd), path: npmCmd, version: npmVersion },
+    claude: { installed: Boolean(claudeCmd), path: claudeCmd, version: claudeVersion },
+  };
 }
 
 function findFirstByName(rootDir, fileName) {

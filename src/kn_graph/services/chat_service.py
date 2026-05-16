@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import time
@@ -424,6 +424,7 @@ class ChatService:
     def test_agent(self, agent_id: str) -> dict[str, Any]:
         import shutil
         import subprocess as _sp
+        import time
         from datetime import datetime, timezone
 
         known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
@@ -474,11 +475,11 @@ class ChatService:
                 "name": "cli_installed",
                 "passed": False,
                 "error": "agent_not_installable",
-                "suggestion": f"Agent '{agent_id}' 暂不支持安装",
+                "suggestion": f"Agent '{agent_id}' 鏆備笉鏀寔瀹夎",
                 "stage": "cli_check",
             })
 
-        # Stage 2: Workspace config
+                # Stage 2: Workspace config
         root_ws = self._settings.workspaces_dir.resolve()
         claude_md = root_ws / "CLAUDE.md"
         checks.append({
@@ -491,18 +492,101 @@ class ChatService:
 
         mcp_json = root_ws / ".mcp.json"
         mcp_ok = False
+        mcp_error = ""
         if mcp_json.exists():
             try:
                 mcp_data = json.loads(mcp_json.read_text(encoding="utf-8"))
-                mcp_ok = isinstance(mcp_data, dict) and "mcpServers" in mcp_data
-            except Exception:
-                pass
+                servers = mcp_data.get("mcpServers") if isinstance(mcp_data, dict) else None
+                if isinstance(servers, dict) and servers:
+                    first_name, first_cfg = next(iter(servers.items()))
+                    server_cfg = first_cfg if isinstance(first_cfg, dict) else {}
+                    cmd = str(server_cfg.get("command", "") or "").strip()
+                    args = [str(x) for x in (server_cfg.get("args") or []) if str(x or "").strip()]
+                    env_overrides = server_cfg.get("env") if isinstance(server_cfg.get("env"), dict) else {}
+                    env = dict(os.environ)
+                    for k, v in env_overrides.items():
+                        env[str(k)] = str(v)
+
+                    if not cmd:
+                        mcp_error = f"mcp_server_command_missing:{first_name}"
+                    else:
+                        proc = _sp.Popen(
+                            [cmd, *args],
+                            cwd=str(root_ws),
+                            stdin=_sp.PIPE,
+                            stdout=_sp.PIPE,
+                            stderr=_sp.PIPE,
+                            env=env,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                        )
+                        try:
+                            def _rpc(req_id: int, method: str, params: dict[str, Any] | None, timeout_s: float = 15.0) -> dict[str, Any]:
+                                payload: dict[str, Any] = {"jsonrpc": "2.0", "id": req_id, "method": method}
+                                if params is not None:
+                                    payload["params"] = params
+                                if proc.stdin is None or proc.stdout is None:
+                                    raise RuntimeError("mcp_stdio_unavailable")
+                                proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                                proc.stdin.flush()
+                                deadline = time.time() + timeout_s
+                                while time.time() < deadline:
+                                    line = proc.stdout.readline()
+                                    if not line:
+                                        if proc.poll() is not None:
+                                            break
+                                        continue
+                                    try:
+                                        msg = json.loads(line.strip())
+                                    except Exception:
+                                        continue
+                                    if not isinstance(msg, dict):
+                                        continue
+                                    if int(msg.get("id", -1) or -1) != req_id:
+                                        continue
+                                    if isinstance(msg.get("error"), dict):
+                                        raise RuntimeError(f"mcp_rpc_error:{method}:{msg.get('error')}")
+                                    result = msg.get("result")
+                                    return result if isinstance(result, dict) else {}
+                                raise TimeoutError(f"mcp_rpc_timeout:{method}")
+
+                            _rpc(
+                                1,
+                                "initialize",
+                                {
+                                    "protocolVersion": "2024-11-05",
+                                    "clientInfo": {"name": "kn_graph_agent_test", "version": "0.1.0"},
+                                    "capabilities": {},
+                                },
+                            )
+                            _rpc(2, "tools/list", {})
+                            mcp_ok = True
+                        except Exception as exc:
+                            mcp_error = str(exc)
+                        finally:
+                            try:
+                                if proc.poll() is None:
+                                    proc.terminate()
+                                    proc.wait(timeout=2)
+                            except Exception:
+                                try:
+                                    proc.kill()
+                                except Exception:
+                                    pass
+                else:
+                    mcp_error = "mcp_servers_missing"
+            except Exception as exc:
+                mcp_error = f"mcp_json_invalid:{exc}"
+        else:
+            mcp_error = "mcp_json_missing"
         checks.append({
             "name": "workspace_mcp_json",
             "passed": mcp_ok,
             "path": str(mcp_json),
             "stage": "workspace_config",
-            "suggestion": "" if mcp_ok else "工作区缺少有效的 .mcp.json，Agent 无法使用 MCP 工具",
+            "error": "" if mcp_ok else mcp_error,
+            "suggestion": "" if mcp_ok else "请确认 workspace/.mcp.json 的 mcpServers 可启动，并支持 initialize/tools/list",
         })
 
         # Stage 3: Agent config file
@@ -526,7 +610,7 @@ class ChatService:
                     "name": "claude_agent_sdk",
                     "passed": False,
                     "stage": "sdk_check",
-                    "suggestion": "claude-agent-sdk 未安装，请运行: pip install claude-agent-sdk",
+                    "suggestion": "claude-agent-sdk 未安装，请运行 pip install claude-agent-sdk",
                 })
 
         passed = [c for c in checks if c["passed"]]
@@ -1016,3 +1100,4 @@ class ChatService:
             }
         except Exception:
             return {"error": "library_codex_config_unavailable", "library_id": lib}
+
