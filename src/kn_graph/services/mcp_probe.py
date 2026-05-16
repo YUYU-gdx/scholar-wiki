@@ -6,7 +6,7 @@ import subprocess
 import time
 from typing import Any
 
-from kn_graph.services.mcp_launch import default_mcp_server_args
+from kn_graph.services.mcp_launch import default_mcp_server_command_and_args
 
 
 def _decode(raw: bytes | str | None) -> str:
@@ -70,7 +70,8 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=3, help="rag_search top_k")
     args = parser.parse_args()
 
-    cmd = ["uv", *default_mcp_server_args(), "--api-base-url", str(args.api_base_url)]
+    mcp_command, mcp_args = default_mcp_server_command_and_args()
+    cmd = [mcp_command, *mcp_args, "--api-base-url", str(args.api_base_url)]
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,

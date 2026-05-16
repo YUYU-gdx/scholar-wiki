@@ -27,7 +27,7 @@ def _safe_library_id(raw: str) -> str:
 
 
 from kn_graph._compat import bundle_root
-from kn_graph.services.mcp_launch import default_mcp_server_args
+from kn_graph.services.mcp_launch import default_mcp_server_command_and_args
 
 def _repo_root() -> Path:
     return bundle_root()
@@ -45,7 +45,7 @@ def _template_skill_path(skill_name: str) -> str:
 
 
 def _default_mcp_server_args() -> list[str]:
-    return default_mcp_server_args()
+    return default_mcp_server_command_and_args()[1]
 
 
 def _iter_skill_template_sources(skill_names: list[str] | None = None) -> list[tuple[str, Path]]:
@@ -149,14 +149,15 @@ def default_library_codex_config(workspace_path: str = "", library_id: str = "")
         project_skills = bootstrap_workspace_project_skills(str(ws), skill_names=["scholarly-paper-extraction"])
     else:
         project_skills = [{"name": "scholarly-paper-extraction", "path": _template_skill_path("scholarly-paper-extraction")}]
+    mcp_command, mcp_args = default_mcp_server_command_and_args()
     return {
         "library_id": _safe_library_id(library_id),
         "codex_home": str(codex_home),
         "mcp_servers": [
             {
                 "name": "kn_graph_tools",
-                "command": "uv",
-                "args": _default_mcp_server_args(),
+                "command": mcp_command,
+                "args": mcp_args,
                 "env": {},
             }
         ],
@@ -184,11 +185,12 @@ def load_or_init_library_codex_config(workspace_path: str, library_id: str = "")
             if not isinstance(merged.get(key), list):
                 merged[key] = list(fallback.get(key, []))
         merged["project_skills"] = loaded_skills
+        mcp_command, mcp_args = default_mcp_server_command_and_args()
         merged["mcp_servers"] = [
             {
                 "name": "kn_graph_tools",
-                "command": "uv",
-                "args": _default_mcp_server_args(),
+                "command": mcp_command,
+                "args": mcp_args,
                 "env": {},
             }
         ]

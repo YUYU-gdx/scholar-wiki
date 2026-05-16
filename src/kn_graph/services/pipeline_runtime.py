@@ -12,7 +12,7 @@ import html
 from typing import Any, Protocol
 
 from kn_graph.providers.registry import ProviderRegistry
-from kn_graph.services.mcp_launch import default_mcp_server_args
+from kn_graph.services.mcp_launch import default_mcp_server_command_and_args
 from kn_graph.services.graph_builder import _build_artifact_from_sqlite, run_build_from_artifact
 from kn_graph.services.import_sqlite import main_inline as _import_sqlite_main_inline
 from kn_graph.services.locking import LibraryLock, file_write_lock, atomic_write_json
@@ -639,12 +639,13 @@ def _run_agent_extraction(job_id: str, parse_meta: dict[str, Any], run_dir: Path
     runner = factory.build(backend)
 
     # Build runtime_overrides
+    mcp_command, mcp_args = default_mcp_server_command_and_args()
     runtime_overrides = {
         "mcp_servers": [
             {
                 "name": "kn_graph_tools",
-                "command": "uv",
-                "args": default_mcp_server_args(),
+                "command": mcp_command,
+                "args": mcp_args,
                 "env": {},
             }
         ],

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from kn_graph.config import Settings
-from kn_graph.services.mcp_launch import default_mcp_server_args
+from kn_graph.services.mcp_launch import default_mcp_server_command_and_args
 
 from kn_graph.services.chat_legacy import ChatService as LegacyChatService
 from kn_graph.services.agent_runner import AgentRunnerFactory
@@ -134,6 +134,7 @@ class ChatService:
         return chat.read_events(message_id=message_id, cursor=cursor, wait_seconds=wait_seconds)
 
     def get_codex_config(self) -> dict[str, Any]:
+        mcp_command, mcp_args = default_mcp_server_command_and_args()
         try:
             config_path = self._settings.codex_config_path
             if config_path.exists():
@@ -149,8 +150,8 @@ class ChatService:
             "mcp_servers": [
                 {
                     "name": "kn_graph_tools",
-                    "command": "uv",
-                    "args": default_mcp_server_args(),
+                    "command": mcp_command,
+                    "args": mcp_args,
                     "env": {},
                 }
             ],
