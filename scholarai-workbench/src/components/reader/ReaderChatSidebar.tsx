@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Send, PanelRightClose, PanelRightOpen, BookOpen, ChevronDown } from 'lucide-react';
+import MarkdownIt from 'markdown-it';
+import DOMPurify from 'dompurify';
 import { api } from '../../api';
 import type { ChatMessage } from '../../types';
 import { toTimelineRow } from './readerToolTrace';
@@ -28,6 +30,8 @@ export default function ReaderChatSidebar({
   const [expandedToolItems, setExpandedToolItems] = useState<Record<string, boolean>>({});
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
+  const md = useMemo(() => new MarkdownIt({ html: false, linkify: true, breaks: true }), []);
+  const renderMarkdown = useCallback((text: string) => ({ __html: DOMPurify.sanitize(md.render(String(text || ''))) }), [md]);
 
   const ensureSession = useCallback(async (): Promise<string> => {
     if (sessionId) return sessionId;
@@ -220,9 +224,10 @@ export default function ReaderChatSidebar({
             }`}>
               {m.role !== 'assistant' && m.content}
               {m.role === 'assistant' && (!Array.isArray(m.tool_trace) || m.tool_trace.length === 0) && (
-                <>
-                  {!m.content ? 'Thinking...' : m.content}
-                </>
+                <div
+                  className="prose prose-sm max-w-none prose-p:my-1.5 prose-pre:my-1.5 prose-code:before:content-none prose-code:after:content-none"
+                  dangerouslySetInnerHTML={renderMarkdown(!m.content ? 'Thinking...' : m.content)}
+                />
               )}
               {m.status === 'failed' && <div className="mt-2 text-error">消息流失败：{m.error_detail || 'stream_failed'}</div>}
               {m.role === 'assistant' && Array.isArray(m.tool_trace) && m.tool_trace.length > 0 && (

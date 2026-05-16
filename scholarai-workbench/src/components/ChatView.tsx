@@ -1,5 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { PlusSquare, Bot, Send, Activity, Clock, Trash2, X, ChevronDown, Zap } from 'lucide-react';
+import MarkdownIt from 'markdown-it';
+import DOMPurify from 'dompurify';
 import { useApp } from '../app-context';
 import { api } from '../api';
 import type { ChatSession, ChatMessage, Citation as CitationType } from '../types';
@@ -215,6 +217,8 @@ export default function ChatView() {
   const [expandedToolItems, setExpandedToolItems] = useState<Record<string, boolean>>({});
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
+  const md = useMemo(() => new MarkdownIt({ html: false, linkify: true, breaks: true }), []);
+  const renderMarkdown = useCallback((text: string) => ({ __html: DOMPurify.sanitize(md.render(String(text || ''))) }), [md]);
 
   const activeSession = sessions.find(s => s.session_id === activeSessionId);
   const openCitationInReader = useCallback((c: CitationType) => {
@@ -501,8 +505,13 @@ export default function ChatView() {
                     {m.role === 'assistant' ? (
                       <>
                         {(!Array.isArray(m.tool_trace) || m.tool_trace.length === 0) && (
-                          <div className="font-serif text-[15px] text-on-surface leading-relaxed antialiased whitespace-pre-wrap">
-                            {ensureCitationMarkers(m.content || '', Array.isArray(m.citations) ? m.citations : []) || (m.status === 'running' ? '思考中...' : '')}
+                          <div className="font-serif text-[15px] text-on-surface leading-relaxed antialiased">
+                            <div
+                              className="prose prose-sm max-w-none prose-p:my-2 prose-pre:my-2 prose-code:before:content-none prose-code:after:content-none"
+                              dangerouslySetInnerHTML={renderMarkdown(
+                                ensureCitationMarkers(m.content || '', Array.isArray(m.citations) ? m.citations : []) || (m.status === 'running' ? '思考中...' : ''),
+                              )}
+                            />
                             {m.status === 'running' && <span className="animate-pulse-soft"> ▌</span>}
                           </div>
                         )}
