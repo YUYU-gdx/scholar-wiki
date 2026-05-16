@@ -17,6 +17,13 @@ type AgentTemplateEditorState = {
   path: string;
   message: string;
 };
+type InstallStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+type InstallStep = {
+  key: 'precheck' | 'install_node' | 'install_claude' | 'postcheck';
+  title: string;
+  status: InstallStepStatus;
+  detail: string;
+};
 const IMPORT_SECTION_IDS = new Set(['pipeline', 'pipeline_agent', 'embedding']);
 const PROVIDER_KEY_GUIDE_URLS: Record<string, string> = {
   deepseek: 'https://platform.deepseek.com/api_keys',
@@ -96,6 +103,22 @@ export default function SettingsView() {
   const [agentTestScope, setAgentTestScope] = useState<'agent_settings' | 'pipeline_agent'>('agent_settings');
   const [agentTesting, setAgentTesting] = useState(false);
   const [agentInstalling, setAgentInstalling] = useState(false);
+  const [installModal, setInstallModal] = useState<{
+    open: boolean;
+    scope: 'agent_settings' | 'pipeline_agent';
+    steps: InstallStep[];
+    done: boolean;
+  }>({
+    open: false,
+    scope: 'agent_settings',
+    done: false,
+    steps: [
+      { key: 'precheck', title: '检查 Node.js / Claude Code', status: 'pending', detail: '' },
+      { key: 'install_node', title: '安装 Node.js（按需）', status: 'pending', detail: '' },
+      { key: 'install_claude', title: '安装 Claude Code（按需）', status: 'pending', detail: '' },
+      { key: 'postcheck', title: '安装后复查', status: 'pending', detail: '' },
+    ],
+  });
   const [templateEditor, setTemplateEditor] = useState<AgentTemplateEditorState>({
     open: false,
     section: '',
@@ -222,9 +245,27 @@ export default function SettingsView() {
     const agentId = getAgentIdByScope(scope);
     setAgentTestScope(scope);
     setAgentInstalling(true);
+    setInstallModal({
+      open: true,
+      scope,
+      done: false,
+      steps: [
+        { key: 'precheck', title: '检查 Node.js / Claude Code', status: 'pending', detail: '' },
+        { key: 'install_node', title: '安装 Node.js（按需）', status: 'pending', detail: '' },
+        { key: 'install_claude', title: '安装 Claude Code（按需）', status: 'pending', detail: '' },
+        { key: 'postcheck', title: '安装后复查', status: 'pending', detail: '' },
+      ],
+    });
+    const updateInstallStep = (key: InstallStep['key'], patch: Partial<InstallStep>) => {
+      setInstallModal((prev) => ({
+        ...prev,
+        steps: prev.steps.map((s) => (s.key === key ? { ...s, ...patch } : s)),
+      }));
+    };
     try {
       const info = await api.agent.installInfo(agentId);
       if (info.not_available) {
+        updateInstallStep('precheck', { status: 'failed', detail: `${info.display_name} 暂不支持安装` });
         setAgentTestResult({
           agent_id: agentId,
           ok: false,
@@ -244,11 +285,16 @@ export default function SettingsView() {
         agentPostcheck?: () => Promise<any>;
       };
       if (agentId !== 'claude_code' || !ds?.agentPrecheck || !ds?.agentInstallNode || !ds?.agentInstallClaude || !ds?.agentPostcheck) {
+        updateInstallStep('precheck', { status: 'running', detail: '正在打开终端执行安装脚本...' });
         const shell = ds?.runInTerminal;
-        if (!shell) return;
+        if (!shell) {
+          updateInstallStep('precheck', { status: 'failed', detail: '桌面安装接口不可用' });
+          return;
+        }
         const pkg = info.command.replace(/^npm\s+install\s+-g\s+/, '').trim();
         const result = await shell(pkg, info.binary, info.display_name);
         if (!result.ok) {
+          updateInstallStep('precheck', { status: 'failed', detail: result.error || '无法打开终端' });
           setAgentTestResult({
             agent_id: agentId,
             ok: false,
@@ -257,10 +303,17 @@ export default function SettingsView() {
             checks: [{ name: 'install_launch', passed: false, stage: 'install', error: result.error || '无法打开终端' }],
             checked_at: new Date().toISOString(),
           });
+        } else {
+          updateInstallStep('precheck', { status: 'done', detail: '已启动外部终端，请按终端提示完成安装。' });
+          updateInstallStep('install_node', { status: 'skipped', detail: '由终端脚本处理' });
+          updateInstallStep('install_claude', { status: 'skipped', detail: '由终端脚本处理' });
+          updateInstallStep('postcheck', { status: 'skipped', detail: '安装完成后可点“测试”复查' });
+          setInstallModal((prev) => ({ ...prev, done: true }));
         }
         return;
       }
 
+      updateInstallStep('precheck', { status: 'running', detail: '正在检查安装状态...' });
       setAgentTestResult({
         agent_id: agentId,
         ok: false,
@@ -273,7 +326,12 @@ export default function SettingsView() {
       const pre = await ds.agentPrecheck();
       const needsNode = !Boolean(pre?.node?.installed);
       const needsClaude = !Boolean(pre?.claude?.installed);
+      updateInstallStep('precheck', { status: 'done', detail: `Node: ${pre?.node?.installed ? '已安装' : '缺失'}，Claude: ${pre?.claude?.installed ? '已安装' : '缺失'}` });
       if (!needsNode && !needsClaude) {
+        updateInstallStep('install_node', { status: 'skipped', detail: '无需安装' });
+        updateInstallStep('install_claude', { status: 'skipped', detail: '无需安装' });
+        updateInstallStep('postcheck', { status: 'done', detail: '环境已就绪' });
+        setInstallModal((prev) => ({ ...prev, done: true }));
         setAgentTestResult({
           agent_id: agentId,
           ok: true,
@@ -286,6 +344,7 @@ export default function SettingsView() {
       }
 
       if (needsNode) {
+        updateInstallStep('install_node', { status: 'running', detail: '正在安装 Node.js...' });
         setAgentTestResult({
           agent_id: agentId,
           ok: false,
@@ -296,6 +355,10 @@ export default function SettingsView() {
         });
         const n = await ds.agentInstallNode();
         if (!n?.ok || !n?.node?.installed) {
+          updateInstallStep('install_node', { status: 'failed', detail: String(n?.error || 'node_install_failed') });
+          updateInstallStep('install_claude', { status: 'skipped', detail: 'Node.js 未就绪，跳过' });
+          updateInstallStep('postcheck', { status: 'failed', detail: '安装中断' });
+          setInstallModal((prev) => ({ ...prev, done: true }));
           setAgentTestResult({
             agent_id: agentId,
             ok: false,
@@ -306,9 +369,13 @@ export default function SettingsView() {
           });
           return;
         }
+        updateInstallStep('install_node', { status: 'done', detail: 'Node.js 安装完成' });
+      } else {
+        updateInstallStep('install_node', { status: 'skipped', detail: '已安装，跳过' });
       }
 
       if (needsClaude || !Boolean((await ds.agentPrecheck())?.claude?.installed)) {
+        updateInstallStep('install_claude', { status: 'running', detail: '正在安装 Claude Code...' });
         setAgentTestResult({
           agent_id: agentId,
           ok: false,
@@ -319,6 +386,9 @@ export default function SettingsView() {
         });
         const c = await ds.agentInstallClaude();
         if (!c?.ok || !c?.claude?.installed) {
+          updateInstallStep('install_claude', { status: 'failed', detail: String(c?.error || 'claude_install_failed') });
+          updateInstallStep('postcheck', { status: 'failed', detail: '安装中断' });
+          setInstallModal((prev) => ({ ...prev, done: true }));
           setAgentTestResult({
             agent_id: agentId,
             ok: false,
@@ -329,10 +399,16 @@ export default function SettingsView() {
           });
           return;
         }
+        updateInstallStep('install_claude', { status: 'done', detail: 'Claude Code 安装完成' });
+      } else {
+        updateInstallStep('install_claude', { status: 'skipped', detail: '已安装，跳过' });
       }
 
+      updateInstallStep('postcheck', { status: 'running', detail: '正在复查环境...' });
       const post = await ds.agentPostcheck();
       const done = Boolean(post?.node?.installed) && Boolean(post?.claude?.installed);
+      updateInstallStep('postcheck', { status: done ? 'done' : 'failed', detail: done ? '复查通过' : '复查失败，请重试' });
+      setInstallModal((prev) => ({ ...prev, done: true }));
       setAgentTestResult({
         agent_id: agentId,
         ok: done,
@@ -348,6 +424,8 @@ export default function SettingsView() {
         checked_at: new Date().toISOString(),
       });
     } catch (err) {
+      updateInstallStep('postcheck', { status: 'failed', detail: (err as Error).message || 'install_error' });
+      setInstallModal((prev) => ({ ...prev, done: true }));
       setAgentTestResult({
         agent_id: agentId,
         ok: false,
@@ -840,6 +918,43 @@ export default function SettingsView() {
               >
                 {templateEditor.saving ? '保存中...' : '保存'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {installModal.open && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl bg-surface border border-outline-variant rounded-2xl shadow-xl">
+            <div className="px-5 py-4 border-b border-outline-variant flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-on-surface">Agent 安装向导</div>
+                <div className="text-xs text-on-surface-variant">按检查项逐步安装（待办模式）</div>
+              </div>
+              <button
+                onClick={() => installModal.done && setInstallModal((prev) => ({ ...prev, open: false }))}
+                disabled={!installModal.done}
+                className="px-3 py-1.5 text-xs rounded border border-outline-variant bg-surface-container-high text-on-surface disabled:opacity-50"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              {installModal.steps.map((s) => {
+                const marker = s.status === 'done' ? '✅' : s.status === 'failed' ? '❌' : s.status === 'running' ? '⏳' : s.status === 'skipped' ? '⏭️' : '•';
+                const color = s.status === 'done'
+                  ? 'text-green-700'
+                  : s.status === 'failed'
+                    ? 'text-red-700'
+                    : s.status === 'running'
+                      ? 'text-blue-700'
+                      : 'text-on-surface-variant';
+                return (
+                  <div key={s.key} className="rounded-lg border border-outline-variant bg-surface-container-low p-3">
+                    <div className={`font-medium text-sm ${color}`}>{marker} {s.title}</div>
+                    <div className="text-xs text-on-surface-variant mt-1">{s.detail || '等待执行...'}</div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

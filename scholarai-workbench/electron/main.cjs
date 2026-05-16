@@ -1,5 +1,5 @@
 ﻿const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
-const { spawn, execFile } = require("node:child_process");
+const { spawn, execFile, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
@@ -896,9 +896,24 @@ function resolveNpmCmd(nodeExePath = "") {
 
 function resolveClaudeCmd() {
   const appData = String(process.env.APPDATA || "").trim();
-  return firstExistingPath([
+  const p = firstExistingPath([
     appData ? path.join(appData, "npm", "claude.cmd") : "",
   ]);
+  if (p) return p;
+  // Fallback: discover from PATH
+  try {
+    const whereOut = execFileSync("where", ["claude.cmd"], {
+      windowsHide: true,
+      encoding: "utf8",
+      timeout: 8000,
+      maxBuffer: 1024 * 1024,
+    });
+    const hit = String(whereOut || "").split(/\r?\n/).map((s) => s.trim()).find(Boolean);
+    if (hit && fs.existsSync(hit)) return hit;
+  } catch (_err) {
+    // ignore
+  }
+  return "";
 }
 
 async function runExecFile(file, args, opts = {}) {
