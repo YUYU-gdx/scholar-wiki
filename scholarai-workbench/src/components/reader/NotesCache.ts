@@ -1,5 +1,5 @@
 ﻿/**
- * In-memory notes cache 鈥?single source of truth is the .md file.
+ * In-memory notes cache - single source of truth is the .md file.
  * No IndexedDB. Notes are parsed from markdown [!NOTE] Reader Note blocks.
  */
 export interface NoteEntry {

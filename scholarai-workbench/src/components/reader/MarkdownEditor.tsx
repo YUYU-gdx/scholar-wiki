@@ -563,7 +563,7 @@ export default function MarkdownEditor({
       // (prevents triple-click from overflowing into the next block)
       if (focusLineEnd >= 0) {
         if (anchorBlockEnd >= 0 && focusLineEnd > anchorBlockEnd + 2) {
-          // focusLineEnd is in a distant block 鈥?ignore, use anchorBlockEnd as cap
+          // focusLineEnd is in a distant block - ignore, use anchorBlockEnd as cap
           lineEnd = Math.max(lineEnd, anchorBlockEnd);
         } else {
           lineEnd = Math.max(lineEnd, focusLineEnd);
@@ -998,7 +998,7 @@ export default function MarkdownEditor({
     },
   }), []);
 
-  // CM6 theme for live preview 鈥?matches Read mode typography
+  // CM6 theme for live preview - matches Read mode typography
   const cm6LivePreviewTheme = useMemo(() => EditorView.theme({
     '&': {
       backgroundColor: 'transparent',

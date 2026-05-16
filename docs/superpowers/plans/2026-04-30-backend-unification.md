@@ -1,4 +1,4 @@
-# Backend Unification Implementation Plan
+﻿# Backend Unification Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -17,43 +17,43 @@
 ### New files (to create)
 
 ```
-src/kn_graph/__init__.py                     �?Package init, version
-src/kn_graph/__main__.py                     �?CLI entry point (serve, worker)
-src/kn_graph/app.py                          �?FastAPI app factory
-src/kn_graph/config.py                       �?Pydantic Settings
+src/kn_graph/__init__.py                     ->Package init, version
+src/kn_graph/__main__.py                     ->CLI entry point (serve, worker)
+src/kn_graph/app.py                          ->FastAPI app factory
+src/kn_graph/config.py                       ->Pydantic Settings
 src/kn_graph/routers/__init__.py
-src/kn_graph/routers/graph.py                �?/graph/*, /paper/*, /variable/*
-src/kn_graph/routers/chat.py                 �?/chat/*
-src/kn_graph/routers/literature.py           �?/literature/*
-src/kn_graph/routers/pipeline.py             �?/v1/pipeline/*, /v1/jobs/*
-src/kn_graph/routers/workspace.py            �?/api/v2/workspace/*
+src/kn_graph/routers/graph.py                ->/graph/*, /paper/*, /variable/*
+src/kn_graph/routers/chat.py                 ->/chat/*
+src/kn_graph/routers/literature.py           ->/literature/*
+src/kn_graph/routers/pipeline.py             ->/v1/pipeline/*, /v1/jobs/*
+src/kn_graph/routers/workspace.py            ->/api/v2/workspace/*
 src/kn_graph/models/__init__.py
-src/kn_graph/models/graph.py                 �?Pydantic models for graph domain
-src/kn_graph/models/chat.py                  �?Pydantic models for chat domain
-src/kn_graph/models/literature.py            �?Pydantic models for literature domain
-src/kn_graph/models/pipeline.py              �?Pydantic models for pipeline domain
-src/kn_graph/models/workspace.py             �?Pydantic models for workspace domain
+src/kn_graph/models/graph.py                 ->Pydantic models for graph domain
+src/kn_graph/models/chat.py                  ->Pydantic models for chat domain
+src/kn_graph/models/literature.py            ->Pydantic models for literature domain
+src/kn_graph/models/pipeline.py              ->Pydantic models for pipeline domain
+src/kn_graph/models/workspace.py             ->Pydantic models for workspace domain
 src/kn_graph/services/__init__.py
-src/kn_graph/services/graph_service.py       �?Business logic extracted from serve_graph_api.py
-src/kn_graph/services/chat_service.py       �?Business logic for chat
-src/kn_graph/services/literature_service.py  �?Business logic for literature
-src/kn_graph/services/pipeline_service.py    �?Business logic for pipeline jobs
-src/kn_graph/services/workspace_service.py   �?Business logic for workspace layouts
+src/kn_graph/services/graph_service.py       ->Business logic extracted from serve_graph_api.py
+src/kn_graph/services/chat_service.py       ->Business logic for chat
+src/kn_graph/services/literature_service.py  ->Business logic for literature
+src/kn_graph/services/pipeline_service.py    ->Business logic for pipeline jobs
+src/kn_graph/services/workspace_service.py   ->Business logic for workspace layouts
 src/kn_graph/workers/__init__.py
-src/kn_graph/workers/celery_app.py           �?Celery configuration + task definitions
+src/kn_graph/workers/celery_app.py           ->Celery configuration + task definitions
 ```
 
 ### Modified files
 
 ```
-pyproject.toml                              �?Add kn_graph package, add pydantic + pydantic-settings deps
+pyproject.toml                              ->Add kn_graph package, add pydantic + pydantic-settings deps
 ```
 
 ### Deleted files (Phase 4 only, after verification)
 
 ```
-scripts/smj_pipeline/serve_graph_api.py     �?Replaced by kn_graph package
-scripts/smj_pipeline/serve_async_pipeline_api.py �?Replaced by kn_graph package
+scripts/smj_pipeline/serve_graph_api.py     ->Replaced by kn_graph package
+scripts/smj_pipeline/serve_async_pipeline_api.py ->Replaced by kn_graph package
 ```
 
 ---
@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     pipeline_executor: str = "inline"
     pipeline_redis_url: str = "redis://127.0.0.1:6379/0"
 
-    # Literature — ChromaDB embedded (supersedes Weaviate)
+    # Literature -ChromaDB embedded (supersedes Weaviate)
     chromadb_path: str = ""
 
     # LLM
@@ -244,17 +244,17 @@ git commit -m "feat: scaffold kn_graph package with FastAPI app factory and Sett
 
 All model definitions must be extracted from the existing handler code. Each model mirrors the request/response shapes documented in the design spec.
 
-- [ ] **Step 1: Create `src/kn_graph/models/__init__.py`** �?re-exports all models.
+- [ ] **Step 1: Create `src/kn_graph/models/__init__.py`** ->re-exports all models.
 
-- [ ] **Step 2: Create `src/kn_graph/models/graph.py`** �?models for `/graph/*`, `/paper/*`, `/variable/*` endpoints. Must include: `GraphOverview`, `GraphFull`, `GraphNode`, `GraphEdge`, `ModerationLink`, `InteractionLink`, `IsolatedNode`, `GraphSearchParams`, `GraphSearchResponse`, `SearchResult`, `NeighborhoodParams`, `NeighborhoodResponse`, `PaperDetail`, `VariableDetail`.
+- [ ] **Step 2: Create `src/kn_graph/models/graph.py`** ->models for `/graph/*`, `/paper/*`, `/variable/*` endpoints. Must include: `GraphOverview`, `GraphFull`, `GraphNode`, `GraphEdge`, `ModerationLink`, `InteractionLink`, `IsolatedNode`, `GraphSearchParams`, `GraphSearchResponse`, `SearchResult`, `NeighborhoodParams`, `NeighborhoodResponse`, `PaperDetail`, `VariableDetail`.
 
-- [ ] **Step 3: Create `src/kn_graph/models/chat.py`** �?models for `/chat/*` endpoints. Must include: `CreateSessionRequest`, `ChatSession`, `SendMessageRequest`, `SendMessageResponse`, `SSEEvent`, `CodexConfig`, `CodexHealthResponse`, `PreflightCheck`, `PreflightResponse`, `ProviderConfig`.
+- [ ] **Step 3: Create `src/kn_graph/models/chat.py`** ->models for `/chat/*` endpoints. Must include: `CreateSessionRequest`, `ChatSession`, `SendMessageRequest`, `SendMessageResponse`, `SSEEvent`, `CodexConfig`, `CodexHealthResponse`, `PreflightCheck`, `PreflightResponse`, `ProviderConfig`.
 
-- [ ] **Step 4: Create `src/kn_graph/models/literature.py`** �?models for `/literature/*`. Must include: `LiteratureLibrary`, `LiteratureSearchParams`, `LiteratureAnswerRequest`, `LiteratureAnswerResponse`, `LiteratureImportRequest`.
+- [ ] **Step 4: Create `src/kn_graph/models/literature.py`** ->models for `/literature/*`. Must include: `LiteratureLibrary`, `LiteratureSearchParams`, `LiteratureAnswerRequest`, `LiteratureAnswerResponse`, `LiteratureImportRequest`.
 
-- [ ] **Step 5: Create `src/kn_graph/models/pipeline.py`** �?models for `/v1/*`. Must include: `PipelineJob`, `PipelineJobsResponse`, `PipelineJobResult`, `PipelineSubmitResponse`, `PipelineBatchSubmitResponse`, `JobStatus`, `JobStage`.
+- [ ] **Step 5: Create `src/kn_graph/models/pipeline.py`** ->models for `/v1/*`. Must include: `PipelineJob`, `PipelineJobsResponse`, `PipelineJobResult`, `PipelineSubmitResponse`, `PipelineBatchSubmitResponse`, `JobStatus`, `JobStage`.
 
-- [ ] **Step 6: Create `src/kn_graph/models/workspace.py`** �?models for `/api/v2/workspace/*`. Must include: `WorkspaceLayout`, `WorkspaceLayoutList`.
+- [ ] **Step 6: Create `src/kn_graph/models/workspace.py`** ->models for `/api/v2/workspace/*`. Must include: `WorkspaceLayout`, `WorkspaceLayoutList`.
 
 - [ ] **Step 7: Run `uv run python -c "from kn_graph.models import *; print('Models OK')"`**
 
@@ -269,7 +269,7 @@ git commit -m "feat: add Pydantic V2 models for all API domains"
 
 ---
 
-## Task 3: Service Layer �?Graph, Workspace, Literature
+## Task 3: Service Layer ->Graph, Workspace, Literature
 
 **Files:**
 - Create: `src/kn_graph/services/__init__.py`
@@ -281,11 +281,11 @@ These services wrap the existing business logic from `serve_graph_api.py`. They 
 
 - [ ] **Step 1: Create `src/kn_graph/services/__init__.py`**
 
-- [ ] **Step 2: Create `src/kn_graph/services/graph_service.py`** �?extract graph data loading, search, neighborhood BFS, paper/variable detail from `serve_graph_api.py` lines handling `/graph/*`, `/paper/*`, `/variable/*`. The service class takes `Settings` and graph data path in constructor.
+- [ ] **Step 2: Create `src/kn_graph/services/graph_service.py`** ->extract graph data loading, search, neighborhood BFS, paper/variable detail from `serve_graph_api.py` lines handling `/graph/*`, `/paper/*`, `/variable/*`. The service class takes `Settings` and graph data path in constructor.
 
-- [ ] **Step 3: Create `src/kn_graph/services/workspace_service.py`** �?extract workspace layout CRUD from `serve_graph_api.py`. Wraps `WorkspaceLayoutStore`.
+- [ ] **Step 3: Create `src/kn_graph/services/workspace_service.py`** ->extract workspace layout CRUD from `serve_graph_api.py`. Wraps `WorkspaceLayoutStore`.
 
-- [ ] **Step 4: Create `src/kn_graph/services/literature_service.py`** �?extract literature search/answer/import from `serve_graph_api.py`. Wraps `LiteratureService`.
+- [ ] **Step 4: Create `src/kn_graph/services/literature_service.py`** ->extract literature search/answer/import from `serve_graph_api.py`. Wraps `LiteratureService`.
 
 - [ ] **Step 5: Run `uv run python -c "from kn_graph.services.graph_service import GraphService; print('GraphService OK')"` and similar for others**
 
@@ -300,15 +300,15 @@ git commit -m "feat: add graph, workspace, literature service layer"
 
 ---
 
-## Task 4: Service Layer �?Chat + Pipeline
+## Task 4: Service Layer ->Chat + Pipeline
 
 **Files:**
 - Create: `src/kn_graph/services/chat_service.py`
 - Create: `src/kn_graph/services/pipeline_service.py`
 
-- [ ] **Step 1: Create `src/kn_graph/services/chat_service.py`** �?extract chat session management, message dispatch, SSE streaming, Codex config, provider config from `serve_graph_api.py`. Wraps `ChatService`.
+- [ ] **Step 1: Create `src/kn_graph/services/chat_service.py`** ->extract chat session management, message dispatch, SSE streaming, Codex config, provider config from `serve_graph_api.py`. Wraps `ChatService`.
 
-- [ ] **Step 2: Create `src/kn_graph/services/pipeline_service.py`** �?extract job store, job lifecycle, submit, cancel, retry logic from `serve_async_pipeline_api.py`. Wraps `InMemoryJobStore`, `SqliteJobStore`, and Celery dispatcher.
+- [ ] **Step 2: Create `src/kn_graph/services/pipeline_service.py`** ->extract job store, job lifecycle, submit, cancel, retry logic from `serve_async_pipeline_api.py`. Wraps `InMemoryJobStore`, `SqliteJobStore`, and Celery dispatcher.
 
 - [ ] **Step 3: Run `uv run python -c "from kn_graph.services.chat_service import ChatService; from kn_graph.services.pipeline_service import PipelineService; print('Services OK')"`**
 
@@ -323,7 +323,7 @@ git commit -m "feat: add chat and pipeline service layer"
 
 ---
 
-## Task 5: Routers �?Graph, Workspace, Literature, Health
+## Task 5: Routers ->Graph, Workspace, Literature, Health
 
 **Files:**
 - Create: `src/kn_graph/routers/__init__.py`
@@ -334,13 +334,13 @@ git commit -m "feat: add chat and pipeline service layer"
 
 - [ ] **Step 1: Create `src/kn_graph/routers/__init__.py`**
 
-- [ ] **Step 2: Create `src/kn_graph/routers/graph.py`** �?FastAPI `APIRouter` with all `/graph/*`, `/paper/*`, `/variable/*` endpoints using Pydantic models and `GraphService`.
+- [ ] **Step 2: Create `src/kn_graph/routers/graph.py`** ->FastAPI `APIRouter` with all `/graph/*`, `/paper/*`, `/variable/*` endpoints using Pydantic models and `GraphService`.
 
-- [ ] **Step 3: Create `src/kn_graph/routers/workspace.py`** �?`/api/v2/workspace/*` endpoints using `WorkspaceService`.
+- [ ] **Step 3: Create `src/kn_graph/routers/workspace.py`** ->`/api/v2/workspace/*` endpoints using `WorkspaceService`.
 
-- [ ] **Step 4: Create `src/kn_graph/routers/literature.py`** �?`/literature/*` endpoints using `LiteratureService`.
+- [ ] **Step 4: Create `src/kn_graph/routers/literature.py`** ->`/literature/*` endpoints using `LiteratureService`.
 
-- [ ] **Step 5: Update `src/kn_graph/app.py`** �?uncomment and activate the router includes for graph, workspace, literature. Add `/healthz` that also checks pipeline readiness.
+- [ ] **Step 5: Update `src/kn_graph/app.py`** ->uncomment and activate the router includes for graph, workspace, literature. Add `/healthz` that also checks pipeline readiness.
 
 - [ ] **Step 6: Start the server and test endpoints**
 
@@ -348,9 +348,9 @@ git commit -m "feat: add chat and pipeline service layer"
 uv run python -m kn_graph serve --port 8013 --views-json outputs/smj_supply_chain_batch/supply_chain_theme_extract_20260420_160040/graph_views.json --allow-non-supply-chain
 ```
 
-Test: `curl http://127.0.0.1:8013/healthz` �?`{"status":"ok"}`
+Test: `curl http://127.0.0.1:8013/healthz` ->`{"status":"ok"}`
 
-Test: `curl http://127.0.0.1:8013/graph/overview` �?JSON response
+Test: `curl http://127.0.0.1:8013/graph/overview` ->JSON response
 
 - [ ] **Step 7: Commit**
 
@@ -361,18 +361,18 @@ git commit -m "feat: add graph, workspace, literature routers"
 
 ---
 
-## Task 6: Routers �?Chat, Pipeline
+## Task 6: Routers ->Chat, Pipeline
 
 **Files:**
 - Create: `src/kn_graph/routers/chat.py`
 - Create: `src/kn_graph/routers/pipeline.py`
 - Modify: `src/kn_graph/app.py` (add remaining routers)
 
-- [ ] **Step 1: Create `src/kn_graph/routers/chat.py`** �?all `/chat/*` endpoints including SSE streaming via `sse-starlette`, Codex config, provider config. Uses `ChatService`.
+- [ ] **Step 1: Create `src/kn_graph/routers/chat.py`** ->all `/chat/*` endpoints including SSE streaming via `sse-starlette`, Codex config, provider config. Uses `ChatService`.
 
-- [ ] **Step 2: Create `src/kn_graph/routers/pipeline.py`** �?all `/v1/*` endpoints including SSE for job events, file upload via `UploadFile`. Uses `PipelineService`.
+- [ ] **Step 2: Create `src/kn_graph/routers/pipeline.py`** ->all `/v1/*` endpoints including SSE for job events, file upload via `UploadFile`. Uses `PipelineService`.
 
-- [ ] **Step 3: Update `src/kn_graph/app.py`** �?add chat and pipeline router includes.
+- [ ] **Step 3: Update `src/kn_graph/app.py`** ->add chat and pipeline router includes.
 
 - [ ] **Step 4: Start the server and test chat and pipeline endpoints**
 
@@ -380,9 +380,9 @@ git commit -m "feat: add graph, workspace, literature routers"
 uv run python -m kn_graph serve --port 8013 --views-json outputs/smj_supply_chain_batch/supply_chain_theme_extract_20260420_160040/graph_views.json --allow-non-supply-chain
 ```
 
-Test: `curl http://127.0.0.1:8013/chat/sessions?library_id=supply_chain` �?JSON
+Test: `curl http://127.0.0.1:8013/chat/sessions?library_id=supply_chain` ->JSON
 
-Test: `curl http://127.0.0.1:8013/v1/pipeline/health` �?`{"status":"ok","executor":"inline"}`
+Test: `curl http://127.0.0.1:8013/v1/pipeline/health` ->`{"status":"ok","executor":"inline"}`
 
 - [ ] **Step 5: Commit**
 
@@ -404,9 +404,9 @@ git commit -m "feat: add chat and pipeline routers"
 
 - [ ] **Step 2: Create `src/kn_graph/workers/__init__.py`**
 
-- [ ] **Step 3: Create `src/kn_graph/workers/celery_app.py`** �?extract Celery configuration from `serve_async_pipeline_api.py`. Define task signatures for parse-extract pipeline.
+- [ ] **Step 3: Create `src/kn_graph/workers/celery_app.py`** ->extract Celery configuration from `serve_async_pipeline_api.py`. Define task signatures for parse-extract pipeline.
 
-- [ ] **Step 4: Update `src/kn_graph/app.py`** �?add static files mount and include all routers.
+- [ ] **Step 4: Update `src/kn_graph/app.py`** ->add static files mount and include all routers.
 
 
 - [ ] **Step 6: Commit**
@@ -431,11 +431,11 @@ git commit -m "feat: add static file serving and Celery worker"
 uv run python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-- [ ] **Step 2: Update test configuration** �?any tests that directly import from `serve_graph_api` or `serve_async_pipeline_api` must be updated to import from `kn_graph.app` or `kn_graph.routers.*`.
+- [ ] **Step 2: Update test configuration** ->any tests that directly import from `serve_graph_api` or `serve_async_pipeline_api` must be updated to import from `kn_graph.app` or `kn_graph.routers.*`.
 
 - [ ] **Step 3: Verify all 42 API endpoints respond correctly** by running integration tests against the unified server on port 8013.
 
-- [ ] **Step 4: Update `scripts/smj_pipeline/app_launcher.py`** �?change it to launch `uv run python -m kn_graph serve --port 8013` instead of two separate servers.
+- [ ] **Step 4: Update `scripts/smj_pipeline/app_launcher.py`** ->change it to launch `uv run python -m kn_graph serve --port 8013` instead of two separate servers.
 
 - [ ] **Step 5: Delete old server files**
 
@@ -455,4 +455,6 @@ uv run python -m unittest discover -s tests -p "test_*.py" -v
 git add -A
 git commit -m "feat: delete legacy server files, unified kn_graph app replaces both"
 ```
+
+
 

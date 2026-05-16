@@ -157,7 +157,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
             >
               {entry.selectedText && (
                 <div className="mb-2">
-                  <p className="text-[11px] text-outline mb-1">寮曠敤鍐呭</p>
+                  <p className="text-[11px] text-outline mb-1">引用内容</p>
                   <p className="text-xs leading-relaxed text-on-surface-variant line-clamp-3 pl-2 border-l-2 border-secondary/30">
                     {entry.selectedText}
                   </p>
