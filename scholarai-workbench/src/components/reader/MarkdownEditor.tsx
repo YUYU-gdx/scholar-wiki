@@ -864,83 +864,15 @@ export default function MarkdownEditor({
     }
 
     try {
-      // Read current file content
-      // eslint-disable-next-line no-console
-      console.log('[notes] reading file...', absolutePath);
-      let read = await sh.readLocalText(absolutePath);
-      // eslint-disable-next-line no-console
-      console.log('[notes] read result', { ok: read.ok, dataLen: read.data?.length, error: read.error });
-
-      if (!read.ok) {
-        // File doesn't exist or can't be read 鈥?create new
-        const init = `## Reader Notes\n\n`;
-        const created = await sh.writeLocalText(absolutePath, init);
-        // eslint-disable-next-line no-console
-        console.log('[notes] create new file', { ok: created.ok, error: created.error });
-        if (!created.ok) {
-          throw new Error(`创建文件失败: ${created.error || 'unknown'}`);
-        }
-        read = { ok: true, data: init };
-      }
-
-      // Build note block
-      const now = new Date().toISOString();
-      const toQuotedLines = (value: string): string =>
-        String(value || '').replace(/\r\n/g, '\n').split('\n').map((x) => `> ${x}`).join('\n');
-      const quoteLines = toQuotedLines(picked);
-      const noteLines = toQuotedLines(noteText);
-      const block = `\n\n> [!NOTE] Reader Note\n> Note ID: ${noteId}\n> Quote:\n${quoteLines}\n>\n> Note:\n${noteLines}\n>\n> Time:\n> ${now}\n`;
-      const src = String(read.data || '').replace(/\r\n/g, '\n');
-
-      // Find insertion position: prefer text match (robust), fall back to line-based
-      let insertAt = src.length;
-      const lineEnd = selectionUI.lineEnd;
-      // Try exact text match first 鈥?works regardless of DOM selection quirks
-      const textIdx = src.indexOf(picked);
-      if (textIdx >= 0) {
-        const after = src.slice(textIdx + picked.length);
-        const nl = after.indexOf('\n');
-        insertAt = nl >= 0 ? textIdx + picked.length + nl : textIdx + picked.length;
-      } else if (lineEnd >= 0) {
-        // Fallback: insert after the line where selection ends
-        const lines = src.split('\n');
-        const targetLine = Math.max(0, Math.min(lineEnd, lines.length - 1));
-        let offset = 0;
-        for (let i = 0; i <= targetLine; i++) {
-          offset += lines[i].length + 1;
-        }
-        insertAt = Math.min(offset, src.length);
-      }
-      console.log('[notes] insert position', { textIdx, lineEnd, insertAt, srcLen: src.length, method: textIdx >= 0 ? 'text-match' : 'line-based' });
-
-      const next = insertAt < src.length
-        ? `${src.slice(0, insertAt)}${block}${src.slice(insertAt)}`
-        : (src.includes('## Reader Notes') ? `${src}${block}` : `${src}\n\n## Reader Notes${block}`);
-
-      // eslint-disable-next-line no-console
-      console.log('[notes] writing file...', { srcLen: src.length, nextLen: next.length });
-      const wr = await sh.writeLocalText(absolutePath, next);
-      // eslint-disable-next-line no-console
-      console.log('[notes] write result', { ok: wr.ok, error: wr.error });
-
-      if (!wr.ok) {
-        throw new Error(`写入文件失败: ${wr.error || 'unknown'}`);
-      }
-
-      // Verify
-      const verify = await sh.readLocalText(absolutePath);
-      const markerFound = verify.ok && String(verify.data || '').includes(`> Note ID: ${noteId}`);
-      // eslint-disable-next-line no-console
-      console.log('[notes] verify', { ok: verify.ok, markerFound });
-
-      if (!markerFound) {
+      const ok = await upsertNoteInMarkdown(absolutePath, noteId, picked, noteText, { anchorText: picked });
+      if (!ok) {
         throw new Error('写入验证失败：回读文件未找到笔记标记');
       }
-
-      // Update state
-      const latest = String(verify.data || '').replace(/\r\n/g, '\n');
-      setText(latest);
-      onContentChange?.(latest);
+      const latest = await readMarkdownText(absolutePath);
+      if (latest) {
+        setText(latest);
+        onContentChange?.(latest);
+      }
       window.dispatchEvent(new CustomEvent('reader-annotation-changed', { detail: { paperId } }));
       // eslint-disable-next-line no-console
       console.log('[notes] save complete', { noteId });
