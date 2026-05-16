@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import traceback
@@ -17,9 +18,12 @@ from kn_graph.models.literature import (
     ZoteroScanRequest, ZoteroImportRequest,
 )
 from kn_graph.services.literature_service import LiteratureService
+from kn_graph.services.file_access_diagnostics import append_file_access_diagnostics, build_import_path_diagnostics
 from kn_graph.services.pipeline_runtime import dispatch_inline
 from kn_graph.services.workspace_paths import resolve_library_workspace
 from kn_graph.services.zotero_scanner import _find_data_dir, get_zotero_items_batch, scan_zotero
+
+logger = logging.getLogger(__name__)
 
 
 def create_router(literature_service: LiteratureService, pipeline_service: Any = None) -> APIRouter:
@@ -165,12 +169,39 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
                               os.path.join(getattr(settings_obj, 'data_dir', 'outputs'), 'runs')))
 
             job_ids = []
+            skipped: list[dict[str, Any]] = []
             all_items = get_zotero_items_batch(data_dir, item_ids)
             for zotero_data in all_items:
 
                 # Find first PDF path that exists
-                pdf_paths = [a for a in zotero_data.get("pdf_paths", []) if a.get("file_exists")]
+                attachments = zotero_data.get("pdf_paths", []) or []
+                pdf_paths = [a for a in attachments if a.get("file_exists")]
                 if not pdf_paths:
+                    candidate_path = ""
+                    if attachments and isinstance(attachments[0], dict):
+                        candidate_path = str(attachments[0].get("resolved_path", "") or attachments[0].get("path", "") or "")
+                    diag = build_import_path_diagnostics(
+                        data_dir=data_dir,
+                        workspaces_dir=getattr(settings_obj, "workspaces_dir", ""),
+                        library_id=library_id,
+                        workspace_path=workspace_path,
+                        runs_root=runs_root,
+                        source_path=candidate_path,
+                    )
+                    logger.warning("zotero_import_pdf_not_accessible %s", json.dumps(diag, ensure_ascii=False))
+                    skipped.append(
+                        {
+                            "item_id": zotero_data.get("item_id"),
+                            "title": (zotero_data.get("metadata", {}) or {}).get("title", ""),
+                            "error": "pdf_not_accessible",
+                            "source_path": candidate_path,
+                            "path_diagnostics": diag,
+                            "detail": append_file_access_diagnostics(
+                                "file not found or inaccessible during Zotero import",
+                                source_path=candidate_path,
+                            ),
+                        }
+                    )
                     continue
 
                 src_pdf = pdf_paths[0]["resolved_path"]
@@ -180,7 +211,30 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
                 input_dir.mkdir(parents=True, exist_ok=True)
 
                 dest_pdf = input_dir / "upload.pdf"
-                shutil.copy2(src_pdf, dest_pdf)
+                path_diag = build_import_path_diagnostics(
+                    data_dir=data_dir,
+                    workspaces_dir=getattr(settings_obj, "workspaces_dir", ""),
+                    library_id=library_id,
+                    workspace_path=workspace_path,
+                    runs_root=runs_root,
+                    run_dir=run_dir,
+                    input_path=dest_pdf,
+                    source_path=src_pdf,
+                )
+                logger.warning("zotero_import_path_diagnostics %s", json.dumps(path_diag, ensure_ascii=False))
+                try:
+                    shutil.copy2(src_pdf, dest_pdf)
+                except OSError as exc:
+                    detail = append_file_access_diagnostics(str(exc), source_path=src_pdf)
+                    return JSONResponse(
+                        status_code=500,
+                        content={
+                            "error": "zotero_import_file_access_failed",
+                            "detail": detail,
+                            "source_path": str(src_pdf),
+                            "path_diagnostics": path_diag,
+                        },
+                    )
 
                 file_size = os.path.getsize(dest_pdf)
                 with open(dest_pdf, "rb") as f:
@@ -191,6 +245,7 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
                     "extraction_mode": "agent",
                     "library_id": library_id,
                     "_workspace_path": str(workspace_path),
+                    "_path_diagnostics": path_diag,
                     "zotero_metadata": zotero_data.get("metadata", {}),
                     "zotero_creators": zotero_data.get("creators", []),
                     "zotero_notes": zotero_data.get("notes", []),
@@ -209,7 +264,7 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
                     "input_path": str(dest_pdf),
                     "output_path": "",
                     "options_json": json.dumps(zotero_options, ensure_ascii=False),
-                    "result_json": "{}",
+                    "result_json": json.dumps({"path_diagnostics": path_diag}, ensure_ascii=False),
                     "requested_cancel": False,
                     "idempotency_key": "",
                     "last_event": "accepted",
@@ -227,12 +282,13 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
 
                 job_ids.append(job_id)
 
-            return {"job_ids": job_ids, "count": len(job_ids)}
+            return {"job_ids": job_ids, "count": len(job_ids), "skipped": skipped}
 
         except Exception as exc:
+            detail = append_file_access_diagnostics(str(exc))
             return JSONResponse(
                 status_code=500,
-                content={"error": "zotero_import_failed", "detail": str(exc), "traceback": traceback.format_exc()},
+                content={"error": "zotero_import_failed", "detail": detail, "traceback": traceback.format_exc()},
             )
 
     return router

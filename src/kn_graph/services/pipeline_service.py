@@ -770,6 +770,7 @@ def _public_job_payload(job: dict[str, Any]) -> dict[str, Any]:
     out["stage_label"] = base_label
     out["can_cancel"] = status in {"queued", "running"}
     out["can_retry"] = status in {"failed", "cancelled"}
+    out["error"] = str(out.get("error_detail", "") or out.get("error_code", "") or "") if status == "failed" else ""
 
     result_obj = out.get("result")
     if isinstance(result_obj, dict):
@@ -781,6 +782,10 @@ def _public_job_payload(job: dict[str, Any]) -> dict[str, Any]:
         out["library_id"] = str(result_obj.get("library_id", out.get("library_id", "")) or "")
         out["failure_stage"] = str(result_obj.get("failure_stage", "") or "")
         out["failure_code"] = str(result_obj.get("failure_code", out.get("error_code", "")) or "")
+        if isinstance(result_obj.get("path_diagnostics"), dict):
+            out["path_diagnostics"] = result_obj.get("path_diagnostics")
+        elif isinstance(result_obj.get("path_diagnostics"), list):
+            out["path_diagnostics"] = result_obj.get("path_diagnostics")
     else:
         out["final_verdict"] = "success" if status == "completed" else ("failed" if status == "failed" else "")
         out["imported_paper_count"] = 0

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,9 +15,11 @@ from sse_starlette.sse import EventSourceResponse
 
 from kn_graph.services.pipeline_service import PipelineService
 from kn_graph.services import pipeline_runtime
+from kn_graph.services.file_access_diagnostics import build_import_path_diagnostics
 from kn_graph.services.workspace_paths import resolve_library_workspace
 
 _ALLOWED_UPLOAD_EXTS = {".pdf", ".docx", ".md", ".html"}
+logger = logging.getLogger(__name__)
 
 
 def _resolve_library_workspace(library_id: str, workspaces_dir: Path) -> Path:
@@ -171,6 +174,17 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
         parsed_options["_job_root"] = str(run_dir.resolve())
 
         file_hash, file_size = _save_upload(file, input_path)
+        path_diag = build_import_path_diagnostics(
+            data_dir=getattr(pipeline_service._settings, "data_dir", ""),
+            workspaces_dir=getattr(pipeline_service._settings, "workspaces_dir", ""),
+            library_id=lib,
+            workspace_path=workspace_root,
+            runs_root=runs_root,
+            run_dir=run_dir,
+            input_path=input_path,
+        )
+        logger.warning("pipeline_import_path_diagnostics %s", json.dumps(path_diag, ensure_ascii=False))
+        parsed_options["_path_diagnostics"] = path_diag
         idempotency_key = hashlib.sha256((file_hash + ":" + _safe_json_dumps(parsed_options)).encode("utf-8")).hexdigest()
         now = _now_iso()
 
@@ -184,7 +198,7 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             "input_path": str(input_path),
             "output_path": "",
             "options_json": _safe_json_dumps(parsed_options),
-            "result_json": "{}",
+            "result_json": _safe_json_dumps({"path_diagnostics": path_diag}),
             "requested_cancel": False,
             "idempotency_key": idempotency_key,
             "last_event": "accepted",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -12,6 +13,7 @@ import html
 from typing import Any, Protocol
 
 from kn_graph.providers.registry import ProviderRegistry
+from kn_graph.services.file_access_diagnostics import append_file_access_diagnostics, build_import_path_diagnostics
 from kn_graph.services.mcp_launch import default_mcp_server_command_and_args
 from kn_graph.services.graph_builder import _build_artifact_from_sqlite, run_build_from_artifact
 from kn_graph.services.import_sqlite import main_inline as _import_sqlite_main_inline
@@ -21,6 +23,7 @@ from kn_graph.services.sqlite_repo import SqliteRepo
 
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 AGENT_EVENT_LOG_FILENAME = "agent_events.jsonl"
+logger = logging.getLogger(__name__)
 
 _RETRY_MAX = int(os.getenv("KN_PIPELINE_STAGE_RETRY_MAX", "3"))
 _RETRY_BACKOFF_BASE = float(os.getenv("KN_PIPELINE_STAGE_RETRY_BACKOFF", "5"))
@@ -1306,7 +1309,7 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
                 {"status": "cancelled", "stage": str((job_store.get_job(job_id) or {}).get("stage", "parse_pdf")), "last_event": "cancelled"},
             )
             return
-        detail = str(exc)
+        detail = append_file_access_diagnostics(str(exc), source_path=input_pdf)
         code = "pipeline_failed"
         if ":" in detail:
             first = detail.split(":", 1)[0].strip()
@@ -1314,6 +1317,19 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
                 code = first
         cur = job_store.get_job(job_id) or {}
         failed_stage = str(cur.get("stage", "") or "unknown")
+        existing_diag = options.get("_path_diagnostics") if isinstance(options.get("_path_diagnostics"), dict) else {}
+        failure_diag = build_import_path_diagnostics(
+            data_dir=getattr(_pipeline_settings, "data_dir", "") if _pipeline_settings else "",
+            workspaces_dir=getattr(_pipeline_settings, "workspaces_dir", "") if _pipeline_settings else "",
+            library_id=str(options.get("library_id", "") or ""),
+            workspace_path=str(options.get("_workspace_path", "") or cur.get("workspace_path", "") or ""),
+            runs_root=run_dir.parent,
+            run_dir=run_dir,
+            input_path=input_pdf,
+        )
+        if existing_diag:
+            failure_diag["initial"] = existing_diag
+        logger.warning("pipeline_failure_path_diagnostics %s", json.dumps(failure_diag, ensure_ascii=False))
         job_store.update_job(
             job_id,
             {
@@ -1329,6 +1345,7 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
                         "failure_stage": failed_stage,
                         "failure_code": code,
                         "failure_detail": detail,
+                        "path_diagnostics": failure_diag,
                         "finished_at": _now_iso(),
                     }
                 ),
