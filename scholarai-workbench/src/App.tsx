@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+﻿import { useState, useEffect, useMemo } from 'react';
 import {
   Library,
   Share2,
@@ -305,61 +305,63 @@ export default function App() {
               </button>
             </div>
             {creatingLibrary && (
-              <div className="mb-2 flex items-center gap-1.5" key="create-lib">
-                <input
-                  autoFocus
-                  value={newLibraryId}
-                  onChange={(e) => setNewLibraryId(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
+              <div className="mb-2 rounded-xl border border-outline-variant bg-surface-container-low/80 px-2 py-2 shadow-sm" key="create-lib">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    autoFocus
+                    value={newLibraryId}
+                    onChange={(e) => setNewLibraryId(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const libraryId = newLibraryId.trim();
+                        if (!libraryId) return;
+                        void (async () => {
+                          try {
+                            await api.literature.createLibrary(libraryId, '', false);
+                            setCreatingLibrary(false);
+                            setNewLibraryId('');
+                            refreshLibraries();
+                          } catch (err) {
+                            window.alert(`创建失败: ${String((err as Error)?.message || err)}`);
+                          }
+                        })();
+                      }
+                    }}
+                    placeholder="输入文献库 ID"
+                    className="flex-1 bg-surface-container border border-outline-variant rounded-lg px-2.5 py-1.5 text-xs font-mono text-on-surface outline-none transition-colors focus:border-secondary focus:ring-1 focus:ring-secondary/30"
+                  />
+                  <button
+                    type="button"
+                    title="确认创建"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-500/60 bg-emerald-500/8 text-emerald-600 transition-all hover:bg-emerald-500/15 hover:border-emerald-500 active:scale-95"
+                    onClick={async () => {
                       const libraryId = newLibraryId.trim();
                       if (!libraryId) return;
-                      void (async () => {
-                        try {
-                          await api.literature.createLibrary(libraryId, '', false);
-                          setCreatingLibrary(false);
-                          setNewLibraryId('');
-                          refreshLibraries();
-                        } catch (err) {
-                          window.alert(`创建失败: ${String((err as Error)?.message || err)}`);
-                        }
-                      })();
-                    }
-                  }}
-                  placeholder="文献库ID"
-                  className="flex-1 bg-surface-container border border-outline-variant rounded px-2 py-1 text-xs font-mono text-on-surface outline-none focus:border-secondary"
-                />
-                <button
-                  type="button"
-                  title="创建"
-                  className="p-1.5 rounded border border-green-500/60 text-green-600 hover:bg-green-500/10 hover:border-green-500"
-                  onClick={async () => {
-                    const libraryId = newLibraryId.trim();
-                    if (!libraryId) return;
-                    try {
-                      await api.literature.createLibrary(libraryId, '', false);
+                      try {
+                        await api.literature.createLibrary(libraryId, '', false);
+                        setCreatingLibrary(false);
+                        setNewLibraryId('');
+                        refreshLibraries();
+                      } catch (err) {
+                        window.alert(`创建失败: ${String((err as Error)?.message || err)}`);
+                      }
+                    }}
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    title="取消创建"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-rose-500/60 bg-rose-500/8 text-rose-600 transition-all hover:bg-rose-500/15 hover:border-rose-500 active:scale-95"
+                    onClick={() => {
                       setCreatingLibrary(false);
                       setNewLibraryId('');
-                      refreshLibraries();
-                    } catch (err) {
-                      window.alert(`创建失败: ${String((err as Error)?.message || err)}`);
-                    }
-                  }}
-                >
-                  <Check className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  title="取消"
-                  className="p-1.5 rounded border border-red-500/60 text-red-600 hover:bg-red-500/10 hover:border-red-500"
-                  onClick={() => {
-                    setCreatingLibrary(false);
-                    setNewLibraryId('');
-                  }}
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
+                    }}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             )}
             <div className="max-h-36 overflow-auto rounded-lg border border-outline-variant bg-surface-container p-1.5 space-y-1">
@@ -498,4 +500,5 @@ export default function App() {
     </AppContext.Provider>
   );
 }
+
 

@@ -73,6 +73,7 @@ a = Analysis(
         'pydantic.deprecated',
         'chromadb',
         'chromadb.utils.embedding_functions',
+        'chromadb.telemetry.product.posthog',
         'sse_starlette',
         'python_multipart',
     ],
