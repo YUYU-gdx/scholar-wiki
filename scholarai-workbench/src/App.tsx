@@ -11,6 +11,8 @@ import {
   Bell,
   Trash2,
   Plus,
+  Check,
+  X,
 } from 'lucide-react';
 import { AnimatePresence } from './components/AnimatePresence';
 import LibraryView from './components/LibraryView';
@@ -330,7 +332,8 @@ export default function App() {
                 />
                 <button
                   type="button"
-                  className="px-2 py-1 text-[13px] rounded border border-outline-variant hover:border-secondary"
+                  title="创建"
+                  className="p-1.5 rounded border border-green-500/60 text-green-600 hover:bg-green-500/10 hover:border-green-500"
                   onClick={async () => {
                     const libraryId = newLibraryId.trim();
                     if (!libraryId) return;
@@ -344,17 +347,18 @@ export default function App() {
                     }
                   }}
                 >
-                  创建
+                  <Check className="w-3.5 h-3.5" />
                 </button>
                 <button
                   type="button"
-                  className="px-2 py-1 text-[13px] rounded border border-outline-variant hover:border-secondary"
+                  title="取消"
+                  className="p-1.5 rounded border border-red-500/60 text-red-600 hover:bg-red-500/10 hover:border-red-500"
                   onClick={() => {
                     setCreatingLibrary(false);
                     setNewLibraryId('');
                   }}
                 >
-                  取消
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
             )}
