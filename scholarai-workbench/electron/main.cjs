@@ -220,11 +220,11 @@ async function startBackendServer() {
     console.log(`[desktop] backend_data_dir=${dataDir}`);
     console.log(`[desktop] cmd: ${exePath} ${args.join(" ")}`);
 
-    const installRoot = path.dirname(process.execPath);
+    const workspacesDir = path.join(dataDir, "workspaces");
     backendProc = spawn(exePath, args, {
       env: {
         ...process.env,
-        KN_GRAPH_WORKSPACES_DIR: path.join(installRoot, "workspaces"),
+        KN_GRAPH_WORKSPACES_DIR: workspacesDir,
       },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -744,9 +744,12 @@ app.whenReady().then(async () => {
     await waitForBackendReady();
     createMainWindow();
   } catch (err) {
+    const hint = app.isPackaged
+      ? "Please check installation integrity and write permissions for the app data directory."
+      : "Please confirm uv and Python dependencies are installed.";
     dialog.showErrorBox(
       "Startup Failed",
-      `Failed to start backend service.\n\n${String(err)}\n\nPlease confirm uv and Python dependencies are installed.`
+      `Failed to start backend service.\n\n${String(err)}\n\n${hint}`
     );
     app.quit();
   }
@@ -767,9 +770,12 @@ app.on("activate", () => {
       .then(() => waitForBackendReady())
       .then(() => createMainWindow())
       .catch((err) => {
+        const hint = app.isPackaged
+          ? "Please check installation integrity and write permissions for the app data directory."
+          : "Please confirm uv and Python dependencies are installed.";
         dialog.showErrorBox(
           "Startup Failed",
-          `Failed to start backend service.\n\n${String(err)}\n\nPlease confirm uv and Python dependencies are installed.`
+          `Failed to start backend service.\n\n${String(err)}\n\n${hint}`
         );
       });
   }
