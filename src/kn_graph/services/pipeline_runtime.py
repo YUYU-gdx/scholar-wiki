@@ -360,6 +360,54 @@ def _extract_title_from_parsed_md(parse_meta: dict[str, Any]) -> str:
     return ""
 
 
+def _ensure_parse_artifacts_for_import(parse_meta: dict[str, Any], run_dir: Path, input_path: Path) -> dict[str, Any]:
+    meta = dict(parse_meta or {})
+    if input_path.suffix.lower() != ".pdf":
+        return meta
+
+    parse_dir = run_dir / "parse"
+    unpack_dir = parse_dir / "mineru_zip_unpacked"
+    md_path = Path(str(meta.get("markdown_path", "") or parse_dir / "parsed.md"))
+    html_path = Path(str(meta.get("html_path", "") or parse_dir / "parsed.html"))
+    zip_path = Path(str(meta.get("zip_path", "") or ""))
+
+    needs_rebuild = (
+        not md_path.exists()
+        or not html_path.exists()
+        or not unpack_dir.exists()
+        or not any(unpack_dir.rglob("*.md"))
+    )
+    if needs_rebuild and zip_path.exists():
+        parse_dir.mkdir(parents=True, exist_ok=True)
+        unpack_dir.mkdir(parents=True, exist_ok=True)
+        if not any(unpack_dir.rglob("*.md")):
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(unpack_dir)
+        md_candidates = sorted(unpack_dir.rglob("full.md")) or sorted(unpack_dir.rglob("*.md"))
+        if md_candidates:
+            markdown = md_candidates[0].read_text(encoding="utf-8", errors="ignore")
+            if not md_path.exists():
+                md_path = parse_dir / "parsed.md"
+                md_path.write_text(markdown, encoding="utf-8")
+            if not html_path.exists():
+                html_path = parse_dir / "parsed.html"
+                html_path.write_text(f"<html><body><pre>{html.escape(markdown)}</pre></body></html>", encoding="utf-8")
+            meta["markdown_path"] = str(md_path.resolve())
+            meta["html_path"] = str(html_path.resolve())
+
+    missing: list[tuple[str, Path]] = []
+    if not md_path.exists():
+        missing.append(("markdown_path", md_path))
+    if not html_path.exists():
+        missing.append(("html_path", html_path))
+    if not unpack_dir.exists() or not any(unpack_dir.rglob("*.md")):
+        missing.append(("preparsed_mineru_dir", unpack_dir))
+    if missing:
+        key, path = missing[0]
+        raise RuntimeError(f"parse_artifact_missing:{key}:{path}")
+    return meta
+
+
 def _sync_variable_concept_index(
     *,
     workspace_path: str,
@@ -859,6 +907,7 @@ def _run_materialize_import(
             lib_lock.acquire()
         try:
             _stage_update(store, job_id, "materialize_paper", 53, "stage_progress", status="running")
+            parse_meta = _ensure_parse_artifacts_for_import(parse_meta, run_dir, input_pdf)
             from kn_graph.services.literature_service import LiteratureService
             literature = LiteratureService(settings=_pipeline_settings)
             manifest_path = run_dir / "import_manifest.jsonl"

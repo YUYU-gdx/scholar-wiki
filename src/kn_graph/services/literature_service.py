@@ -78,6 +78,15 @@ def _safe_segment(raw: str) -> str:
     return re.sub(r"_+", "_", cleaned)
 
 
+def _bounded_safe_segment(raw: str, max_length: int = 96) -> str:
+    cleaned = _safe_segment(raw)
+    if len(cleaned) <= max_length:
+        return cleaned
+    digest = hashlib.sha256(str(raw or "").encode("utf-8", errors="ignore")).hexdigest()[:10]
+    keep = max(1, max_length - len(digest) - 1)
+    return f"{cleaned[:keep].rstrip('._-')}_{digest}"
+
+
 def _normalize_doi_for_key(doi: str) -> str:
     text = str(doi or "").strip().lower()
     if not text:
@@ -153,13 +162,17 @@ def _paper_id_from_md(md_text: str, fallback: str) -> str:
     return _safe_segment(chosen) or _safe_segment(fallback) or uuid.uuid4().hex
 
 
-def _safe_windows_filename(raw: str, fallback: str = "document") -> str:
+def _safe_windows_filename(raw: str, fallback: str = "document", max_length: int = 120) -> str:
     text = str(raw or "").strip()
     text = re.sub(r"[<>:\"/\\|?*]+", "_", text)
     text = re.sub(r"\s+", " ", text).strip().strip(". ")
     if not text:
         text = fallback
-    return text[:180]
+    if len(text) <= max_length:
+        return text
+    digest = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    keep = max(1, max_length - len(digest) - 1)
+    return f"{text[:keep].rstrip('. ')}_{digest}"
 
 
 def _dedupe_path(path: Path) -> Path:
@@ -322,8 +335,27 @@ ZhipuEmbeddingClient = OpenAICompatibleEmbeddingClient  # backward compatibility
 
 
 class _NoopEmbeddingClient:
+    dim: int = 256
+
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        return [[] for _ in texts]
+        return [_local_hash_embedding(text, dim=self.dim) for text in texts]
+
+
+def _local_hash_embedding(text: str, dim: int = 256) -> list[float]:
+    vec = [0.0] * dim
+    tokens = re.findall(r"[0-9a-zA-Z\u4e00-\u9fff]+", str(text or "").lower())
+    if not tokens:
+        vec[0] = 1.0
+        return vec
+    for token in tokens:
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        idx = int.from_bytes(digest[:4], "little") % dim
+        sign = -1.0 if (digest[4] & 1) else 1.0
+        vec[idx] += sign
+    norm = sum(v * v for v in vec) ** 0.5
+    if norm <= 0:
+        return vec
+    return [v / norm for v in vec]
 
 
 class _NoopGeneratorClient:
@@ -690,9 +722,9 @@ class LiteratureService:
             return f"doi_{doi_norm}"
         title = str(row.get("title", "") or "").strip()
         if title:
-            title_key = _safe_segment(title)
+            title_key = _bounded_safe_segment(title, max_length=90)
             if title_key and title_key not in {"job", "item", "paper", "article", "upload"}:
-                return f"title_{title_key[:160]}"
+                return f"title_{title_key}"
         if doi_norm:
             return f"doi_{doi_norm}"
         if source_path is not None and source_path.exists() and source_path.is_file():
@@ -748,7 +780,9 @@ class LiteratureService:
         # If directory already exists for a different paper (same filename collision),
         # append a short content hash to disambiguate.
         if paper_root.exists() and source_path is not None and source_path.exists():
-            existing_source = paper_root / "source" / _safe_windows_filename(source_path.name, fallback="original.pdf")
+            existing_source = paper_root / "source" / (
+                _safe_windows_filename(source_path.stem, fallback="original", max_length=80) + source_path.suffix
+            )
             if existing_source.exists():
                 try:
                     existing_digest = _sha256_file(existing_source)
@@ -778,7 +812,9 @@ class LiteratureService:
         ext = source_path.suffix.lower() if isinstance(source_path, Path) else ""
         title_candidate = str(row.get("title", "") or "").strip()
         if isinstance(source_path, Path) and source_path.exists() and source_path.is_file() and ext == ".pdf":
-            source_pdf = source_dir / _safe_windows_filename(source_path.name, fallback="original.pdf")
+            source_pdf = source_dir / (
+                _safe_windows_filename(source_path.stem, fallback="original", max_length=80) + source_path.suffix
+            )
             shutil.copy2(str(source_path), str(source_pdf))
             source_pdf_path = str(source_pdf.resolve())
             parser_name = "mineru"
@@ -811,7 +847,11 @@ class LiteratureService:
 
             chosen_text = chosen_md.read_text(encoding="utf-8", errors="ignore")
             chosen_h1 = _extract_first_md_h1(chosen_text)
-            new_name = _safe_windows_filename(chosen_h1 or title_candidate or chosen_md.stem, fallback=chosen_md.stem) + ".md"
+            new_name = _safe_windows_filename(
+                chosen_h1 or title_candidate or chosen_md.stem,
+                fallback=chosen_md.stem,
+                max_length=96,
+            ) + ".md"
             target_md = _dedupe_path(mineru_latest_dir / new_name)
             if chosen_md.resolve() != target_md.resolve():
                 chosen_md.rename(target_md)
@@ -831,7 +871,7 @@ class LiteratureService:
             md_h1 = _extract_first_md_h1(md_raw)
             if md_h1:
                 title_candidate = md_h1
-            md_name = _safe_windows_filename(md_h1 or source_path.stem, fallback=source_path.stem) + ".md"
+            md_name = _safe_windows_filename(md_h1 or source_path.stem, fallback=source_path.stem, max_length=96) + ".md"
             md_target = source_dir / md_name
             shutil.copy2(str(source_path), str(md_target))
             source_md_path = str(md_target.resolve())
@@ -847,7 +887,11 @@ class LiteratureService:
             if mineru_latest_dir.exists():
                 shutil.rmtree(mineru_latest_dir, ignore_errors=True)
 
-        html_basename = _safe_windows_filename(title_candidate or str(row.get("paper_id", "") or "article"), fallback="article")
+        html_basename = _safe_windows_filename(
+            title_candidate or str(row.get("paper_id", "") or "article"),
+            fallback="article",
+            max_length=96,
+        )
         article_html_path = html_dir / f"{html_basename}.html"
         article_html_path.write_text(html_text, encoding="utf-8")
 

@@ -85,6 +85,29 @@ class _FakeChromaDBClient:
 
 
 class LiteratureServiceTest(unittest.TestCase):
+    def test_default_embedding_fallback_returns_non_empty_vectors_without_api_key(self) -> None:
+        service = LiteratureService(settings=_FakeSettings(), generator_client=_FakeGenerator())
+
+        vectors = service.embedding.embed_texts(["Supply chain resilience matters.", ""])
+
+        self.assertEqual(len(vectors), 2)
+        self.assertGreater(len(vectors[0]), 0)
+        self.assertEqual(len(vectors[0]), len(vectors[1]))
+        self.assertGreater(sum(abs(x) for x in vectors[1]), 0)
+
+    def test_paper_key_for_long_title_is_bounded_for_windows_paths(self) -> None:
+        service = LiteratureService(
+            settings=_FakeSettings(),
+            embedding_client=_FakeEmbeddingClient(),
+            generator_client=_FakeGenerator(),
+        )
+        title = "Self-regulation, corruption and competitiveness in extractive industries " * 6
+
+        paper_key = service._paper_key_for_row({"title": title, "doi": ""}, source_path=None, html_text="")
+
+        self.assertTrue(paper_key.startswith("title_"))
+        self.assertLessEqual(len(paper_key), 96)
+
     def test_list_libraries_reads_workspaces_and_db_counts(self) -> None:
         service = LiteratureService(
             settings=_FakeSettings(),
@@ -114,6 +137,7 @@ class LiteratureServiceTest(unittest.TestCase):
             conn.close()
 
             service._settings.workspaces_dir = workspaces  # type: ignore[assignment]
+            service._settings.indexes_dir = str(root / "indexes")  # type: ignore[assignment]
 
             payload = service.list_libraries()
             libraries = payload.get("libraries", [])
