@@ -27,6 +27,7 @@ def _safe_library_id(raw: str) -> str:
 
 
 from kn_graph._compat import bundle_root
+from kn_graph.services.mcp_launch import default_mcp_server_args
 
 def _repo_root() -> Path:
     return bundle_root()
@@ -44,8 +45,7 @@ def _template_skill_path(skill_name: str) -> str:
 
 
 def _default_mcp_server_args() -> list[str]:
-    mcp_script = (_repo_root() / "scripts" / "smj_pipeline" / "kn_mcp_server.py").resolve()
-    return ["run", "python", str(mcp_script)]
+    return default_mcp_server_args()
 
 
 def _iter_skill_template_sources(skill_names: list[str] | None = None) -> list[tuple[str, Path]]:

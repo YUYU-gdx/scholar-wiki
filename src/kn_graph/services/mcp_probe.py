@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import subprocess
-import sys
 import time
 from typing import Any
 
-from kn_graph._compat import bundle_root
+from kn_graph.services.mcp_launch import default_mcp_server_args
 
 
 def _decode(raw: bytes | str | None) -> str:
@@ -72,13 +70,7 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=3, help="rag_search top_k")
     args = parser.parse_args()
 
-    mcp_server_path = (
-        bundle_root()
-        / "scripts"
-        / "smj_pipeline"
-        / "kn_mcp_server.py"
-    )
-    cmd = [sys.executable, str(mcp_server_path), "--api-base-url", str(args.api_base_url)]
+    cmd = ["uv", *default_mcp_server_args(), "--api-base-url", str(args.api_base_url)]
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,

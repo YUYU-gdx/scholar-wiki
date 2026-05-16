@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from kn_graph.config import Settings
-from kn_graph._compat import bundle_root
+from kn_graph.services.mcp_launch import default_mcp_server_args
 
 from kn_graph.services.chat_legacy import ChatService as LegacyChatService
 from kn_graph.services.agent_runner import AgentRunnerFactory
@@ -150,16 +150,7 @@ class ChatService:
                 {
                     "name": "kn_graph_tools",
                     "command": "uv",
-                    "args": [
-                        "run",
-                        "python",
-                        str(
-                            bundle_root()
-                            / "scripts"
-                            / "smj_pipeline"
-                            / "kn_mcp_server.py"
-                        ),
-                    ],
+                    "args": default_mcp_server_args(),
                     "env": {},
                 }
             ],

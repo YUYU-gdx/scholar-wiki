@@ -6,20 +6,19 @@ from pathlib import Path
 from typing import Any
 
 from kn_graph.config import Settings
-from kn_graph._compat import bundle_root
+from kn_graph.services.mcp_launch import default_mcp_server_args
 
 _PLUGIN_IDS = ("superpowers@openai-curated", "github@openai-curated")
 
 
 def _default_mcp_server(workspace_path: str, library_id: str = "") -> dict[str, Any]:
-    mcp_script = bundle_root() / "scripts" / "smj_pipeline" / "kn_mcp_server.py"
     env: dict[str, str] = {}
     if str(library_id or "").strip():
         env["KN_DEFAULT_LIBRARY_ID"] = str(library_id or "").strip()
     return {
         "name": "kn_graph_tools",
         "command": "uv",
-        "args": ["run", "python", str(mcp_script)],
+        "args": default_mcp_server_args(),
         "env": env,
     }
 
