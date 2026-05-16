@@ -791,9 +791,23 @@ export default function SettingsView() {
                     </button>
                   </div>
                   <div className="rounded-lg border border-outline-variant bg-surface-container-low p-3 flex items-center justify-between gap-3">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="font-medium text-sm text-on-surface flex items-center gap-2">{renderStatus(rows.test.status)} Agent 测试</div>
-                      <div className="text-xs text-on-surface-variant mt-1 truncate">{rows.test.detail}</div>
+                      <div className="text-xs text-on-surface-variant mt-1">{rows.test.detail}</div>
+                      {rows.test.checks.length > 0 ? (
+                        <div className="mt-2 space-y-1.5">
+                          {rows.test.checks.map((check) => (
+                            <div key={check.name} className="rounded-md border border-outline-variant/70 bg-surface-container-lowest px-2 py-1.5">
+                              <div className="flex items-center gap-2 text-xs text-on-surface">
+                                {renderStatus(check.status)}
+                                <span className="font-medium">{check.label}</span>
+                                <span className="text-[10px] text-outline">({check.stage})</span>
+                              </div>
+                              <div className="text-[11px] text-on-surface-variant mt-1 break-words">{check.detail}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                       {installModal.testResult?.checked_at ? <div className="text-[11px] text-on-surface-variant mt-1">检查时间: {installModal.testResult.checked_at}</div> : null}
                     </div>
                     <button

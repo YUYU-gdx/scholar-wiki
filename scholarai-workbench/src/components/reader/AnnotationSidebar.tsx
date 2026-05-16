@@ -110,7 +110,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
       <div className="px-4 py-3 border-b border-outline-variant flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <StickyNote className="w-4 h-4 text-secondary" />
-          <span className="text-sm font-semibold text-on-surface">绗旇</span>
+          <span className="text-sm font-semibold text-on-surface">笔记</span>
           <span className="text-xs text-on-surface-variant bg-surface-container rounded-full px-2 py-0.5">{readerNotes.length}</span>
         </div>
         <button onClick={onToggle} className="text-sm text-outline hover:text-on-surface leading-none">&times;</button>
@@ -120,8 +120,8 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
         {sortedNotes.length === 0 && (
           <div className="text-center py-12">
             <StickyNote className="w-8 h-8 text-outline mx-auto mb-2" />
-            <p className="text-xs text-on-surface-variant">鏆傛棤绗旇</p>
-            <p className="text-xs text-outline mt-1">閫変腑鏂囨湰鍚庡彲娣诲姞绗旇</p>
+            <p className="text-xs text-on-surface-variant">暂无笔记</p>
+            <p className="text-xs text-outline mt-1">选中文本后可添加笔记</p>
           </div>
         )}
 
@@ -165,7 +165,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
               )}
 
               <div>
-                <p className="text-[11px] text-outline mb-1">绗旇鍐呭</p>
+                <p className="text-[11px] text-outline mb-1">笔记内容</p>
                 {editingId === entry.id ? (
                   <div className="space-y-1">
                     <textarea
@@ -177,7 +177,7 @@ export default function AnnotationSidebar({ paperId, libraryId, markdownPath = '
                     />
                     <div className="flex gap-2 justify-end">
                       <button className="text-xs px-3 py-1 rounded-lg bg-primary-container text-on-primary-container font-medium" onClick={(e) => { e.stopPropagation(); handleEdit(entry); }}>保存</button>
-                      <button className="text-xs px-3 py-1 rounded-lg text-outline hover:text-on-surface" onClick={(e) => { e.stopPropagation(); setEditingId(null); }}>鍙栨秷</button>
+                      <button className="text-xs px-3 py-1 rounded-lg text-outline hover:text-on-surface" onClick={(e) => { e.stopPropagation(); setEditingId(null); }}>取消</button>
                     </div>
                   </div>
                 ) : (

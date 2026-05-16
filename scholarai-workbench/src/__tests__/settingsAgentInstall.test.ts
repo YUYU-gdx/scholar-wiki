@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { buildAgentInstallRows } from '../components/settingsAgentInstall';
 
 describe('settings agent install dialog state', () => {
@@ -40,7 +40,7 @@ describe('settings agent install dialog state', () => {
     expect(rows.agent.installCommand).toBe('npm install -g @anthropic-ai/claude-code');
   });
 
-  it('includes the merged agent test result as a dialog row', () => {
+  it('includes the merged agent test result as separate dialog checks', () => {
     const rows = buildAgentInstallRows({
       agent: { displayName: 'Codex', binary: 'codex', installCommand: 'npm install -g @openai/codex' },
       detection: {
@@ -57,7 +57,40 @@ describe('settings agent install dialog state', () => {
     });
 
     expect(rows.test.status).toBe('failed');
-    expect(rows.test.detail).toContain('auth');
+    expect(rows.test.detail).toBe('0/1 项通过');
+    expect(rows.test.checks[0].name).toBe('auth');
     expect(rows.test.canRun).toBe(true);
+  });
+
+  it('keeps non-duplicate agent test checks as separate visible rows', () => {
+    const rows = buildAgentInstallRows({
+      agent: { displayName: 'Claude Code', binary: 'claude', installCommand: 'npm install -g @anthropic-ai/claude-code' },
+      detection: {
+        node: { installed: true, path: 'node.exe', version: 'v22.0.0' },
+        npm: { installed: true, path: 'npm.cmd', version: '10.9.0' },
+        agent: { installed: false, path: '', version: '' },
+      },
+      testResult: {
+        ok: false,
+        checked_at: '2026-05-16T00:00:00.000Z',
+        checks: [
+          { name: 'cli_installed', passed: false, stage: 'cli_check', error: 'binary_not_found' },
+          { name: 'workspace_claude_md', passed: true, stage: 'workspace_config' },
+          { name: 'workspace_mcp_json', passed: false, stage: 'workspace_config', error: 'mcp_json_missing' },
+          { name: 'agent_config_file', passed: true, stage: 'agent_config' },
+          { name: 'claude_agent_sdk', passed: false, stage: 'sdk_check', suggestion: 'install sdk' },
+        ],
+      },
+      busyAction: '',
+    });
+
+    expect(rows.test.checks.map((check) => check.name)).toEqual([
+      'workspace_claude_md',
+      'workspace_mcp_json',
+      'agent_config_file',
+      'claude_agent_sdk',
+    ]);
+    expect(rows.test.detail).toBe('2/4 项通过');
+    expect(rows.test.status).toBe('failed');
   });
 });

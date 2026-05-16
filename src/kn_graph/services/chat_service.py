@@ -481,7 +481,7 @@ class ChatService:
                 "name": "cli_installed",
                 "passed": False,
                 "error": "agent_not_installable",
-                "suggestion": f"Agent '{agent_id}' 鏆備笉鏀寔瀹夎",
+                "suggestion": f"Agent '{agent_id}' 暂不支持安装",
                 "stage": "cli_check",
             })
 

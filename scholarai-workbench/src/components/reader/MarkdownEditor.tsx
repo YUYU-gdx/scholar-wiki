@@ -473,7 +473,7 @@ export default function MarkdownEditor({
         editBtn.setAttribute('style', 'position:absolute;top:6px;right:74px;font-size:11px;padding:2px 6px;border:1px solid #94a3b8;border-radius:6px;background:#fff;cursor:pointer;');
         callout.appendChild(editBtn);
         const delBtn = doc.createElement('button');
-        delBtn.textContent = '鍒犻櫎绗旇';
+        delBtn.textContent = '删除笔记';
         delBtn.setAttribute('type', 'button');
         delBtn.setAttribute('data-reader-note-delete', String(idx));
         if (noteId) delBtn.setAttribute('data-reader-note-id', noteId);
@@ -504,7 +504,7 @@ export default function MarkdownEditor({
         editBtn.setAttribute('style', 'position:absolute;top:6px;right:74px;font-size:11px;padding:2px 6px;border:1px solid #94a3b8;border-radius:6px;background:#fff;cursor:pointer;');
         wrapper.appendChild(editBtn);
         const delBtn = doc.createElement('button');
-        delBtn.textContent = '鍒犻櫎绗旇';
+        delBtn.textContent = '删除笔记';
         delBtn.setAttribute('type', 'button');
         delBtn.setAttribute('data-reader-note-delete', String(idx));
         if (noteId) delBtn.setAttribute('data-reader-note-id', noteId);
@@ -733,7 +733,7 @@ export default function MarkdownEditor({
         setDocTranslationProgress(Math.max(0, Math.min(100, Number(row.progress || 0))));
         setDocTranslationStatus(
           row.status === 'running' || row.status === 'queued'
-            ? `杩涜涓?${Math.max(0, Math.min(100, Number(row.progress || 0)))}%`
+            ? `进行中 ${Math.max(0, Math.min(100, Number(row.progress || 0)))}%`
             : row.status === 'completed'
               ? '已完成'
               : row.status === 'failed'
@@ -778,7 +778,7 @@ export default function MarkdownEditor({
     try {
       setDocTranslationRunning(true);
       setDocTranslationProgress(0);
-      setDocTranslationStatus('鎻愪氦涓?0%');
+      setDocTranslationStatus('提交中 0%');
       const cfg = await api.chat.getTranslationProviderConfig();
       const jobsUnsupportedKey = 'reader_translate_jobs_unsupported';
       const jobsUnsupported = window.sessionStorage.getItem(jobsUnsupportedKey) === '1';

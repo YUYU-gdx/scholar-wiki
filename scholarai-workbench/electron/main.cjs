@@ -7,8 +7,8 @@ const { promisify } = require("node:util");
 const execFileAsync = promisify(execFile);
 
 const HOST = "127.0.0.1";
-// Reserve 8013 for local dev backend; packaged app defaults to 8014 to avoid cross-connecting.
-const BASE_PORT = Number(process.env.KN_GRAPH_PORT || 8014);
+// Dev uses the project backend port; packaged app defaults to 8014 to avoid cross-connecting.
+const BASE_PORT = Number(process.env.KN_GRAPH_PORT || (app.isPackaged ? 8014 : 8013));
 const DEV_DATA_DIR_WIN = "D:\\AppData\\KNGraphApp-dev";
 const START_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 800;
@@ -116,6 +116,7 @@ function buildPythonEnv(repoRoot) {
     PYTHONPATH: pythonPath,
     KN_GRAPH_DATA_DIR: dataDir,
     KN_GRAPH_WORKSPACES_DIR: workspacesDir,
+    LITERATURE_LIBRARY_WORKSPACES_ROOT: workspacesDir,
   };
 }
 
@@ -292,7 +293,9 @@ async function startBackendServer() {
     backendProc = spawn(exePath, args, {
       env: {
         ...process.env,
+        KN_GRAPH_DATA_DIR: dataDir,
         KN_GRAPH_WORKSPACES_DIR: workspacesDir,
+        LITERATURE_LIBRARY_WORKSPACES_ROOT: workspacesDir,
       },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -504,30 +507,8 @@ ipcMain.handle("run-terminal-command", async (_evt, label, command) => {
   if (!rawCommand) return { ok: false, error: "empty_command" };
   if (!isAllowedInstallCommand(rawCommand)) return { ok: false, error: "install_command_not_allowed" };
 
-  const tmpdir = require("node:os").tmpdir();
-  const batPath = path.join(tmpdir, `kn_install_${safeLabel.replace(/\s+/g, "_")}.bat`);
-  const script = [
-    "@echo off",
-    "setlocal EnableExtensions",
-    "echo.",
-    `echo   ${safeLabel} 安装命令`,
-    "echo.",
-    "set \"NPM_CONFIG_PREFIX=%APPDATA%\\npm\"",
-    "if not exist \"%NPM_CONFIG_PREFIX%\" mkdir \"%NPM_CONFIG_PREFIX%\"",
-    "set \"PATH=%NPM_CONFIG_PREFIX%;%ProgramFiles%\\nodejs;%PATH%\"",
-    "echo   将执行:",
-    `echo   ${rawCommand}`,
-    "echo.",
-    rawCommand,
-    "echo.",
-    "echo   命令执行结束。请回到设置弹窗点击“刷新”重新检测。",
-    "pause",
-    "endlocal",
-  ].join("\r\n");
-
   try {
-    fs.writeFileSync(batPath, script, "utf-8");
-    const child = spawn("cmd.exe", ["/K", batPath], {
+    const child = spawn("cmd.exe", ["/c", "start", safeLabel, "cmd.exe", "/K", rawCommand], {
       detached: true,
       stdio: "ignore",
       windowsHide: false,
