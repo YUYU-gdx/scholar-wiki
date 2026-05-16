@@ -10,6 +10,7 @@ from typing import Any, Iterator
 
 from kn_graph.config import Settings
 from kn_graph.services.mcp_launch import default_mcp_server_command_and_args
+from kn_graph.services.workspace_paths import resolve_library_workspace
 
 from kn_graph.services.chat_legacy import ChatService as LegacyChatService
 from kn_graph.services.agent_runner import AgentRunnerFactory
@@ -77,7 +78,12 @@ class ChatService:
         target = str(library_id or "").strip()
         if not target:
             return ""
-        ws = (self._settings.workspaces_dir / target).resolve()
+        try:
+            ws = resolve_library_workspace(target, self._settings.workspaces_dir, must_exist=True)
+        except ValueError:
+            return ""
+        if ws is None:
+            return ""
         if not ws.exists() or not ws.is_dir():
             return ""
         return str(ws)

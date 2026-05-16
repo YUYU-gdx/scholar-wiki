@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from kn_graph.config import Settings
+from kn_graph.services.workspace_paths import resolve_library_workspace
 
 
 def _resolve_storage_uri(uri: str) -> str:
@@ -656,7 +657,13 @@ class GraphService:
         lib = str(self._current_library or "").strip()
         if not lib:
             return
-        db_path = self._settings.workspaces_dir / lib / "kn_gragh.db"
+        try:
+            ws = resolve_library_workspace(lib, self._settings.workspaces_dir, must_exist=False)
+        except ValueError:
+            return
+        if ws is None:
+            return
+        db_path = ws / "kn_gragh.db"
         if not db_path.exists():
             return
         import sqlite3
@@ -872,7 +879,11 @@ class GraphService:
         # Look up in memory cache first; fall back to direct DB read
         sqlite_meta = self._paper_meta_by_id.get(pid, {})
         if not sqlite_meta:
-            db_path = self._settings.workspaces_dir / library_id / "kn_gragh.db"
+            try:
+                ws = resolve_library_workspace(library_id, self._settings.workspaces_dir, must_exist=False)
+            except ValueError:
+                ws = None
+            db_path = ws / "kn_gragh.db" if ws is not None else Path()
             if db_path.exists():
                 import sqlite3
                 conn = sqlite3.connect(str(db_path))
@@ -1007,7 +1018,13 @@ class GraphService:
         deleted = {"paper_id": pid, "paper_key": pkey, "library_id": library_id, "deleted": []}
 
         # 1. SQLite: delete paper + related rows
-        db_path = self._settings.workspaces_dir / library_id / "kn_gragh.db"
+        try:
+            ws = resolve_library_workspace(library_id, self._settings.workspaces_dir, must_exist=False)
+        except ValueError:
+            ws = None
+        if ws is None:
+            return deleted
+        db_path = ws / "kn_gragh.db"
         if db_path.exists():
             import sqlite3
             conn = sqlite3.connect(str(db_path))
@@ -1024,7 +1041,6 @@ class GraphService:
 
         # 2. Disk: remove paper directory
         import shutil
-        ws = self._settings.workspaces_dir / library_id
         paper_dir = ws / "corpus" / "papers" / pkey
         if paper_dir.exists():
             shutil.rmtree(paper_dir, ignore_errors=True)

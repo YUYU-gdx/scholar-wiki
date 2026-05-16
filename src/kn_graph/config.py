@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from kn_graph.services.workspace_paths import resolve_library_workspace, validate_library_id
+
 
 def _is_frozen() -> bool:
     return getattr(sys, "frozen", False)
@@ -239,10 +241,15 @@ class Settings(BaseModel):
         lib = str(library_id or "").strip()
         if not lib:
             return None
-        ws_path = self.workspaces_dir / lib / "graph_views.json"
-        if ws_path.exists():
+        try:
+            lib = validate_library_id(lib)
+            ws = resolve_library_workspace(lib, self.workspaces_dir, must_exist=False)
+        except ValueError:
+            return None
+        ws_path = (ws / "graph_views.json") if ws is not None else None
+        if ws_path is not None and ws_path.exists():
             return ws_path
-        run_path = self.runs_dir / lib / "graph_views.json"
+        run_path = (self.runs_dir / lib / "graph_views.json").resolve()
         if run_path.exists():
             return run_path
         return None

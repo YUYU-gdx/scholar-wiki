@@ -288,7 +288,7 @@ async function startBackendServer() {
     console.log(`[desktop] backend_data_dir=${dataDir}`);
     console.log(`[desktop] cmd: ${exePath} ${args.join(" ")}`);
 
-    const workspacesDir = path.join(dataDir, "workspaces");
+    const workspacesDir = path.join(dataDir, "libraries", "workspaces");
     backendProc = spawn(exePath, args, {
       env: {
         ...process.env,
@@ -458,58 +458,9 @@ function stopBackendServer() {
 
 // IPC handlers for renderer process
 ipcMain.handle("get-backend-port", () => runtimePort);
-ipcMain.handle("agent-precheck", async () => {
-  const state = await detectNodeAndClaude();
+ipcMain.handle("agent-precheck", async (_evt, binary) => {
+  const state = await detectNodeAndAgent(binary);
   return { ok: true, stage: "precheck", ...state };
-});
-ipcMain.handle("agent-install-node", async () => {
-  const before = await detectNodeAndClaude();
-  if (before.node.installed) {
-    return { ok: true, stage: "install_node", skipped: true, reason: "node_already_installed", ...before };
-  }
-  const install = await runExecFile("winget", ["install", "OpenJS.NodeJS.LTS", "--silent", "--accept-package-agreements"], {
-    timeoutMs: 20 * 60 * 1000,
-  });
-  const after = await detectNodeAndClaude();
-  return {
-    ok: after.node.installed,
-    stage: "install_node",
-    skipped: false,
-    install,
-    ...after,
-    error: after.node.installed ? "" : "node_install_not_detected",
-  };
-});
-ipcMain.handle("agent-install-claude", async () => {
-  const before = await detectNodeAndClaude();
-  if (!before.node.installed || !before.npm.installed) {
-    return { ok: false, stage: "install_claude", error: "node_or_npm_missing", ...before };
-  }
-  if (before.claude.installed) {
-    return { ok: true, stage: "install_claude", skipped: true, reason: "claude_already_installed", ...before };
-  }
-  const env = {
-    ...process.env,
-    PATH: `${path.dirname(before.node.path || "")};${path.join(String(process.env.APPDATA || "").trim(), "npm")};${process.env.PATH || ""}`,
-    NPM_CONFIG_PREFIX: path.join(String(process.env.APPDATA || "").trim(), "npm"),
-  };
-  const install = await runExecFile(before.npm.path, ["install", "-g", "@anthropic-ai/claude-code"], {
-    timeoutMs: 20 * 60 * 1000,
-    env,
-  });
-  const after = await detectNodeAndClaude();
-  return {
-    ok: after.claude.installed,
-    stage: "install_claude",
-    skipped: false,
-    install,
-    ...after,
-    error: after.claude.installed ? "" : "claude_install_not_detected",
-  };
-});
-ipcMain.handle("agent-postcheck", async () => {
-  const state = await detectNodeAndClaude();
-  return { ok: true, stage: "postcheck", ...state };
 });
 ipcMain.handle("get-data-dir", () => ({ ok: true, data_dir: getDefaultDataDir() }));
 ipcMain.handle("set-data-dir", async (_evt, value) => {
@@ -541,140 +492,41 @@ ipcMain.handle("restart-backend", async () => {
   await waitForBackendReady();
   return runtimePort;
 });
-// Agent install: open a terminal and run a self-contained batch script.
-// The script checks for Node.js first, installs via winget if missing, then npm installs the agent.
-ipcMain.handle("run-in-terminal", async (_evt, packageName, binary, displayName) => {
-  const pkg = String(packageName || "").trim();
-  const bin = String(binary || "").trim();
-  const label = String(displayName || "Agent").trim();
-  if (!pkg || !bin) return { ok: false, error: "invalid_agent_info" };
+function isAllowedInstallCommand(command) {
+  const normalized = String(command || "").trim().replace(/\s+/g, " ");
+  if (normalized === "winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements") return true;
+  return /^npm install -g (@?[a-z0-9._-]+\/)?[a-z0-9._-]+(@[a-z0-9._-]+)?$/i.test(normalized);
+}
+
+ipcMain.handle("run-terminal-command", async (_evt, label, command) => {
+  const safeLabel = String(label || "Install").replace(/[^\w .@-]/g, "").trim() || "Install";
+  const rawCommand = String(command || "").trim().replace(/\s+/g, " ");
+  if (!rawCommand) return { ok: false, error: "empty_command" };
+  if (!isAllowedInstallCommand(rawCommand)) return { ok: false, error: "install_command_not_allowed" };
 
   const tmpdir = require("node:os").tmpdir();
-  const batPath = path.join(tmpdir, `kn_install_${bin}.bat`);
-
+  const batPath = path.join(tmpdir, `kn_install_${safeLabel.replace(/\s+/g, "_")}.bat`);
   const script = [
     "@echo off",
     "setlocal EnableExtensions",
     "echo.",
-    "echo   ╔══════════════════════════════════════════╗",
-    `echo   ║   ${label} 一键安装向导              ║`,
-    "echo   ╚══════════════════════════════════════════╝",
+    `echo   ${safeLabel} 安装命令`,
     "echo.",
-    "set \"NODE_OK=0\"",
-    "set \"AGENT_OK=0\"",
-    "echo   [1/3] 检查 Node.js ...",
-    "where node >nul 2>nul",
-    "if %errorlevel% equ 0 (",
-    "    set \"NODE_OK=1\"",
-    "    echo   Node.js 已安装。",
-    ") else (",
-    "    echo   Node.js 未安装，正在通过 winget 安装，请稍候 ...",
-    "    winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements 2>&1",
-    "    REM winget installs to %%ProgramFiles%%\\nodejs, add it to PATH for this session",
-    "    if exist \"%ProgramFiles%\\nodejs\\node.exe\" set \"PATH=%ProgramFiles%\\nodejs;%PATH%\"",
-    "    if exist \"%SystemDrive%\\Program Files\\nodejs\\node.exe\" set \"PATH=%SystemDrive%\\Program Files\\nodejs;%PATH%\"",
-    "    where node >nul 2>nul",
-    "    if %errorlevel% equ 0 (",
-    "        set \"NODE_OK=1\"",
-    "        echo   Node.js 安装成功！",
-    "    ) else (",
-    "        echo.",
-    "        echo   ╔══════════════════════════════════════════╗",
-    "        echo   ║   Node.js 安装失败                    ║",
-    "        echo   ║                                      ║",
-    "        echo   ║   请检查上面的 winget 报错信息。      ║",
-    "        echo   ║   也可以手动去 nodejs.org 下载安装。  ║",
-    "        echo   ╚══════════════════════════════════════════╝",
-    "        echo.",
-    "        pause",
-    "        exit /b 1",
-    "    )",
-    ")",
-    "echo   Node.js 版本:",
-    "node --version 2>nul",
-    "echo   npm 版本:",
-    "npm --version 2>nul",
-    "where npm >nul 2>nul",
-    "if %errorlevel% neq 0 (",
-    "    echo.",
-    "    echo   npm 不可用，请重新安装 Node.js LTS 后重试。",
-    "    pause",
-    "    exit /b 1",
-    ")",
-    "echo.",
-    "where bash >nul 2>nul",
-    "if %errorlevel% neq 0 (",
-    "    echo   提示：未检测到 Git Bash。Claude Code 在 Windows 上建议安装 Git for Windows。",
-    "    echo   下载地址：https://git-scm.com/download/win",
-    ")",
-    "echo.",
-    "REM Use per-user npm global prefix to avoid admin-permission issues.",
     "set \"NPM_CONFIG_PREFIX=%APPDATA%\\npm\"",
     "if not exist \"%NPM_CONFIG_PREFIX%\" mkdir \"%NPM_CONFIG_PREFIX%\"",
-    "set \"PATH=%NPM_CONFIG_PREFIX%;%PATH%\"",
-    "echo   npm 全局安装目录: %NPM_CONFIG_PREFIX%",
+    "set \"PATH=%NPM_CONFIG_PREFIX%;%ProgramFiles%\\nodejs;%PATH%\"",
+    "echo   将执行:",
+    `echo   ${rawCommand}`,
     "echo.",
-    `echo   [2/3] 检查 ${label} ...`,
-    `where ${bin} >nul 2>nul`,
-    "if %errorlevel% equ 0 (",
-    "    set \"AGENT_OK=1\"",
-    `    echo   已检测到 ${label}。`,
-    `    ${bin} --version 2>nul || echo   (已检测到命令，但版本读取失败)`,
-    ")",
+    rawCommand,
     "echo.",
-    "if %AGENT_OK% neq 1 (",
-    `    echo   [3/3] 安装 ${label} ...`,
-    "    echo   正在下载，请耐心等待 ...",
-    "    echo.",
-    `    npm install -g ${pkg} 2>&1`,
-    "    set INSTALL_RESULT=%errorlevel%",
-    `    where ${bin} >nul 2>nul`,
-    "    set BIN_RESULT=%errorlevel%",
-    "    if %INSTALL_RESULT% equ 0 if %BIN_RESULT% equ 0 (",
-    "        set \"AGENT_OK=1\"",
-    "        echo.",
-    "        echo   ╔══════════════════════════════════════════╗",
-    "        echo   ║                                      ║",
-    `        echo   ║   ${label} 安装成功！              ║`,
-    "        echo   ║                                      ║",
-    "        echo   ╚══════════════════════════════════════════╝",
-    "        echo.",
-    `        echo   版本：`,
-    `        ${bin} --version 2>nul || echo   (请关闭窗口后重新打开终端验证)`,
-    "    ) else (",
-    "        echo.",
-    "        echo   ╔══════════════════════════════════════════╗",
-    "        echo   ║                                      ║",
-    `        echo   ║   ${label} 安装失败              ║`,
-    "        echo   ║                                      ║",
-    "        echo   ╚══════════════════════════════════════════╝",
-    "        echo.",
-    "        echo   请查看上面红色报错信息，常见原因：",
-    "        echo     1. 网络不通，无法访问 npm 仓库",
-    "        echo     2. npm 缓存损坏（可运行 npm cache clean --force 后重试）",
-    "        echo     3. 磁盘空间不足或权限不够",
-    "        echo.",
-    "        echo   解决问题后重新点击【安装】按钮即可。",
-    "        echo.",
-    `        where ${bin} >nul 2>nul`,
-    "        if %errorlevel% neq 0 echo   未检测到命令，请确认 npm 全局目录已在 PATH（当前会话已临时添加）。",
-    "    )",
-    ") else (",
-    `    echo   [3/3] ${label} 已安装，跳过安装步骤。`,
-    ")",
-    "echo.",
-    "if %NODE_OK% equ 1 if %AGENT_OK% equ 1 (",
-    "    echo   环境已就绪：Node.js 与 Agent CLI 均可用。",
-    "    echo   回到设置页面点击【测试】按钮确认配置是否正常。",
-    ")",
-    "echo.",
+    "echo   命令执行结束。请回到设置弹窗点击“刷新”重新检测。",
     "pause",
     "endlocal",
   ].join("\r\n");
 
   try {
     fs.writeFileSync(batPath, script, "utf-8");
-    // Launch cmd directly to avoid fragile `start` quoting on paths/titles.
     const child = spawn("cmd.exe", ["/K", batPath], {
       detached: true,
       stdio: "ignore",
@@ -871,38 +723,11 @@ function firstExistingPath(candidates) {
   return "";
 }
 
-function resolveNodeExe() {
-  const pf = String(process.env.ProgramFiles || "").trim();
-  const pf86 = String(process.env["ProgramFiles(x86)"] || "").trim();
-  const lad = String(process.env.LocalAppData || "").trim();
-  return firstExistingPath([
-    pf ? path.join(pf, "nodejs", "node.exe") : "",
-    pf86 ? path.join(pf86, "nodejs", "node.exe") : "",
-    lad ? path.join(lad, "Programs", "nodejs", "node.exe") : "",
-  ]);
-}
-
-function resolveNpmCmd(nodeExePath = "") {
-  const nodeExe = String(nodeExePath || "").trim();
-  const nodeDir = nodeExe ? path.dirname(nodeExe) : "";
-  const pf = String(process.env.ProgramFiles || "").trim();
-  const pf86 = String(process.env["ProgramFiles(x86)"] || "").trim();
-  return firstExistingPath([
-    nodeDir ? path.join(nodeDir, "npm.cmd") : "",
-    pf ? path.join(pf, "nodejs", "npm.cmd") : "",
-    pf86 ? path.join(pf86, "nodejs", "npm.cmd") : "",
-  ]);
-}
-
-function resolveClaudeCmd() {
-  const appData = String(process.env.APPDATA || "").trim();
-  const p = firstExistingPath([
-    appData ? path.join(appData, "npm", "claude.cmd") : "",
-  ]);
-  if (p) return p;
-  // Fallback: discover from PATH
+function whereFirst(commandName) {
+  const name = String(commandName || "").trim();
+  if (!name || /[\\/:*?"<>|]/.test(name)) return "";
   try {
-    const whereOut = execFileSync("where", ["claude.cmd"], {
+    const whereOut = execFileSync("where", [name], {
       windowsHide: true,
       encoding: "utf8",
       timeout: 8000,
@@ -914,6 +739,37 @@ function resolveClaudeCmd() {
     // ignore
   }
   return "";
+}
+
+function resolveNodeExe() {
+  const pf = String(process.env.ProgramFiles || "").trim();
+  const pf86 = String(process.env["ProgramFiles(x86)"] || "").trim();
+  const lad = String(process.env.LocalAppData || "").trim();
+  return firstExistingPath([
+    pf ? path.join(pf, "nodejs", "node.exe") : "",
+    pf86 ? path.join(pf86, "nodejs", "node.exe") : "",
+    lad ? path.join(lad, "Programs", "nodejs", "node.exe") : "",
+  ]) || whereFirst("node.exe") || whereFirst("node");
+}
+
+function resolveNpmCmd(nodeExePath = "") {
+  const nodeExe = String(nodeExePath || "").trim();
+  const nodeDir = nodeExe ? path.dirname(nodeExe) : "";
+  const pf = String(process.env.ProgramFiles || "").trim();
+  const pf86 = String(process.env["ProgramFiles(x86)"] || "").trim();
+  return firstExistingPath([
+    nodeDir ? path.join(nodeDir, "npm.cmd") : "",
+    pf ? path.join(pf, "nodejs", "npm.cmd") : "",
+    pf86 ? path.join(pf86, "nodejs", "npm.cmd") : "",
+  ]) || whereFirst("npm.cmd") || whereFirst("npm");
+}
+
+function resolveAgentCmd(binary) {
+  const bin = String(binary || "").trim();
+  if (!bin || /[\\/:*?"<>|]/.test(bin)) return "";
+  const cmdName = bin.toLowerCase().endsWith(".cmd") ? bin : `${bin}.cmd`;
+  const appData = String(process.env.APPDATA || "").trim();
+  return firstExistingPath([appData ? path.join(appData, "npm", cmdName) : ""]) || whereFirst(cmdName) || whereFirst(bin);
 }
 
 async function runExecFile(file, args, opts = {}) {
@@ -944,13 +800,13 @@ async function runExecFile(file, args, opts = {}) {
   }
 }
 
-async function detectNodeAndClaude() {
+async function detectNodeAndAgent(binary) {
   const nodeExe = resolveNodeExe();
   const npmCmd = resolveNpmCmd(nodeExe);
-  const claudeCmd = resolveClaudeCmd();
+  const agentCmd = resolveAgentCmd(binary);
   let nodeVersion = "";
   let npmVersion = "";
-  let claudeVersion = "";
+  let agentVersion = "";
   if (nodeExe) {
     const n = await runExecFile(nodeExe, ["--version"], { timeoutMs: 20_000 });
     nodeVersion = String((n.stdout || n.stderr || "").trim().split(/\r?\n/)[0] || "");
@@ -959,14 +815,14 @@ async function detectNodeAndClaude() {
     const n = await runExecFile(npmCmd, ["--version"], { timeoutMs: 20_000 });
     npmVersion = String((n.stdout || n.stderr || "").trim().split(/\r?\n/)[0] || "");
   }
-  if (claudeCmd) {
-    const c = await runExecFile(claudeCmd, ["--version"], { timeoutMs: 20_000 });
-    claudeVersion = String((c.stdout || c.stderr || "").trim().split(/\r?\n/)[0] || "");
+  if (agentCmd) {
+    const c = await runExecFile(agentCmd, ["--version"], { timeoutMs: 20_000 });
+    agentVersion = String((c.stdout || c.stderr || "").trim().split(/\r?\n/)[0] || "");
   }
   return {
     node: { installed: Boolean(nodeExe), path: nodeExe, version: nodeVersion },
     npm: { installed: Boolean(npmCmd), path: npmCmd, version: npmVersion },
-    claude: { installed: Boolean(claudeCmd), path: claudeCmd, version: claudeVersion },
+    agent: { installed: Boolean(agentCmd), path: agentCmd, version: agentVersion },
   };
 }
 

@@ -21,9 +21,6 @@ contextBridge.exposeInMainWorld("desktopShell", {
     ipcRenderer.on("file-changed", handler);
     return () => ipcRenderer.removeListener("file-changed", handler);
   },
-  runInTerminal: (packageName, binary, displayName) => ipcRenderer.invoke("run-in-terminal", packageName, binary, displayName),
-  agentPrecheck: () => ipcRenderer.invoke("agent-precheck"),
-  agentInstallNode: () => ipcRenderer.invoke("agent-install-node"),
-  agentInstallClaude: () => ipcRenderer.invoke("agent-install-claude"),
-  agentPostcheck: () => ipcRenderer.invoke("agent-postcheck"),
+  agentPrecheck: (binary) => ipcRenderer.invoke("agent-precheck", binary),
+  runTerminalCommand: (label, command) => ipcRenderer.invoke("run-terminal-command", label, command),
 });

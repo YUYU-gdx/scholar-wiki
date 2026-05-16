@@ -1,6 +1,13 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { GlobalSettingsPayload } from '../types';
+import {
+  buildAgentInstallRows,
+  type AgentInstallBusyAction,
+  type AgentInstallDetection,
+  type AgentInstallInfo,
+  type AgentInstallTestResult,
+} from './settingsAgentInstall';
 
 type SectionState = { saving: boolean; message: string };
 type ProviderPreset = { id: string; name: string; base_url: string };
@@ -17,12 +24,13 @@ type AgentTemplateEditorState = {
   path: string;
   message: string;
 };
-type InstallStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
-type InstallStep = {
-  key: 'precheck' | 'install_node' | 'install_claude' | 'postcheck';
-  title: string;
-  status: InstallStepStatus;
-  detail: string;
+type AgentTestResult = {
+  agent_id: string;
+  ok: boolean;
+  passed_count: number;
+  failed_count: number;
+  checks: Array<{ name: string; passed: boolean; stage: string; suggestion?: string; binary?: string; version?: string; path?: string; error?: string }>;
+  checked_at: string;
 };
 const IMPORT_SECTION_IDS = new Set(['pipeline', 'pipeline_agent', 'embedding']);
 const PROVIDER_KEY_GUIDE_URLS: Record<string, string> = {
@@ -92,32 +100,24 @@ export default function SettingsView() {
   const [payload, setPayload] = useState<GlobalSettingsPayload | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [sectionState, setSectionState] = useState<Record<string, SectionState>>({});
-  const [agentTestResult, setAgentTestResult] = useState<{
-    agent_id: string;
-    ok: boolean;
-    passed_count: number;
-    failed_count: number;
-    checks: Array<{ name: string; passed: boolean; stage: string; suggestion?: string; binary?: string; version?: string; path?: string; error?: string }>;
-    checked_at: string;
-  } | null>(null);
-  const [agentTestScope, setAgentTestScope] = useState<'agent_settings' | 'pipeline_agent'>('agent_settings');
-  const [agentTesting, setAgentTesting] = useState(false);
-  const [agentInstalling, setAgentInstalling] = useState(false);
   const [installModal, setInstallModal] = useState<{
     open: boolean;
     scope: 'agent_settings' | 'pipeline_agent';
-    steps: InstallStep[];
-    done: boolean;
+    agentId: string;
+    info: AgentInstallInfo | null;
+    detection: AgentInstallDetection | null;
+    testResult: AgentTestResult | null;
+    busyAction: AgentInstallBusyAction;
+    message: string;
   }>({
     open: false,
     scope: 'agent_settings',
-    done: false,
-    steps: [
-      { key: 'precheck', title: '检查 Node.js / Claude Code', status: 'pending', detail: '' },
-      { key: 'install_node', title: '安装 Node.js（按需）', status: 'pending', detail: '' },
-      { key: 'install_claude', title: '安装 Claude Code（按需）', status: 'pending', detail: '' },
-      { key: 'postcheck', title: '安装后复查', status: 'pending', detail: '' },
-    ],
+    agentId: 'codex',
+    info: null,
+    detection: null,
+    testResult: null,
+    busyAction: '',
+    message: '',
   });
   const [templateEditor, setTemplateEditor] = useState<AgentTemplateEditorState>({
     open: false,
@@ -241,223 +241,97 @@ export default function SettingsView() {
     }));
   };
 
-  const handleAgentInstall = async (scope: 'agent_settings' | 'pipeline_agent' = 'agent_settings') => {
-    const agentId = getAgentIdByScope(scope);
-    setAgentTestScope(scope);
-    setAgentInstalling(true);
-    setInstallModal({
-      open: true,
-      scope,
-      done: false,
-      steps: [
-        { key: 'precheck', title: '检查 Node.js / Claude Code', status: 'pending', detail: '' },
-        { key: 'install_node', title: '安装 Node.js（按需）', status: 'pending', detail: '' },
-        { key: 'install_claude', title: '安装 Claude Code（按需）', status: 'pending', detail: '' },
-        { key: 'postcheck', title: '安装后复查', status: 'pending', detail: '' },
-      ],
-    });
-    const updateInstallStep = (key: InstallStep['key'], patch: Partial<InstallStep>) => {
-      setInstallModal((prev) => ({
-        ...prev,
-        steps: prev.steps.map((s) => (s.key === key ? { ...s, ...patch } : s)),
-      }));
-    };
+  const normalizeInstallInfo = (raw: Awaited<ReturnType<typeof api.agent.installInfo>>): AgentInstallInfo => ({
+    displayName: raw.display_name || raw.agent_id,
+    binary: raw.binary || '',
+    installCommand: raw.command || '',
+    notAvailable: Boolean(raw.not_available),
+  });
+
+  const refreshAgentInstallStatus = async (agentId: string, keepTestResult = true) => {
+    setInstallModal((prev) => ({ ...prev, busyAction: 'detect', message: '正在检测 Node.js 和 Agent CLI...' }));
     try {
       const info = await api.agent.installInfo(agentId);
-      if (info.not_available) {
-        updateInstallStep('precheck', { status: 'failed', detail: `${info.display_name} 暂不支持安装` });
-        setAgentTestResult({
-          agent_id: agentId,
-          ok: false,
-          passed_count: 0,
-          failed_count: 1,
-          checks: [{ name: 'install_available', passed: false, stage: 'install', suggestion: info.display_name + ' 暂不支持安装' }],
-          checked_at: new Date().toISOString(),
-        });
+      const normalized = normalizeInstallInfo(info);
+      const ds = window.desktopShell;
+      if (!ds?.agentPrecheck) {
+        setInstallModal((prev) => ({
+          ...prev,
+          info: normalized,
+          busyAction: '',
+          message: '桌面检测接口不可用，请在 Electron 桌面端使用。',
+        }));
         return;
       }
-      const w = window as unknown as { desktopShell?: { runInTerminal?: (pkg: string, bin: string, name: string) => Promise<{ ok: boolean; error?: string }> } };
-      const ds = w.desktopShell as unknown as {
-        runInTerminal?: (pkg: string, bin: string, name: string) => Promise<{ ok: boolean; error?: string }>;
-        agentPrecheck?: () => Promise<any>;
-        agentInstallNode?: () => Promise<any>;
-        agentInstallClaude?: () => Promise<any>;
-        agentPostcheck?: () => Promise<any>;
-      };
-      if (agentId !== 'claude_code' || !ds?.agentPrecheck || !ds?.agentInstallNode || !ds?.agentInstallClaude || !ds?.agentPostcheck) {
-        updateInstallStep('precheck', { status: 'running', detail: '正在打开终端执行安装脚本...' });
-        const shell = ds?.runInTerminal;
-        if (!shell) {
-          updateInstallStep('precheck', { status: 'failed', detail: '桌面安装接口不可用' });
-          return;
-        }
-        const pkg = info.command.replace(/^npm\s+install\s+-g\s+/, '').trim();
-        const result = await shell(pkg, info.binary, info.display_name);
-        if (!result.ok) {
-          updateInstallStep('precheck', { status: 'failed', detail: result.error || '无法打开终端' });
-          setAgentTestResult({
-            agent_id: agentId,
-            ok: false,
-            passed_count: 0,
-            failed_count: 1,
-            checks: [{ name: 'install_launch', passed: false, stage: 'install', error: result.error || '无法打开终端' }],
-            checked_at: new Date().toISOString(),
-          });
-        } else {
-          updateInstallStep('precheck', { status: 'done', detail: '已启动外部终端，请按终端提示完成安装。' });
-          updateInstallStep('install_node', { status: 'skipped', detail: '由终端脚本处理' });
-          updateInstallStep('install_claude', { status: 'skipped', detail: '由终端脚本处理' });
-          updateInstallStep('postcheck', { status: 'skipped', detail: '安装完成后可点“测试”复查' });
-          setInstallModal((prev) => ({ ...prev, done: true }));
-        }
-        return;
-      }
-
-      updateInstallStep('precheck', { status: 'running', detail: '正在检查安装状态...' });
-      setAgentTestResult({
-        agent_id: agentId,
-        ok: false,
-        passed_count: 0,
-        failed_count: 0,
-        checks: [{ name: 'precheck', passed: true, stage: 'install', suggestion: '正在检查 Node.js / Claude Code...' }],
-        checked_at: new Date().toISOString(),
-      });
-
-      const pre = await ds.agentPrecheck();
-      const needsNode = !Boolean(pre?.node?.installed);
-      const needsClaude = !Boolean(pre?.claude?.installed);
-      updateInstallStep('precheck', { status: 'done', detail: `Node: ${pre?.node?.installed ? '已安装' : '缺失'}，Claude: ${pre?.claude?.installed ? '已安装' : '缺失'}` });
-      if (!needsNode && !needsClaude) {
-        updateInstallStep('install_node', { status: 'skipped', detail: '无需安装' });
-        updateInstallStep('install_claude', { status: 'skipped', detail: '无需安装' });
-        updateInstallStep('postcheck', { status: 'done', detail: '环境已就绪' });
-        setInstallModal((prev) => ({ ...prev, done: true }));
-        setAgentTestResult({
-          agent_id: agentId,
-          ok: true,
-          passed_count: 1,
-          failed_count: 0,
-          checks: [{ name: 'already_installed', passed: true, stage: 'install', suggestion: '检测到 Node.js 和 Claude Code 已安装，可直接点击测试。' }],
-          checked_at: new Date().toISOString(),
-        });
-        return;
-      }
-
-      if (needsNode) {
-        updateInstallStep('install_node', { status: 'running', detail: '正在安装 Node.js...' });
-        setAgentTestResult({
-          agent_id: agentId,
-          ok: false,
-          passed_count: 0,
-          failed_count: 0,
-          checks: [{ name: 'install_node', passed: true, stage: 'install', suggestion: '缺少 Node.js，正在安装...' }],
-          checked_at: new Date().toISOString(),
-        });
-        const n = await ds.agentInstallNode();
-        if (!n?.ok || !n?.node?.installed) {
-          updateInstallStep('install_node', { status: 'failed', detail: String(n?.error || 'node_install_failed') });
-          updateInstallStep('install_claude', { status: 'skipped', detail: 'Node.js 未就绪，跳过' });
-          updateInstallStep('postcheck', { status: 'failed', detail: '安装中断' });
-          setInstallModal((prev) => ({ ...prev, done: true }));
-          setAgentTestResult({
-            agent_id: agentId,
-            ok: false,
-            passed_count: 0,
-            failed_count: 1,
-            checks: [{ name: 'install_node', passed: false, stage: 'install', error: String(n?.error || 'node_install_failed') }],
-            checked_at: new Date().toISOString(),
-          });
-          return;
-        }
-        updateInstallStep('install_node', { status: 'done', detail: 'Node.js 安装完成' });
-      } else {
-        updateInstallStep('install_node', { status: 'skipped', detail: '已安装，跳过' });
-      }
-
-      if (needsClaude || !Boolean((await ds.agentPrecheck())?.claude?.installed)) {
-        updateInstallStep('install_claude', { status: 'running', detail: '正在安装 Claude Code...' });
-        setAgentTestResult({
-          agent_id: agentId,
-          ok: false,
-          passed_count: 0,
-          failed_count: 0,
-          checks: [{ name: 'install_claude', passed: true, stage: 'install', suggestion: '正在安装 Claude Code...' }],
-          checked_at: new Date().toISOString(),
-        });
-        const c = await ds.agentInstallClaude();
-        if (!c?.ok || !c?.claude?.installed) {
-          updateInstallStep('install_claude', { status: 'failed', detail: String(c?.error || 'claude_install_failed') });
-          updateInstallStep('postcheck', { status: 'failed', detail: '安装中断' });
-          setInstallModal((prev) => ({ ...prev, done: true }));
-          setAgentTestResult({
-            agent_id: agentId,
-            ok: false,
-            passed_count: 0,
-            failed_count: 1,
-            checks: [{ name: 'install_claude', passed: false, stage: 'install', error: String(c?.error || 'claude_install_failed') }],
-            checked_at: new Date().toISOString(),
-          });
-          return;
-        }
-        updateInstallStep('install_claude', { status: 'done', detail: 'Claude Code 安装完成' });
-      } else {
-        updateInstallStep('install_claude', { status: 'skipped', detail: '已安装，跳过' });
-      }
-
-      updateInstallStep('postcheck', { status: 'running', detail: '正在复查环境...' });
-      const post = await ds.agentPostcheck();
-      const done = Boolean(post?.node?.installed) && Boolean(post?.claude?.installed);
-      updateInstallStep('postcheck', { status: done ? 'done' : 'failed', detail: done ? '复查通过' : '复查失败，请重试' });
-      setInstallModal((prev) => ({ ...prev, done: true }));
-      setAgentTestResult({
-        agent_id: agentId,
-        ok: done,
-        passed_count: done ? 1 : 0,
-        failed_count: done ? 0 : 1,
-        checks: [{
-          name: 'install_done',
-          passed: done,
-          stage: 'install',
-          suggestion: done ? '安装完成，可点击测试。' : '安装后校验失败，请重试或手动检查环境。',
-          error: done ? undefined : 'postcheck_failed',
-        }],
-        checked_at: new Date().toISOString(),
-      });
+      const pre = await ds.agentPrecheck(normalized.binary);
+      setInstallModal((prev) => ({
+        ...prev,
+        info: normalized,
+        detection: {
+          node: pre?.node ?? { installed: false },
+          npm: pre?.npm ?? { installed: false },
+          agent: pre?.agent ?? { installed: false },
+        },
+        testResult: keepTestResult ? prev.testResult : null,
+        busyAction: '',
+        message: '检测完成。',
+      }));
     } catch (err) {
-      updateInstallStep('postcheck', { status: 'failed', detail: (err as Error).message || 'install_error' });
-      setInstallModal((prev) => ({ ...prev, done: true }));
-      setAgentTestResult({
-        agent_id: agentId,
-        ok: false,
-        passed_count: 0,
-        failed_count: 1,
-        checks: [{ name: 'install_error', passed: false, stage: 'install', error: (err as Error).message }],
-        checked_at: new Date().toISOString(),
-      });
-    } finally {
-      setAgentInstalling(false);
+      setInstallModal((prev) => ({ ...prev, busyAction: '', message: `检测失败: ${(err as Error).message}` }));
     }
   };
 
-  const handleAgentTest = async (scope: 'agent_settings' | 'pipeline_agent' = 'agent_settings') => {
+  const handleAgentInstall = async (scope: 'agent_settings' | 'pipeline_agent' = 'agent_settings') => {
     const agentId = getAgentIdByScope(scope);
-    setAgentTestScope(scope);
-    setAgentTesting(true);
-    setAgentTestResult(null);
+    setInstallModal({
+      open: true,
+      scope,
+      agentId,
+      info: null,
+      detection: null,
+      testResult: null,
+      busyAction: 'detect',
+      message: '正在打开安装检测面板...',
+    });
+    await refreshAgentInstallStatus(agentId, false);
+  };
+
+  const runInstallCommand = async (action: 'install_node' | 'install_agent') => {
+    const ds = window.desktopShell;
+    const info = installModal.info;
+    if (!ds?.runTerminalCommand || !info) {
+      setInstallModal((prev) => ({ ...prev, message: '桌面终端接口不可用。' }));
+      return;
+    }
+    const command = action === 'install_node'
+      ? 'winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements'
+      : info.installCommand;
+    const label = action === 'install_node' ? 'Node.js LTS' : info.displayName;
+    setInstallModal((prev) => ({ ...prev, busyAction: action, message: `正在打开终端执行 ${label} 安装命令...` }));
+    const result = await ds.runTerminalCommand(label, command);
+    setInstallModal((prev) => ({
+      ...prev,
+      busyAction: '',
+      message: result.ok ? '已打开终端。安装完成后点击“刷新”重新检测。' : `无法打开终端: ${result.error || 'unknown_error'}`,
+    }));
+  };
+
+  const handleAgentTest = async () => {
+    const agentId = installModal.agentId;
+    setInstallModal((prev) => ({ ...prev, busyAction: 'test', message: '正在测试当前 Agent...' }));
     try {
       const result = await api.agent.test(agentId);
-      setAgentTestResult(result);
+      setInstallModal((prev) => ({ ...prev, testResult: result, busyAction: '', message: result.ok ? '测试通过。' : '测试发现问题。' }));
     } catch (err) {
-      setAgentTestResult({
+      const result: AgentTestResult = {
         agent_id: agentId,
         ok: false,
         passed_count: 0,
         failed_count: 1,
         checks: [{ name: 'test_error', passed: false, stage: 'system', error: (err as Error).message }],
         checked_at: new Date().toISOString(),
-      });
-    } finally {
-      setAgentTesting(false);
+      };
+      setInstallModal((prev) => ({ ...prev, testResult: result, busyAction: '', message: '测试失败。' }));
     }
   };
 
@@ -597,20 +471,11 @@ export default function SettingsView() {
                   复用知识问答配置
                 </button>
                 <button
-                  disabled={agentInstalling}
                   onClick={() => handleAgentInstall('pipeline_agent')}
                   className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50 border border-outline-variant"
-                  title="打开终端安装当前选中的 Agent CLI"
+                  title="检测、安装并测试当前选中的 Agent CLI"
                 >
-                  {agentInstalling ? '安装中...' : '安装'}
-                </button>
-                <button
-                  disabled={agentTesting}
-                  onClick={() => handleAgentTest('pipeline_agent')}
-                  className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50 border border-outline-variant"
-                  title="测试当前 Agent 是否正确配置"
-                >
-                  {agentTesting ? '测试中...' : '测试'}
+                  安装/检测
                 </button>
                 <button
                   disabled={(sectionState.pipeline_agent ?? EMPTY_STATE).saving}
@@ -664,36 +529,6 @@ export default function SettingsView() {
               );
             })()}
             <div className="text-on-surface-variant text-sm">用于文献导入提取任务的 Agent 配置。</div>
-            {agentTestScope === 'pipeline_agent' && agentTestResult && (
-              <div className={`rounded-lg border p-3 text-sm space-y-2 ${agentTestResult.ok ? 'border-green-300 bg-green-50' : 'border-amber-300 bg-amber-50'}`}>
-                <div className="flex items-center justify-between">
-                  <span className={`font-semibold ${agentTestResult.ok ? 'text-green-700' : 'text-amber-700'}`}>
-                    {agentTestResult.ok ? '验证通过' : '发现问题'} ({agentTestResult.passed_count}/{agentTestResult.passed_count + agentTestResult.failed_count})
-                  </span>
-                  <button
-                    onClick={() => setAgentTestResult(null)}
-                    className="text-xs text-on-surface-variant hover:text-on-surface"
-                  >
-                    关闭
-                  </button>
-                </div>
-                {agentTestResult.checks.map((check, i) => (
-                  <div key={i} className="flex items-start gap-2 text-xs">
-                    <span className="mt-0.5">{check.passed ? '✅' : '❌'}</span>
-                    <div>
-                      <span className="font-medium">{check.name}</span>
-                      {check.version ? <span className="ml-2 text-on-surface-variant">v{check.version}</span> : null}
-                      {check.binary ? <div className="text-on-surface-variant truncate max-w-md">{check.binary}</div> : null}
-                      {check.path ? <div className="text-on-surface-variant truncate max-w-md">{check.path}</div> : null}
-                      {!check.passed && (check.suggestion || check.error) ? (
-                        <div className="text-amber-700 mt-0.5">{check.suggestion || check.error}</div>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-                <div className="text-xs text-on-surface-variant">检查时间: {agentTestResult.checked_at}</div>
-              </div>
-            )}
             {(sectionState.pipeline_agent ?? EMPTY_STATE).message ? <div className="text-sm text-on-surface-variant">{(sectionState.pipeline_agent ?? EMPTY_STATE).message}</div> : null}
           </div>
 
@@ -768,20 +603,11 @@ export default function SettingsView() {
                         复用文献管理配置
                       </button>
                       <button
-                        disabled={agentInstalling}
                         onClick={() => handleAgentInstall('agent_settings')}
                         className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50 border border-outline-variant"
-                        title="打开终端安装当前选中的 Agent CLI"
+                        title="检测、安装并测试当前选中的 Agent CLI"
                       >
-                        {agentInstalling ? '安装中...' : '安装'}
-                      </button>
-                      <button
-                        disabled={agentTesting}
-                        onClick={() => handleAgentTest('agent_settings')}
-                        className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50 border border-outline-variant"
-                        title="测试当前 Agent 是否正确配置"
-                      >
-                        {agentTesting ? '测试中...' : '测试'}
+                        安装/检测
                       </button>
                     </>
                   )}
@@ -836,36 +662,6 @@ export default function SettingsView() {
                 </div>
               )}
 
-              {id === 'agent_settings' && agentTestScope === 'agent_settings' && agentTestResult && (
-                <div className={`rounded-lg border p-3 text-sm space-y-2 ${agentTestResult.ok ? 'border-green-300 bg-green-50' : 'border-amber-300 bg-amber-50'}`}>
-                  <div className="flex items-center justify-between">
-                    <span className={`font-semibold ${agentTestResult.ok ? 'text-green-700' : 'text-amber-700'}`}>
-                      {agentTestResult.ok ? '验证通过' : '发现问题'} ({agentTestResult.passed_count}/{agentTestResult.passed_count + agentTestResult.failed_count})
-                    </span>
-                    <button
-                      onClick={() => setAgentTestResult(null)}
-                      className="text-xs text-on-surface-variant hover:text-on-surface"
-                    >
-                      关闭
-                    </button>
-                  </div>
-                  {agentTestResult.checks.map((check, i) => (
-                    <div key={i} className="flex items-start gap-2 text-xs">
-                      <span className="mt-0.5">{check.passed ? '✅' : '❌'}</span>
-                      <div>
-                        <span className="font-medium">{check.name}</span>
-                        {check.version ? <span className="ml-2 text-on-surface-variant">v{check.version}</span> : null}
-                        {check.binary ? <div className="text-on-surface-variant truncate max-w-md">{check.binary}</div> : null}
-                        {check.path ? <div className="text-on-surface-variant truncate max-w-md">{check.path}</div> : null}
-                        {!check.passed && (check.suggestion || check.error) ? (
-                          <div className="text-amber-700 mt-0.5">{check.suggestion || check.error}</div>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                  <div className="text-xs text-on-surface-variant">检查时间: {agentTestResult.checked_at}</div>
-                </div>
-              )}
               {state.message ? <div className="text-sm text-on-surface-variant">{state.message}</div> : null}
             </div>
           );
@@ -927,35 +723,91 @@ export default function SettingsView() {
           <div className="w-full max-w-2xl bg-surface border border-outline-variant rounded-2xl shadow-xl">
             <div className="px-5 py-4 border-b border-outline-variant flex items-center justify-between">
               <div>
-                <div className="text-sm font-semibold text-on-surface">Agent 安装向导</div>
-                <div className="text-xs text-on-surface-variant">按检查项逐步安装（待办模式）</div>
+                <div className="text-sm font-semibold text-on-surface">Agent 安装与测试</div>
+                <div className="text-xs text-on-surface-variant">
+                  {installModal.info?.displayName || installModal.agentId} · 自动检测 Node.js 与当前 Agent CLI
+                </div>
               </div>
-              <button
-                onClick={() => installModal.done && setInstallModal((prev) => ({ ...prev, open: false }))}
-                disabled={!installModal.done}
-                className="px-3 py-1.5 text-xs rounded border border-outline-variant bg-surface-container-high text-on-surface disabled:opacity-50"
-              >
-                关闭
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => refreshAgentInstallStatus(installModal.agentId)}
+                  disabled={installModal.busyAction !== ''}
+                  className="px-3 py-1.5 text-xs rounded border border-outline-variant bg-surface-container-high text-on-surface disabled:opacity-50"
+                >
+                  刷新
+                </button>
+                <button
+                  onClick={() => setInstallModal((prev) => ({ ...prev, open: false }))}
+                  className="px-3 py-1.5 text-xs rounded border border-outline-variant bg-surface-container-high text-on-surface"
+                >
+                  关闭
+                </button>
+              </div>
             </div>
-            <div className="px-5 py-4 space-y-3">
-              {installModal.steps.map((s) => {
-                const marker = s.status === 'done' ? '✅' : s.status === 'failed' ? '❌' : s.status === 'running' ? '⏳' : s.status === 'skipped' ? '⏭️' : '•';
-                const color = s.status === 'done'
-                  ? 'text-green-700'
-                  : s.status === 'failed'
-                    ? 'text-red-700'
-                    : s.status === 'running'
-                      ? 'text-blue-700'
-                      : 'text-on-surface-variant';
-                return (
-                  <div key={s.key} className="rounded-lg border border-outline-variant bg-surface-container-low p-3">
-                    <div className={`font-medium text-sm ${color}`}>{marker} {s.title}</div>
-                    <div className="text-xs text-on-surface-variant mt-1">{s.detail || '等待执行...'}</div>
+            {(() => {
+              const rows = buildAgentInstallRows({
+                agent: installModal.info ?? { displayName: installModal.agentId, binary: '', installCommand: '' },
+                detection: installModal.detection,
+                testResult: installModal.testResult as AgentInstallTestResult,
+                busyAction: installModal.busyAction,
+              });
+              const renderStatus = (status: string) => {
+                if (status === 'installed') return <span className="text-green-700 font-bold">✓</span>;
+                if (status === 'missing' || status === 'failed' || status === 'unsupported') return <span className="text-red-700 font-bold">×</span>;
+                if (status === 'running') return <span className="text-blue-700 font-bold">...</span>;
+                return <span className="text-on-surface-variant font-bold">?</span>;
+              };
+              return (
+                <div className="px-5 py-4 space-y-3">
+                  <div className="rounded-lg border border-outline-variant bg-surface-container-low p-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-medium text-sm text-on-surface flex items-center gap-2">{renderStatus(rows.node.status)} Node.js / npm</div>
+                      <div className="text-xs text-on-surface-variant mt-1 truncate">{rows.node.detail}</div>
+                      <div className="text-[11px] text-on-surface-variant mt-1 font-mono truncate">{rows.node.installCommand}</div>
+                    </div>
+                    <button
+                      onClick={() => runInstallCommand('install_node')}
+                      disabled={!rows.node.canInstall || installModal.busyAction !== ''}
+                      className="px-3 py-1.5 text-xs rounded bg-secondary text-on-secondary disabled:opacity-50 whitespace-nowrap"
+                    >
+                      安装
+                    </button>
                   </div>
-                );
-              })}
-            </div>
+                  <div className="rounded-lg border border-outline-variant bg-surface-container-low p-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-medium text-sm text-on-surface flex items-center gap-2">
+                        {renderStatus(rows.agent.status)} {installModal.info?.displayName || 'Agent CLI'}
+                      </div>
+                      <div className="text-xs text-on-surface-variant mt-1 truncate">{rows.agent.detail}</div>
+                      <div className="text-[11px] text-on-surface-variant mt-1 font-mono truncate">{rows.agent.installCommand || rows.agent.disabledReason}</div>
+                    </div>
+                    <button
+                      onClick={() => runInstallCommand('install_agent')}
+                      disabled={!rows.agent.canInstall || installModal.busyAction !== ''}
+                      title={rows.agent.disabledReason}
+                      className="px-3 py-1.5 text-xs rounded bg-secondary text-on-secondary disabled:opacity-50 whitespace-nowrap"
+                    >
+                      安装
+                    </button>
+                  </div>
+                  <div className="rounded-lg border border-outline-variant bg-surface-container-low p-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-medium text-sm text-on-surface flex items-center gap-2">{renderStatus(rows.test.status)} Agent 测试</div>
+                      <div className="text-xs text-on-surface-variant mt-1 truncate">{rows.test.detail}</div>
+                      {installModal.testResult?.checked_at ? <div className="text-[11px] text-on-surface-variant mt-1">检查时间: {installModal.testResult.checked_at}</div> : null}
+                    </div>
+                    <button
+                      onClick={handleAgentTest}
+                      disabled={!rows.test.canRun || installModal.busyAction !== ''}
+                      className="px-3 py-1.5 text-xs rounded bg-secondary text-on-secondary disabled:opacity-50 whitespace-nowrap"
+                    >
+                      测试
+                    </button>
+                  </div>
+                  {installModal.message ? <div className="text-xs text-on-surface-variant">{installModal.message}</div> : null}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

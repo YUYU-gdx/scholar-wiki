@@ -15,6 +15,13 @@ interface DesktopShell {
   watchFile(filePath: string): Promise<{ ok: boolean; error?: string }>;
   unwatchFile(filePath: string): Promise<{ ok: boolean }>;
   onFileChanged(callback: (payload: { path: string; event: string }) => void): () => void;
+  agentPrecheck(binary: string): Promise<{
+    ok: boolean;
+    node: { installed: boolean; path: string; version: string };
+    npm: { installed: boolean; path: string; version: string };
+    agent: { installed: boolean; path: string; version: string };
+  }>;
+  runTerminalCommand(label: string, command: string): Promise<{ ok: boolean; error?: string }>;
 }
 
 declare global {

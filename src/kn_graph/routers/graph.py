@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, Query
 from fastapi.responses import JSONResponse, Response
 
 from kn_graph.services.graph_service import GraphService
+from kn_graph.services.workspace_paths import resolve_library_workspace
 from kn_graph.services.variable_concept_index import VariableConceptIndexService
 
 
@@ -73,7 +74,10 @@ def _resolve_node_id_by_variable_name(
 
 
 def _library_workspace_path(graph_service: GraphService, library_id: str) -> Path:
-    return (graph_service._settings.workspaces_dir / library_id).resolve()
+    path = resolve_library_workspace(library_id, graph_service._settings.workspaces_dir, must_exist=False)
+    if path is None:
+        raise ValueError("library_id_invalid")
+    return path
 
 
 def _collect_neighbor_variables(

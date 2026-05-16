@@ -18,6 +18,7 @@ from kn_graph.models.literature import (
 )
 from kn_graph.services.literature_service import LiteratureService
 from kn_graph.services.pipeline_runtime import dispatch_inline
+from kn_graph.services.workspace_paths import resolve_library_workspace
 from kn_graph.services.zotero_scanner import _find_data_dir, get_zotero_items_batch, scan_zotero
 
 
@@ -147,9 +148,15 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
                 return JSONResponse(status_code=500, content={"error": "pipeline_service_unavailable"})
 
             # Resolve workspace path
-            workspaces_dir = Path(literature_service._settings.workspaces_dir)
-            workspace_path = workspaces_dir / library_id
-            if not workspace_path.is_dir():
+            try:
+                workspace_path = resolve_library_workspace(
+                    library_id,
+                    Path(literature_service._settings.workspaces_dir),
+                    must_exist=True,
+                )
+            except ValueError:
+                return JSONResponse(status_code=400, content={"error": "library_id_invalid", "library_id": library_id})
+            if workspace_path is None or not workspace_path.is_dir():
                 return JSONResponse(status_code=400, content={"error": "workspace_not_found", "library_id": library_id})
 
             # Resolve runs root from settings

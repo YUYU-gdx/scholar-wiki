@@ -19,6 +19,7 @@ import requests
 
 from kn_graph.providers.zhipu import ZhipuChatCompletionsClient
 from kn_graph.services.mineru_runner import parse_single_pdf
+from kn_graph.services.workspace_paths import resolve_library_workspace, validate_library_id
 
 
 _SENTENCE_END_RE = re.compile(r"[^。！？!?\.]+[。！？!?\.]?")
@@ -680,8 +681,11 @@ class LiteratureService:
         cached = self._workspace_root_cache.get(lib)
         if cached is not None:
             return cached
-        root = self._settings.workspaces_dir / lib
-        if not root.exists() or not root.is_dir():
+        try:
+            root = resolve_library_workspace(lib, self._settings.workspaces_dir, must_exist=True)
+        except ValueError:
+            return None
+        if root is None:
             return None
         path = Path(root).resolve()
         self._workspace_root_cache[lib] = path
@@ -1074,12 +1078,13 @@ class LiteratureService:
 
     def create_library(self, library_id: str, workspace_root: str = "", set_default: bool = True) -> dict[str, Any]:
         lib = str(library_id or "").strip()
-        if not lib:
-            raise ValueError("library_id_required")
+        lib = validate_library_id(lib)
         if str(workspace_root or "").strip():
             ws = Path(workspace_root).resolve()
         else:
-            ws = (Path(self._settings.workspaces_dir).resolve() / lib).resolve()
+            ws = resolve_library_workspace(lib, self._settings.workspaces_dir, create=True, must_exist=True)
+            if ws is None:
+                raise ValueError("library_workspace_invalid")
         ws.mkdir(parents=True, exist_ok=True)
 
         index_path = (Path(self._settings.indexes_dir).resolve() / f"{lib}.json").resolve()
@@ -1102,9 +1107,10 @@ class LiteratureService:
 
     def delete_library(self, library_id: str, delete_workspace_data: bool = True) -> dict[str, Any]:
         lib = str(library_id or "").strip()
-        if not lib:
-            raise ValueError("library_id_required")
-        ws = (Path(self._settings.workspaces_dir).resolve() / lib).resolve()
+        lib = validate_library_id(lib)
+        ws = resolve_library_workspace(lib, self._settings.workspaces_dir, must_exist=False)
+        if ws is None:
+            raise ValueError("library_workspace_invalid")
         index_path = (Path(self._settings.indexes_dir).resolve() / f"{lib}.json").resolve()
 
         deleted_workspace = False

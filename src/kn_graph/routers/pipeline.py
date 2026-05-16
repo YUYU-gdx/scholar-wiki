@@ -14,15 +14,17 @@ from sse_starlette.sse import EventSourceResponse
 
 from kn_graph.services.pipeline_service import PipelineService
 from kn_graph.services import pipeline_runtime
+from kn_graph.services.workspace_paths import resolve_library_workspace
 
 _ALLOWED_UPLOAD_EXTS = {".pdf", ".docx", ".md", ".html"}
 
 
 def _resolve_library_workspace(library_id: str, workspaces_dir: Path) -> Path:
-    target = (Path(workspaces_dir).resolve() / str(library_id or "").strip()).resolve()
+    target = resolve_library_workspace(library_id, workspaces_dir, create=True, must_exist=True)
+    if target is None:
+        raise RuntimeError(f"library_workspace_invalid:{library_id}")
     # Auto-create workspace directory for existing library ids to avoid
     # import hard-fail after reinstall/path migration.
-    target.mkdir(parents=True, exist_ok=True)
     if not target.is_dir():
         raise RuntimeError(f"library_workspace_invalid:{library_id}")
     return target
