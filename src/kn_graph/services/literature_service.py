@@ -172,8 +172,28 @@ def _safe_windows_filename(raw: str, fallback: str = "document", max_length: int
     if len(text) <= max_length:
         return text
     digest = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    if max_length <= len(digest) + 1:
+        return digest[: max(1, max_length)]
     keep = max(1, max_length - len(digest) - 1)
     return f"{text[:keep].rstrip('. ')}_{digest}"
+
+
+def _safe_windows_filename_for_dir(
+    raw: str,
+    parent: Path,
+    *,
+    suffix: str,
+    fallback: str = "document",
+    max_length: int = 120,
+    max_path_length: int = 240,
+) -> str:
+    suffix_text = str(suffix or "")
+    parent_len = len(str(parent.resolve()))
+    separator_len = 1
+    safety_margin = 8
+    remaining = max_path_length - parent_len - separator_len - len(suffix_text) - safety_margin
+    bounded = min(max_length, max(1, remaining))
+    return _safe_windows_filename(raw, fallback=fallback, max_length=bounded) + suffix_text
 
 
 def _dedupe_path(path: Path) -> Path:
@@ -851,11 +871,13 @@ class LiteratureService:
 
             chosen_text = chosen_md.read_text(encoding="utf-8", errors="ignore")
             chosen_h1 = _extract_first_md_h1(chosen_text)
-            new_name = _safe_windows_filename(
+            new_name = _safe_windows_filename_for_dir(
                 chosen_h1 or title_candidate or chosen_md.stem,
+                mineru_latest_dir,
+                suffix=".md",
                 fallback=chosen_md.stem,
                 max_length=96,
-            ) + ".md"
+            )
             target_md = _dedupe_path(mineru_latest_dir / new_name)
             if chosen_md.resolve() != target_md.resolve():
                 chosen_md.rename(target_md)

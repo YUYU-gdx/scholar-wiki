@@ -428,6 +428,51 @@ class LiteratureServiceTest(unittest.TestCase):
             self.assertTrue(main_md.exists())
             self.assertEqual(main_md.name, "My Great Paper.md")
 
+    def test_mineru_result_filename_is_shortened_for_deep_windows_paths(self) -> None:
+        fake_chroma = _FakeChromaDBClient()
+        service = LiteratureService(
+            settings=_FakeSettings(),
+            embedding_client=_FakeEmbeddingClient(),
+            generator_client=_FakeGenerator(),
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            deep_root = tmp / ("workspace_root_" + ("x" * 55)) / ("nested_" + ("y" * 55))
+            workspaces = deep_root / "workspaces"
+            (workspaces / "lib_pdf").mkdir(parents=True, exist_ok=True)
+            service._settings.workspaces_dir = workspaces  # type: ignore[assignment]
+
+            pdf_path = tmp / "a.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4 test")
+            preparsed_dir = tmp / "preparsed"
+            preparsed_dir.mkdir(parents=True, exist_ok=True)
+            long_title = "Service Robots Rising " + ("How Humanoid Robots Influence Service Experiences " * 4)
+            preparsed_md = preparsed_dir / "full.md"
+            preparsed_md.write_text(f"# {long_title}\n\nBody", encoding="utf-8")
+
+            manifest_path = tmp / "manifest.jsonl"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "paper_id": "paper_pdf",
+                        "title": "Fallback",
+                        "source_path": str(pdf_path),
+                        "preparsed_mineru_dir": str(preparsed_dir),
+                        "preparsed_main_md_path": str(preparsed_md),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with patch.object(service, "_get_chroma", return_value=fake_chroma):
+                result = service.import_manifest(manifest_path, options={"library_id": "lib_pdf"})
+            mat = result["materialized_papers"][0]
+            main_md = Path(str(mat["mineru_main_md_path"]))
+            self.assertTrue(main_md.exists())
+            self.assertLessEqual(len(str(main_md)), 240)
+            self.assertTrue(main_md.name.endswith(".md"))
+
     def test_chromadb_client_persist_and_search(self) -> None:
         """Verify that ChromaDBClient persists data and supports keyword + vector search."""
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
