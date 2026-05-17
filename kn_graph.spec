@@ -3,13 +3,30 @@
 from pathlib import Path
 
 _PROJECT_ROOT = Path(SPECPATH).resolve()
+_FRONTEND_DIST = _PROJECT_ROOT / 'scholarai-workbench' / 'dist'
+
+
+def _frontend_datas() -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    if not _FRONTEND_DIST.exists():
+        return out
+    for path in _FRONTEND_DIST.rglob('*'):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(_FRONTEND_DIST)
+        # npm run dist writes the PyInstaller output to scholarai-workbench/dist.
+        # Do not pack a previous kn_graph.exe back into the frontend assets.
+        if rel.as_posix().lower() == 'kn_graph.exe':
+            continue
+        out.append((str(path), str(Path('frontend') / rel.parent)))
+    return out
 
 a = Analysis(
     ['src/kn_graph/__main__.py'],
     pathex=[str(_PROJECT_ROOT / 'src')],
     binaries=[],
     datas=[
-        (str(_PROJECT_ROOT / 'scholarai-workbench' / 'dist'), 'frontend'),
+        *_frontend_datas(),
         (str(_PROJECT_ROOT / 'prompt'), 'prompt'),
         (str(_PROJECT_ROOT / 'config'), 'config'),
         (str(_PROJECT_ROOT / 'skills'), 'skills'),

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from kn_graph.services.variable_concept_index import VariableConceptIndexService
@@ -41,6 +42,23 @@ def _api_get_json(base_url: str, path: str) -> dict[str, Any]:
         raw = resp.read().decode("utf-8", errors="ignore")
     data = json.loads(raw) if raw else {}
     return data if isinstance(data, dict) else {}
+
+
+def _api_get_json_or_error(base_url: str, path: str) -> tuple[dict[str, Any], str]:
+    try:
+        return _api_get_json(base_url, path), ""
+    except HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="ignore")
+        except Exception:
+            detail = ""
+        try:
+            payload = json.loads(detail) if detail else {}
+        except Exception:
+            payload = {}
+        code = str(payload.get("error", "") or f"http_{exc.code}") if isinstance(payload, dict) else f"http_{exc.code}"
+        return {}, code
 
 
 def _clip(s: str, n: int) -> str:
@@ -239,7 +257,11 @@ def _build_tools() -> list[dict[str, Any]]:
         },
         {
             "name": "graph_variable_neighbors",
-            "description": "Find variable neighborhood (upstream/downstream) by exact or semantic concept recall.",
+            "description": (
+                "Find upstream/downstream neighbors for real KG variable nodes only. "
+                "Semantic mode first recalls concept candidates, then filters to candidates with an actual KG node; "
+                "definition-only concept matches return variable_not_found."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -254,7 +276,10 @@ def _build_tools() -> list[dict[str, Any]]:
         },
         {
             "name": "graph_variable_concept_search",
-            "description": "Search variables by concept and return matched variables with aliases and papers.",
+            "description": (
+                "Search variable concept candidates. Results may be definition-only; check in_kg and kg_node_id "
+                "before using graph_variable_neighbors."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -370,47 +395,109 @@ def _lookup_variable_candidates(
     return candidates[:top_k]
 
 
+def _resolve_exact_kg_variable(
+    base_url: str,
+    alias_candidates: list[str],
+    library_id: str,
+    top_k: int,
+) -> dict[str, Any]:
+    for alias in alias_candidates:
+        exact = _lookup_variable_candidates(base_url, alias, "exact", 0.0, 1.0, top_k, [library_id])
+        if exact:
+            return exact[0]
+    return {}
+
+
 def _lookup_variable_concept_candidates(
     base_url: str,
     variable_name: str,
     top_k: int,
     library_ids: list[str],
 ) -> list[dict[str, Any]]:
-    q_tokens = set(_tokenize(variable_name))
-    q_emb = _hash_embedding(variable_name)
+    try:
+        ws_map = _library_workspace_map(base_url)
+    except Exception:
+        ws_map = {}
     out: list[dict[str, Any]] = []
     for lid in library_ids:
-        payload = _api_get_json(base_url, f"/graph/full?library_id={quote(lid)}")
-        paper_map = payload.get("paper_map", []) if isinstance(payload, dict) else []
-        if not isinstance(paper_map, list):
+        workspace_path = str(ws_map.get(lid, "") or "").strip()
+        if not workspace_path:
             continue
-        for paper in paper_map:
-            if not isinstance(paper, dict):
+        service = VariableConceptIndexService(workspace_path=workspace_path)
+        hits = service.query(library_id=lid, query=variable_name, top_k=top_k)
+        canonical_ids = list(
+            dict.fromkeys(str(h.get("canonical_var_id", "") or "").strip() for h in hits if isinstance(h, dict))
+        )
+        canonical_ids = [x for x in canonical_ids if x]
+        db_path = str((Path(workspace_path).resolve() / "kn_gragh.db"))
+        alias_map = service.expand_aliases(db_path=db_path, canonical_var_ids=canonical_ids) if canonical_ids else {}
+        for hit in hits:
+            if not isinstance(hit, dict):
                 continue
-            defs = paper.get("variable_definitions", [])
-            if not isinstance(defs, list):
+            vname = str(hit.get("variable_name", "") or "").strip()
+            if not vname:
                 continue
-            for d in defs:
-                if not isinstance(d, dict):
-                    continue
-                vname = str(d.get("variable_name", "") or "").strip()
-                concept = str(d.get("definition", "") or "").strip()
-                if not vname or not concept:
-                    continue
-                tokens = set(_tokenize(concept))
-                kscore = (len(tokens.intersection(q_tokens)) / max(1, len(q_tokens))) if q_tokens else 0.0
-                vscore = (_dot(q_emb, _hash_embedding(concept)) + 1.0) / 2.0
-                score = 0.4 * kscore + 0.6 * vscore
-                if score <= 0:
-                    continue
-                vid = f"var::{vname}"
+            cid = str(hit.get("canonical_var_id", "") or "").strip()
+            alias_candidates = [vname, *[str(a) for a in alias_map.get(cid, []) if str(a).strip()]]
+            alias_candidates = list(dict.fromkeys([x.strip() for x in alias_candidates if x.strip()]))
+            resolved = _resolve_exact_kg_variable(base_url, alias_candidates, lid, top_k)
+            if not resolved:
+                continue
+            out.append(
+                {
+                    "variable_id": str(resolved.get("variable_id", "") or ""),
+                    "variable_name": str(resolved.get("variable_name", "") or vname),
+                    "library_id": str(hit.get("library_id", "") or lid),
+                    "score": float(hit.get("score", 0.0) or 0.0),
+                    "concept_text": str(hit.get("concept_text", "") or ""),
+                }
+            )
+    out.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
+    return out[:top_k]
+
+
+def _lookup_variable_alias_exact_candidates(
+    base_url: str,
+    variable_name: str,
+    top_k: int,
+    library_ids: list[str],
+) -> list[dict[str, Any]]:
+    needle = _norm(variable_name)
+    try:
+        ws_map = _library_workspace_map(base_url)
+    except Exception:
+        ws_map = {}
+    out: list[dict[str, Any]] = []
+    for lid in library_ids:
+        workspace_path = str(ws_map.get(lid, "") or "").strip()
+        if not workspace_path:
+            continue
+        service = VariableConceptIndexService(workspace_path=workspace_path)
+        hits = service.query(library_id=lid, query=variable_name, top_k=max(top_k, 20))
+        canonical_ids = list(
+            dict.fromkeys(str(h.get("canonical_var_id", "") or "").strip() for h in hits if isinstance(h, dict))
+        )
+        canonical_ids = [x for x in canonical_ids if x]
+        db_path = str((Path(workspace_path).resolve() / "kn_gragh.db"))
+        alias_map = service.expand_aliases(db_path=db_path, canonical_var_ids=canonical_ids) if canonical_ids else {}
+        for hit in hits:
+            if not isinstance(hit, dict):
+                continue
+            vname = str(hit.get("variable_name", "") or "").strip()
+            cid = str(hit.get("canonical_var_id", "") or "").strip()
+            alias_candidates = [vname, *[str(a) for a in alias_map.get(cid, []) if str(a).strip()]]
+            alias_candidates = list(dict.fromkeys([x.strip() for x in alias_candidates if x.strip()]))
+            if not any(_norm(alias) == needle for alias in alias_candidates):
+                continue
+            resolved = _resolve_exact_kg_variable(base_url, alias_candidates, lid, top_k)
+            if resolved:
                 out.append(
                     {
-                        "variable_id": vid,
-                        "variable_name": vname,
-                        "library_id": lid,
-                        "score": score,
-                        "concept_text": concept,
+                        "variable_id": str(resolved.get("variable_id", "") or ""),
+                        "variable_name": str(resolved.get("variable_name", "") or vname),
+                        "library_id": str(resolved.get("library_id", "") or lid),
+                        "score": float(resolved.get("score", 1.0) or 1.0),
+                        "concept_text": str(hit.get("concept_text", "") or ""),
                     }
                 )
     out.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
@@ -497,6 +584,8 @@ def _handle_graph_variable_neighbors(base_url: str, arguments: dict[str, Any]) -
     try:
         if mode == "exact":
             candidates = _lookup_variable_candidates(base_url, variable_name, mode, vw, kw, top_k, library_ids)
+            if not candidates:
+                candidates = _lookup_variable_alias_exact_candidates(base_url, variable_name, top_k, library_ids)
         else:
             candidates = _lookup_variable_concept_candidates(base_url, variable_name, top_k, library_ids)
     except Exception as exc:
@@ -504,16 +593,29 @@ def _handle_graph_variable_neighbors(base_url: str, arguments: dict[str, Any]) -
     if not candidates:
         return _error("variable_not_found", f"no variable matched '{variable_name}'")
 
-    current = candidates[0]
+    current: dict[str, Any] = {}
+    neigh: dict[str, Any] = {}
+    skipped: list[str] = []
+    for candidate in candidates:
+        candidate_id = str(candidate.get("variable_id", "") or "")
+        candidate_lib = str(candidate.get("library_id", "") or "")
+        payload, err = _api_get_json_or_error(
+            base_url,
+            f"/graph/neighborhood?node_id={quote(candidate_id)}&hops=1&limit_nodes=120&limit_edges=240&library_id={quote(candidate_lib)}",
+        )
+        if not err:
+            current = candidate
+            neigh = payload
+            break
+        if err == "node_not_found":
+            skipped.append(candidate_id)
+            continue
+        return _error("graph_not_built", "failed to query graph neighborhood", err)
+    if not current:
+        detail = "; skipped missing KG nodes: " + ", ".join(skipped[:8]) if skipped else ""
+        return _error("variable_not_found", f"no KG variable node matched '{variable_name}'{detail}")
     current_id = str(current.get("variable_id", "") or "")
     current_lib = str(current.get("library_id", "") or "")
-    try:
-        neigh = _api_get_json(
-            base_url,
-            f"/graph/neighborhood?node_id={quote(current_id)}&hops=1&limit_nodes=120&limit_edges=240&library_id={quote(current_lib)}",
-        )
-    except Exception as exc:
-        return _error("graph_not_built", "failed to query graph neighborhood", str(exc))
     nodes = neigh.get("nodes", []) if isinstance(neigh, dict) else []
     edges = neigh.get("edges", []) if isinstance(neigh, dict) else []
     if not isinstance(nodes, list):
@@ -671,12 +773,14 @@ def _handle_graph_variable_concept_search(base_url: str, arguments: dict[str, An
         for hit in hits:
             if not isinstance(hit, dict):
                 continue
+            variable_name = str(hit.get("variable_name", "") or "")
             cid = str(hit.get("canonical_var_id", "") or "").strip()
             pid = str(hit.get("paper_id", "") or "").strip()
-            variable_name = str(hit.get("variable_name", "") or "")
             aliases = alias_map.get(cid, []) if cid else []
             alias_candidates = [variable_name, *[str(a) for a in aliases if str(a).strip()]]
             alias_candidates = list(dict.fromkeys([x.strip() for x in alias_candidates if x.strip()]))
+            kg_node = _resolve_exact_kg_variable(base_url, alias_candidates, lid, top_k=max(top_k, 20))
+            kg_node_id = str(kg_node.get("variable_id", "") or "")
 
             merged_cause: list[dict[str, Any]] = []
             merged_effect: list[dict[str, Any]] = []
@@ -727,6 +831,8 @@ def _handle_graph_variable_concept_search(base_url: str, arguments: dict[str, An
                     "paper_id": pid,
                     "variable_name": variable_name,
                     "canonical_var_id": cid,
+                    "kg_node_id": kg_node_id,
+                    "in_kg": bool(kg_node_id),
                     "aliases": aliases,
                     "concept_text": str(hit.get("concept_text", "") or ""),
                     "cause_variables": merged_cause,

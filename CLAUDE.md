@@ -3,7 +3,7 @@
 ## Tool Boundaries And Priority
 - Allowed MCP tools: `rag_search`, `graph_variable_neighbors`.
 - Use `rag_search` as primary evidence retrieval.
-- Use `graph_variable_neighbors` for variable-level alignment/neighbor checks only.
+- Use `graph_variable_neighbors` for real KG variable nodes only; concept-only variables may not have neighbors.
 - For mechanism/context/conflict judgments, verify with paragraph evidence from `rag_search`.
 - If results are truncated or empty, rewrite query and retry before concluding.
 

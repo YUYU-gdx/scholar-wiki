@@ -46,9 +46,11 @@
 ### 1.2 graph_variable_neighbors
 用途：
 - 查变量邻域关系（上游/下游），用于变量对齐、机制辅助判断。
+- 只对真实 KG 节点有效；`graph_variable_concept_search` 返回的 `in_kg=false` 候选没有图谱邻居。
 
 什么时候用：
 - 当问题涉及“变量关系、因果方向、邻近变量”时使用。
+- 仅在已知变量为 KG 节点时使用；优先使用 `graph_variable_concept_search` 检查 `in_kg` / `kg_node_id`。
 - 不能替代段落证据；必须与 `rag_search` 联合使用。
 
 输入参数：
@@ -78,7 +80,8 @@
 
 ### 1.3 graph_variable_concept_search
 用途：
-- 按“概念文本”检索变量，返回变量、别名、论文以及因果邻域。
+- 按“概念文本”检索变量候选，返回变量、别名、论文以及可用的因果邻域。
+- 结果可能是 definition-only 候选，不保证存在 KG 节点；必须检查 `in_kg` 与 `kg_node_id`。
 
 什么时候用：
 - 当用户给的是概念描述，而不是明确变量名。
@@ -94,6 +97,8 @@
 - `matched_variables[]`：匹配变量，每项包含：
   - `id`、`score`、`library_id`、`paper_id`。
   - `variable_name`、`canonical_var_id`。
+  - `kg_node_id`：真实 KG 节点 ID；为空表示没有对齐到 KG 节点。
+  - `in_kg`：是否为真实 KG 节点；只有 `true` 才适合继续调用 `graph_variable_neighbors`。
   - `aliases[]`：别名列表。
   - `concept_text`：概念文本。
   - `cause_variables[]`：上游变量集合。
@@ -108,10 +113,12 @@
 
 - 证据优先顺序：`rag_search` > 图谱邻域工具。
 - 图谱工具用于“变量定位/关系辅助”，不作为唯一证据来源。
+- `graph_variable_concept_search` 的 `in_kg=false` 只表示概念候选，不表示有图谱邻居。
+- 只对 `in_kg=true` 或已知 `kg_node_id` 的变量调用 `graph_variable_neighbors`。
 - 如 `truncated=true`，回答中必须说明“结果被截断”。
 - 常见错误处理：
   - `no_hits`：改写 query（加上下文定义、方法、场景词）后重试。
-  - `variable_not_found`：先用 `graph_variable_concept_search` 再回到 neighbors。
+  - `variable_not_found`：先用 `graph_variable_concept_search` 检查候选；若候选 `in_kg=false`，不要再强行调用 neighbors。
   - `library_not_found` / `workspace_path_missing`：先确认当前 workspace 绑定库。
   - `backend_timeout`：缩短 query、降低 top_k、分步检索。
 
@@ -224,7 +231,8 @@
 
 - 概念映射：
   1. `graph_variable_concept_search` 找候选。
-  2. 再用 `rag_search` 逐条验证语义一致性。
+  2. 检查 `in_kg` / `kg_node_id`；只有 `in_kg=true` 才补 `graph_variable_neighbors`。
+  3. 再用 `rag_search` 逐条验证语义一致性。
 
 ---
 
