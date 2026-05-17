@@ -41,5 +41,24 @@ class ChatServiceAgentTestMessages(unittest.TestCase):
             self.assertIn("claude-agent-sdk 未安装，请运行 pip install claude-agent-sdk", str(claude_sdk_check.get("suggestion", "")))
 
 
+    @patch("shutil.which", return_value=None)
+    def test_agent_test_mcp_config_probe_can_merge_environment(self, _which_mock) -> None:
+        with TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir) / "data"
+            workspaces_dir = data_dir / "libraries" / "workspaces"
+            workspaces_dir.mkdir(parents=True, exist_ok=True)
+            (workspaces_dir / ".mcp.json").write_text(
+                '{"mcpServers":{"kn_graph":{"command":"definitely-not-a-real-command","args":[],"env":{"KN_TEST":"1"}}}}',
+                encoding="utf-8",
+            )
+            settings = Settings(data_dir=data_dir)
+            service = ChatService(settings)
+
+            payload = service.test_agent("codex")
+
+        mcp_check = _find_check(payload, "workspace_mcp_json")
+        self.assertNotIn("name 'os' is not defined", str(mcp_check.get("error", "")))
+
+
 if __name__ == "__main__":
     unittest.main()

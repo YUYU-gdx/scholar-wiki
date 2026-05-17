@@ -14,10 +14,11 @@ interface ViewerHostProps {
   libraryId: string;
   preferredType?: 'pdf' | 'markdown' | 'html' | null;
   rawPaperId?: string;
+  directPath?: string;
   onDocumentMeta?: (meta: { absolutePath: string; fileName: string; type: 'pdf' | 'markdown' | 'html' | 'none' }) => void;
 }
 
-export default function ViewerHost({ paperId, libraryId, preferredType, rawPaperId, onDocumentMeta }: ViewerHostProps) {
+export default function ViewerHost({ paperId, libraryId, preferredType, rawPaperId, directPath, onDocumentMeta }: ViewerHostProps) {
   const [document, setDocument] = useState<ResolvedDocument | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +36,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
     setLoading(true);
     setError(null);
 
-    resolveAndLoadDocument(paperId, libraryId, rawPaperId, preferredType)
+    resolveAndLoadDocument(paperId, libraryId, rawPaperId, preferredType, directPath)
       .then((doc) => {
         if (cancelled) return;
         setDocument(doc);
@@ -53,7 +54,7 @@ export default function ViewerHost({ paperId, libraryId, preferredType, rawPaper
       });
 
     return () => { cancelled = true; };
-  }, [paperId, libraryId, preferredType, rawPaperId, onDocumentMeta]);
+  }, [paperId, libraryId, preferredType, rawPaperId, directPath, onDocumentMeta]);
 
   if (loading) {
     return (

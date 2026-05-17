@@ -175,7 +175,9 @@ description: 五步工作流提取论文实体并结构化输出：信息抽取 
 
 ```markdown
 > [!NOTE] Reader Note
+>
 > Note ID: <唯一ID>
+>
 > Quote:
 > <引用原文或证据句>
 >

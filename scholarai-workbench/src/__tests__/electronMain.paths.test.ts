@@ -29,4 +29,14 @@ describe('Electron production data paths', () => {
 
     expect(source).not.toContain('backgroundMaterial: "mica"');
   });
+
+  it('bundles the packaged backend only as an extra resource', () => {
+    const pkg = JSON.parse(readFileSync(resolve(__dirname, '../../package.json'), 'utf8'));
+
+    expect(pkg.build.extraResources).toContainEqual({
+      from: '../dist_exe/kn_graph.exe',
+      to: '.',
+    });
+    expect(pkg.build.files).toContain('!dist/kn_graph.exe');
+  });
 });

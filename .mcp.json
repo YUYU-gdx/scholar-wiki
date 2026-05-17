@@ -1,11 +1,14 @@
 {
   "mcpServers": {
     "kn_graph_tools": {
-      "command": "uv",
+      "command": "D:\\python\\Scripts\\uv.EXE",
       "args": [
         "run",
+        "--project",
+        "D:\\Code\\kn_gragh",
         "python",
-        "D:\\Code\\kn_gragh\\scripts\\smj_pipeline\\kn_mcp_server.py"
+        "-m",
+        "kn_graph.services.kn_mcp_server"
       ],
       "env": {}
     }

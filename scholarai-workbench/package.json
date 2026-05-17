@@ -32,7 +32,8 @@
         "files": [
             "electron/main.cjs",
             "electron/preload.cjs",
-            "dist/**/*"
+            "dist/**/*",
+            "!dist/kn_graph.exe"
         ],
         "extraResources": [
             {

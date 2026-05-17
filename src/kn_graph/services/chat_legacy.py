@@ -38,6 +38,7 @@ def _clip(raw: object, limit: int) -> str:
 
 from kn_graph.services.agent_runner import AgentRunnerFactory  # noqa: E402
 from kn_graph.services import codex_library_config as _codex_lib_cfg  # noqa: E402
+from kn_graph.services import mcp_launch as _mcp_launch  # noqa: E402
 
 
 
@@ -154,6 +155,8 @@ class ChatService:
                 self._library_codex_config_resolver = None
         self._agent_backend = str(agent_backend or os.getenv("CHAT_AGENT_BACKEND", "codex")).strip().lower() or "codex"
         self.__runner_factory: AgentRunnerFactory | None = None
+        self._session_alias_lock = threading.Lock()
+        self._session_aliases: dict[str, str] = {}
 
     @property
     def _runner_factory(self) -> AgentRunnerFactory:
@@ -239,6 +242,21 @@ class ChatService:
             "source": backend,
         }
 
+    def _resolve_session_alias(self, session_id: str) -> str:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return ""
+        with self._session_alias_lock:
+            return str(self._session_aliases.get(sid, sid) or sid)
+
+    def _remember_session_alias(self, requested_session_id: str, resolved_session_id: str) -> None:
+        requested = str(requested_session_id or "").strip()
+        resolved = str(resolved_session_id or "").strip()
+        if not requested or not resolved or requested == resolved:
+            return
+        with self._session_alias_lock:
+            self._session_aliases[requested] = resolved
+
     def list_sessions(self, library_id: str = "") -> list[dict[str, Any]]:
         """List sessions from the agent.  Codex threads are filtered to
         exclude archived ones (soft-delete); Claude Code has no archive
@@ -312,7 +330,7 @@ class ChatService:
         backend = self._agent_backend
         workdir = self._agent_workspace_dir()
         runner = self._runner_factory.build(backend)
-        result = runner.thread_read(thread_id=str(session_id), workdir=workdir)
+        result = runner.thread_read(thread_id=self._resolve_session_alias(session_id), workdir=workdir)
         thread = result.get("thread", {}) if isinstance(result, dict) else {}
         tid = str(thread.get("id", "") or session_id)
         session = {
@@ -479,6 +497,16 @@ class ChatService:
                     runtime_overrides["codex_home"] = str(lib_cfg.get("codex_home", "") or "").strip()
                 runtime_overrides["mcp_servers"] = lib_cfg.get("mcp_servers", [])
                 runtime_overrides["project_skills"] = lib_cfg.get("project_skills", [])
+        if not isinstance(runtime_overrides.get("mcp_servers"), list) or not runtime_overrides.get("mcp_servers"):
+            mcp_command, mcp_args = _mcp_launch.default_mcp_server_command_and_args()
+            runtime_overrides["mcp_servers"] = [
+                {
+                    "name": "kn_graph_tools",
+                    "command": mcp_command,
+                    "args": mcp_args,
+                    "env": {},
+                }
+            ]
         return runtime_overrides
 
     def submit_message(
@@ -1175,7 +1203,7 @@ class ChatService:
             agent_timeout_seconds = int(os.getenv("CHAT_AGENT_TURN_TIMEOUT_SECONDS", "1200") or "1200")
             if agent_timeout_seconds < 30:
                 agent_timeout_seconds = 30
-            effective_tid = str(thread_id or "").strip()
+            effective_tid = self._resolve_session_alias(thread_id)
             with ThreadPoolExecutor(max_workers=1) as pool:
                 fut = pool.submit(
                     runner.run_turn,
@@ -1189,6 +1217,7 @@ class ChatService:
                 result = fut.result(timeout=agent_timeout_seconds)
         except Exception as exc:
             raise RuntimeError(f"agent_backend_unavailable:{backend}:{exc}")
+        self._remember_session_alias(thread_id, str(result.get("thread_id", "") or ""))
         self._emit(message_id, "status", {"stage": "generate", "label": f"正在由 {backend_label} 生成回答"})
 
         answer = str(result.get("answer", "") or "").strip()

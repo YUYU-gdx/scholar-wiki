@@ -22,5 +22,9 @@
       "Bash(rm -rf \"D:/Code/kn_gragh/src/kn_graph/services/__pycache__\"/*)",
       "Bash(rm -rf \"D:/Code/kn_gragh/src/kn_graph/__pycache__\"/*)"
     ]
+  },
+  "enabledPlugins": {
+    "superpowers@openai-curated": false,
+    "github@openai-curated": false
   }
 }

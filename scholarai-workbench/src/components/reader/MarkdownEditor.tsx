@@ -28,6 +28,7 @@ import { livePreviewPlugin } from './LivePreviewPlugin';
 import { convertScriptOnlyKatexToHtml } from './katexScriptAlignment';
 import { useApp } from '../../app-context';
 import { isSelectionInside } from './selectionScope';
+import { resolveMarkdownLinkPath } from './readerLinks';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -409,7 +410,7 @@ export default function MarkdownEditor({
           'href', 'src', 'alt', 'title', 'target', 'rel',
           'class', 'id', 'type', 'checked', 'disabled',
           'colspan', 'rowspan', 'align', 'style',
-          'data-src-line-start', 'data-src-line-end',
+          'data-src-line-start', 'data-src-line-end', 'data-original-href',
         ],
         ALLOWED_URI_REGEXP: /^(?:(?:https?|file|data|blob):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
       });
@@ -422,6 +423,7 @@ export default function MarkdownEditor({
       const rewriteAttr = async (el: Element, key: 'src' | 'href') => {
         const raw = el.getAttribute(key);
         if (!raw) return;
+        if (key === 'href') el.setAttribute('data-original-href', raw);
         let next = resolveLocalResourceUrl(raw, absolutePath);
         if (window.desktopShell?.runtime === 'electron' && absolutePath && !next.startsWith('http://') && !next.startsWith('https://') && !next.startsWith('data:') && !next.startsWith('blob:') && !next.startsWith('file://')) {
           const r = await window.desktopShell.resolveLocalAsset(absolutePath, raw);
@@ -1209,6 +1211,17 @@ export default function MarkdownEditor({
                       const idx = Number(editBtn.getAttribute('data-reader-note-edit') || '-1');
                       if (idx >= 0) void handleEditNoteByIndex(idx);
                       return;
+                    }
+                    const anchor = elem?.closest('a[href]') as HTMLAnchorElement | null;
+                    if (anchor) {
+                      const rawHref = anchor.getAttribute('data-original-href') || anchor.getAttribute('href') || '';
+                      const path = resolveMarkdownLinkPath(rawHref, absolutePath)
+                        || resolveMarkdownLinkPath(anchor.getAttribute('href') || '', absolutePath);
+                      if (path) {
+                        evt.preventDefault();
+                        window.dispatchEvent(new CustomEvent('open-reader-file', { detail: { path, libraryId } }));
+                        return;
+                      }
                     }
                     const btn = elem?.closest('[data-reader-note-delete]') as HTMLElement | null;
                     if (!btn) return;

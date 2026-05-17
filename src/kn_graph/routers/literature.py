@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from kn_graph.models.literature import (
     LiteratureAnswerRequest, LiteratureCreateLibraryRequest,
@@ -66,6 +67,18 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
     async def list_libraries():
         return literature_service.list_libraries()
 
+    @router.get("/libraries/{library_id}/papers")
+    async def list_library_papers(library_id: str):
+        lib = str(library_id or "").strip()
+        if not lib:
+            return JSONResponse(status_code=400, content={"error": "library_id_required"})
+        try:
+            return await run_in_threadpool(literature_service.list_library_papers, lib)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": "library_papers_list_failed", "detail": str(exc)})
+
     @router.post("/libraries")
     async def create_library(body: LiteratureCreateLibraryRequest):
         library_id = str(body.library_id or "").strip()
@@ -89,7 +102,8 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
         if not lib:
             return JSONResponse(status_code=400, content={"error": "library_id_required"})
         try:
-            result = literature_service.delete_library(
+            result = await run_in_threadpool(
+                literature_service.delete_library,
                 library_id=lib,
                 delete_workspace_data=bool(delete_workspace_data),
             )

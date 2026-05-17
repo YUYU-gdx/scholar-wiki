@@ -73,6 +73,26 @@ describe('DocumentResolver', () => {
     expect(mockShell.resolvePaperPaths).toHaveBeenLastCalledWith('raw_ok', 'supply_chain');
   });
 
+  it('loads a direct markdown path without resolving paper paths', async () => {
+    mockShell.readLocalText.mockResolvedValueOnce({
+      ok: true,
+      data: '# Direct file',
+    });
+
+    const { resolveAndLoadDocument } = await import('../../components/reader/DocumentResolver');
+    const doc = await resolveAndLoadDocument('file:C:\\papers\\Direct.md', 'supply_chain', undefined, 'markdown', 'C:\\papers\\Direct.md');
+
+    expect(mockShell.resolvePaperPaths).not.toHaveBeenCalled();
+    expect(mockShell.readLocalText).toHaveBeenCalledWith('C:\\papers\\Direct.md');
+    expect(doc).toMatchObject({
+      type: 'markdown',
+      data: '# Direct file',
+      file_name: 'Direct.md',
+      absolute_path: 'C:\\papers\\Direct.md',
+      markdown_path: 'C:\\papers\\Direct.md',
+    });
+  });
+
   it('returns none when all resolve attempts fail', async () => {
     mockShell.resolvePaperPaths
       .mockResolvedValueOnce({ ok: false, status: 500 })

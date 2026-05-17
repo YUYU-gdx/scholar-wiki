@@ -30,10 +30,39 @@ export async function resolveAndLoadDocument(
   libraryId: string,
   rawPaperId?: string,
   preferredType?: 'pdf' | 'markdown' | 'html' | null,
+  directPath?: string,
 ): Promise<ResolvedDocument> {
   const shell = window.desktopShell;
   if (!shell || shell.runtime !== 'electron') {
     throw new Error('reader_requires_electron_runtime');
+  }
+
+  const direct = String(directPath || '').trim();
+  if (direct) {
+    const name = direct.split(/[\\/]/).filter(Boolean).pop() || direct;
+    const lower = direct.toLowerCase().split(/[?#]/, 1)[0];
+    const type = lower.endsWith('.pdf')
+      ? 'pdf'
+      : lower.endsWith('.html') || lower.endsWith('.htm')
+        ? 'html'
+        : 'markdown';
+    if (type === 'pdf') {
+      const data = await electronReadBinary(direct);
+      if (data) return { type, data, file_name: name, absolute_path: direct, markdown_path: '', content_list_v2_path: '' };
+    } else {
+      const result = await shell.readLocalText(direct);
+      if (result.ok && result.data != null) {
+        return {
+          type,
+          data: result.data,
+          file_name: name,
+          absolute_path: direct,
+          markdown_path: type === 'markdown' ? direct : '',
+          content_list_v2_path: '',
+        };
+      }
+    }
+    return { type: 'none', data: null, file_name: '', absolute_path: '', markdown_path: '', content_list_v2_path: '' };
   }
 
   // Step 1: get file paths from backend (via Electron main process, no cache)

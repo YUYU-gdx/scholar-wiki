@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useApp } from '../app-context';
 import { api } from '../api';
+import type { GraphNode, LiteraturePaper } from '../types';
 
 const MODE_KEY = 'kn_graph_library_mode';
 
@@ -13,6 +14,16 @@ type PaperFileAvailability = {
 };
 type PaperFileStatus = PaperFileAvailability & {
   loading: boolean;
+};
+type LibraryPaperRow = {
+  scopedKey: string;
+  paperId: string;
+  rawPaperId: string;
+  libraryId: string;
+  title: string;
+  metaLine: string;
+  files: PaperFileAvailability;
+  variables: GraphNode[];
 };
 
 type SelectionState = {
@@ -64,22 +75,50 @@ export default function LibraryView() {
     setReaderReturnView,
     setCurrentView,
     selectedLibraryIds,
-    paperFileCache,
-    setPaperFileCache,
   } = useApp();
   const [expandedPapers, setExpandedPapers] = useState<Record<string, boolean>>({});
   const [mode, setMode] = useState<Mode>(() => (localStorage.getItem(MODE_KEY) as Mode) || 'papers');
-  const [paperFilesByScopedKey, setPaperFilesByScopedKey] = useState<Record<string, PaperFileStatus>>({});
+  const [libraryPapers, setLibraryPapers] = useState<LiteraturePaper[]>([]);
+  const [papersLoading, setPapersLoading] = useState(false);
 
   const selRef = useRef<SelectionState>(createSelection());
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; visible: boolean } | null>(null);
   const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
 
+  const selectedKey = useMemo(() => selectedLibraryIds.slice().sort().join('|'), [selectedLibraryIds]);
+
+  const refreshLibraryPapers = useCallback(() => {
+    const libIds = selectedLibraryIds.map((x) => String(x || '').trim()).filter(Boolean);
+    if (!libIds.length) {
+      setLibraryPapers([]);
+      return;
+    }
+    setPapersLoading(true);
+    Promise.all(libIds.map((libId) => api.literature.listLibraryPapers(libId)))
+      .then((payloads) => setLibraryPapers(payloads.flatMap((p) => p.papers || [])))
+      .catch(() => setLibraryPapers([]))
+      .finally(() => setPapersLoading(false));
+  }, [selectedKey]);
+
+  useEffect(() => {
+    refreshLibraryPapers();
+  }, [refreshLibraryPapers]);
+
+  useEffect(() => {
+    const handler = () => refreshLibraryPapers();
+    window.addEventListener('paper-deleted', handler as EventListener);
+    window.addEventListener('pipeline-completed', handler as EventListener);
+    return () => {
+      window.removeEventListener('paper-deleted', handler as EventListener);
+      window.removeEventListener('pipeline-completed', handler as EventListener);
+    };
+  }, [refreshLibraryPapers]);
+
   const deletePaper = async (p: { paperId: string; libraryId: string; scopedKey: string }) => {
     if (!confirm(`确定删除「${p.paperId}」吗？\n将同时删除数据库记录和磁盘文件。`)) return;
     try {
       await api.graph.deletePaper(p.paperId, p.libraryId);
-      setPaperFilesByScopedKey((prev) => { const n = { ...prev }; delete n[p.scopedKey]; return n; });
+      setLibraryPapers((prev) => prev.filter((row) => `${row.library_id}::${row.paper_id}` !== p.scopedKey));
       window.dispatchEvent(new CustomEvent('paper-deleted', { detail: { libraryId: p.libraryId } }));
     } catch { /* ignore */ }
   };
@@ -88,28 +127,16 @@ export default function LibraryView() {
 
   const paperList = useMemo(() => {
     const selected = new Set((selectedLibraryIds || []).map((x) => String(x || '').trim()).filter(Boolean));
-    const paperMap = graphData?.paper_map || {};
-    const out: Array<{
-      scopedKey: string;
-      paperId: string;
-      rawPaperId: string;
-      libraryId: string;
-      title: string;
-      metaLine: string;
-      sourcePdfName: string;
-      variables: typeof variables;
-    }> = [];
+    const out: LibraryPaperRow[] = [];
     const seen = new Set<string>();
 
-    for (const [mapKey, detail] of Object.entries(paperMap)) {
-      const d = (detail || {}) as Record<string, unknown>;
-      const libraryId = String(d.library_id || mapKey.split('::')[0] || '').trim();
+    for (const row of libraryPapers) {
+      const d = (row || {}) as LiteraturePaper;
+      const libraryId = String(d.library_id || '').trim();
       if (selected.size > 0 && !selected.has(libraryId)) continue;
 
       const paperId = String(d.paper_id || '').trim();
       if (!paperId) continue;
-      // paper_map may include duplicate aliases (e.g. DOI key); keep only canonical paper_id entry.
-      if (mapKey !== paperId && mapKey !== `${libraryId}::${paperId}`) continue;
 
       const dedupeKey = `${libraryId}::${paperId}`;
       if (seen.has(dedupeKey)) continue;
@@ -124,11 +151,15 @@ export default function LibraryView() {
       out.push({
         scopedKey: dedupeKey,
         paperId,
-        rawPaperId: paperId,
+        rawPaperId: String(d.raw_paper_id || paperId),
         libraryId,
-        title: firstTitle(d, paperId),
-        metaLine: metaLine(d),
-        sourcePdfName: String(d.source_pdf_name || ''),
+        title: firstTitle(d as unknown as Record<string, unknown>, paperId),
+        metaLine: metaLine(d as unknown as Record<string, unknown>),
+        files: {
+          pdf: !!d.files?.pdf,
+          markdown: !!d.files?.markdown,
+          html: !!d.files?.html,
+        },
         variables: paperVars,
       });
     }
@@ -138,75 +169,15 @@ export default function LibraryView() {
       if (libCmp !== 0) return libCmp;
       return a.paperId.localeCompare(b.paperId);
     });
-  }, [graphData, variables, selectedLibraryIds]);
+  }, [libraryPapers, variables, selectedLibraryIds]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const entries = paperList.map((p) => ({
-      scopedKey: p.scopedKey,
-      paperId: p.paperId,
-      rawPaperId: p.rawPaperId,
-      libraryId: p.libraryId,
-    }));
-    if (!entries.length) {
-      setPaperFilesByScopedKey({});
-      return () => { cancelled = true; };
+  const paperFilesByScopedKey = useMemo<Record<string, PaperFileStatus>>(() => {
+    const next: Record<string, PaperFileStatus> = {};
+    for (const p of paperList) {
+      next[p.scopedKey] = { ...p.files, loading: false };
     }
-
-    setPaperFilesByScopedKey(() => {
-      const next: Record<string, PaperFileStatus> = {};
-      for (const p of entries) {
-        const cached = paperFileCache[p.scopedKey];
-        if (cached?.loaded) {
-          next[p.scopedKey] = {
-            pdf: !!cached.pdf,
-            markdown: !!cached.markdown,
-            html: !!cached.html,
-            loading: false,
-          };
-        } else {
-          next[p.scopedKey] = { pdf: false, markdown: false, html: false, loading: true };
-        }
-      }
-      return next;
-    });
-
-    (async () => {
-      const toFetch = entries.filter((p) => !paperFileCache[p.scopedKey]?.loaded);
-      if (!toFetch.length) return;
-      const fetchedCache: Record<string, { pdf: boolean; markdown: boolean; html: boolean; loaded: boolean }> = {};
-      const fetchedLocal: Record<string, PaperFileStatus> = {};
-      await Promise.all(toFetch.map(async (p) => {
-        try {
-          let files = await api.graph.paperFiles(p.paperId, p.libraryId);
-          if (!files.files.pdf && !files.files.markdown && !files.files.html && p.rawPaperId && p.rawPaperId !== p.paperId) {
-            files = await api.graph.paperFiles(p.rawPaperId, p.libraryId);
-          }
-          fetchedLocal[p.scopedKey] = {
-            pdf: !!files.files.pdf,
-            markdown: !!files.files.markdown,
-            html: !!files.files.html,
-            loading: false,
-          };
-          fetchedCache[p.scopedKey] = {
-            pdf: !!files.files.pdf,
-            markdown: !!files.files.markdown,
-            html: !!files.files.html,
-            loaded: true,
-          };
-        } catch {
-          fetchedLocal[p.scopedKey] = { pdf: false, markdown: false, html: false, loading: false };
-          fetchedCache[p.scopedKey] = { pdf: false, markdown: false, html: false, loaded: true };
-        }
-      }));
-      if (!cancelled) {
-        setPaperFileCache((prev) => ({ ...prev, ...fetchedCache }));
-        setPaperFilesByScopedKey((prev) => ({ ...prev, ...fetchedLocal }));
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [paperList, paperFileCache, setPaperFileCache]);
+    return next;
+  }, [paperList]);
 
   // 鈹€鈹€ Selection logic 鈹€鈹€
 
@@ -358,7 +329,12 @@ export default function LibraryView() {
           }}
           tabIndex={-1}
         >
-          {paperList.length === 0 && (
+          {papersLoading && paperList.length === 0 && (
+            <div className="text-sm text-on-surface-variant text-center py-8">
+              正在加载文献...
+            </div>
+          )}
+          {!papersLoading && paperList.length === 0 && (
             <div className="text-sm text-on-surface-variant text-center py-8">
               暂未导入文献
             </div>
@@ -488,11 +464,8 @@ export default function LibraryView() {
                     api.graph.deletePaper(p.paperId, p.libraryId).then(() => { ok++; })
                   ));
                   fail = n - ok;
-                  setPaperFilesByScopedKey((prev) => {
-                    const next2 = { ...prev };
-                    for (const p of papers) delete next2[p.scopedKey];
-                    return next2;
-                  });
+                  const deletedKeys = new Set(papers.map((p) => p.scopedKey));
+                  setLibraryPapers((prev) => prev.filter((row) => !deletedKeys.has(`${row.library_id}::${row.paper_id}`)));
                   for (const p of papers) {
                     window.dispatchEvent(new CustomEvent('paper-deleted', { detail: { libraryId: p.libraryId } }));
                   }

@@ -4,6 +4,7 @@ import { useApp } from '../app-context';
 import ViewerHost from './reader/ViewerHost';
 import TabBar from './reader/TabBar';
 import type { TabDescriptor } from './reader/types';
+import { createFileReaderTab, createPaperReaderTab, isFileReaderTab } from './reader/readerTabs';
 
 const MAX_TABS = 8;
 const READER_TABS_KEY = 'kn_graph_reader_tabs_v1';
@@ -129,6 +130,48 @@ export default function ReaderView() {
 
   const activeTab = tabs.find(t => t.id === activeTabId) || null;
 
+  useEffect(() => {
+    const addOrActivateTab = (tab: TabDescriptor) => {
+      setTabs((prev) => {
+        const normalizedPath = String(tab.path || '').trim().toLowerCase();
+        const existing = normalizedPath
+          ? prev.find((t) => String(t.path || '').trim().toLowerCase() === normalizedPath)
+          : prev.find((t) => t.paperId === tab.paperId && t.libraryId === tab.libraryId && t.type === tab.type);
+        if (existing) {
+          setActiveTabId(existing.id);
+          return prev;
+        }
+        const next = [...prev, tab];
+        setActiveTabId(tab.id);
+        return next.length > MAX_TABS ? next.slice(next.length - MAX_TABS) : next;
+      });
+    };
+
+    const onOpenFile = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ path?: string; libraryId?: string }>).detail || {};
+      const path = String(detail.path || '').trim();
+      if (!path) return;
+      const tab = createFileReaderTab(path, String(detail.libraryId || activeTab?.libraryId || selectedPaperLibraryId || '').trim());
+      if (tab) addOrActivateTab(tab);
+    };
+
+    const onOpenPaper = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ paperId?: string; libraryId?: string; type?: TabDescriptor['type'] }>).detail || {};
+      const paperId = String(detail.paperId || '').trim();
+      const libraryId = String(detail.libraryId || activeTab?.libraryId || selectedPaperLibraryId || '').trim();
+      const type = detail.type === 'pdf' || detail.type === 'html' || detail.type === 'markdown' ? detail.type : 'markdown';
+      const tab = createPaperReaderTab(paperId, libraryId, type);
+      if (tab) addOrActivateTab(tab);
+    };
+
+    window.addEventListener('open-reader-file', onOpenFile);
+    window.addEventListener('open-reader-tab', onOpenPaper);
+    return () => {
+      window.removeEventListener('open-reader-file', onOpenFile);
+      window.removeEventListener('open-reader-tab', onOpenPaper);
+    };
+  }, [activeTab?.libraryId, selectedPaperLibraryId]);
+
   const handleDocumentMeta = useCallback((meta: { absolutePath: string; fileName: string; type: 'pdf' | 'markdown' | 'html' | 'none' }) => {
     setDocPath(meta.absolutePath || '');
     if (activeTabId) {
@@ -218,6 +261,7 @@ export default function ReaderView() {
           libraryId={activeTab.libraryId}
           preferredType={activeTab.type}
           rawPaperId={selectedPaperRawId || undefined}
+          directPath={isFileReaderTab(activeTab) ? activeTab.path : undefined}
           onDocumentMeta={handleDocumentMeta}
         />
       ) : selectedPaperId ? (
@@ -242,4 +286,3 @@ export default function ReaderView() {
     </div>
   );
 }
-

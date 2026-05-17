@@ -378,6 +378,35 @@ export interface LibrariesResponse {
   default_library_id: string;
 }
 
+export interface LiteraturePaper {
+  library_id: string;
+  paper_id: string;
+  raw_paper_id?: string;
+  title: string;
+  display_title?: string;
+  doi?: string;
+  authors_json?: Array<Record<string, unknown> | string>;
+  journal?: string;
+  publication_date?: string;
+  publication_year?: number | null;
+  article_url?: string;
+  source_pdf_path?: string;
+  source_md_path?: string;
+  source_html_path?: string;
+  offline_html_path?: string;
+  files: {
+    pdf: boolean;
+    markdown: boolean;
+    html: boolean;
+  };
+}
+
+export interface LiteraturePapersResponse {
+  library_id: string;
+  paper_count: number;
+  papers: LiteraturePaper[];
+}
+
 export interface LiteratureSearchHit {
   paper_id?: string;
   doi?: string;

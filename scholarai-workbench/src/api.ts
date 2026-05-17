@@ -15,6 +15,7 @@ import type {
   PipelineBatchSubmitResponse,
   PipelineBatchActionResponse,
   LibrariesResponse,
+  LiteraturePapersResponse,
   LiteratureSearchResponse,
   LiteratureAnswerResponse,
   WorkspaceLayout,
@@ -227,6 +228,9 @@ export const api = {
   literature: {
     listLibraries(): Promise<LibrariesResponse> {
       return jsonFetch('/literature/libraries');
+    },
+    listLibraryPapers(libraryId: string): Promise<LiteraturePapersResponse> {
+      return jsonFetch(`/literature/libraries/${encodeURIComponent(libraryId)}/papers`);
     },
     createLibrary(libraryId: string, workspaceRoot: string = '', setDefault: boolean = true): Promise<Record<string, unknown>> {
       return jsonFetch('/literature/libraries', {

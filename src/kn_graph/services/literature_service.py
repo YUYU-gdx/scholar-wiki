@@ -1159,6 +1159,100 @@ class LiteratureService:
             "default_library_id": "",
         }
 
+    def list_library_papers(self, library_id: str) -> dict[str, Any]:
+        lib = validate_library_id(str(library_id or "").strip())
+        ws = resolve_library_workspace(lib, self._settings.workspaces_dir, must_exist=False)
+        if ws is None:
+            raise ValueError("library_workspace_invalid")
+        db_path = ws / "kn_gragh.db"
+        if not db_path.exists():
+            return {"library_id": lib, "paper_count": 0, "papers": []}
+
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(papers)")
+            columns = {str(row[1]) for row in cur.fetchall()}
+            wanted = [
+                "paper_id",
+                "doi",
+                "title",
+                "authors_json",
+                "journal",
+                "publication_date",
+                "publication_year",
+                "source_pdf_path",
+                "source_md_path",
+                "source_html_path",
+                "offline_html_path",
+                "article_url",
+            ]
+            select_cols = [col for col in wanted if col in columns]
+            if "paper_id" not in select_cols:
+                return {"library_id": lib, "paper_count": 0, "papers": []}
+            order_clause = "title COLLATE NOCASE, paper_id" if "title" in columns else "paper_id"
+            cur.execute(f"SELECT {', '.join(select_cols)} FROM papers ORDER BY {order_clause}")
+            rows = [dict(row) for row in cur.fetchall()]
+        finally:
+            conn.close()
+
+        def _text(row: dict[str, Any], key: str) -> str:
+            return str(row.get(key, "") or "").strip()
+
+        def _exists(path_text: str) -> bool:
+            if not path_text:
+                return False
+            try:
+                return Path(path_text).exists()
+            except Exception:
+                return False
+
+        papers: list[dict[str, Any]] = []
+        for row in rows:
+            paper_id = _text(row, "paper_id")
+            if not paper_id:
+                continue
+            authors_raw = _text(row, "authors_json") or "[]"
+            try:
+                authors = json.loads(authors_raw)
+                if not isinstance(authors, list):
+                    authors = []
+            except Exception:
+                authors = []
+            source_pdf_path = _text(row, "source_pdf_path")
+            source_md_path = _text(row, "source_md_path")
+            source_html_path = _text(row, "source_html_path")
+            offline_html_path = _text(row, "offline_html_path")
+            papers.append(
+                {
+                    "library_id": lib,
+                    "paper_id": paper_id,
+                    "raw_paper_id": paper_id,
+                    "title": _text(row, "title") or paper_id,
+                    "display_title": _text(row, "title") or paper_id,
+                    "doi": _text(row, "doi") or paper_id,
+                    "authors_json": authors,
+                    "journal": _text(row, "journal"),
+                    "publication_date": _text(row, "publication_date"),
+                    "publication_year": row.get("publication_year"),
+                    "article_url": _text(row, "article_url"),
+                    "source_pdf_path": source_pdf_path,
+                    "source_md_path": source_md_path,
+                    "source_html_path": source_html_path,
+                    "offline_html_path": offline_html_path,
+                    "files": {
+                        "pdf": _exists(source_pdf_path),
+                        "markdown": _exists(source_md_path),
+                        "html": _exists(offline_html_path) or _exists(source_html_path),
+                    },
+                }
+            )
+
+        return {"library_id": lib, "paper_count": len(papers), "papers": papers}
+
     # ------------------------------------------------------------------
     # Core operations
     # ------------------------------------------------------------------
