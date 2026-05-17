@@ -213,6 +213,44 @@ class ChatTranslationFormattingTest(unittest.TestCase):
             self.assertIn("ZH:Appendix body.", rendered)
             self.assertEqual(m.call_count, 4)
 
+    def test_markdown_compare_skips_content_before_abstract_h1(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = ChatService(Settings(data_dir=Path(tmp)))
+
+            def _fake_translate_single_text(**kwargs):
+                text = str(kwargs.get("text", "") or "")
+                return {
+                    "translated_text": f"ZH:{text}",
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                    "target_lang": "zh",
+                    "latency_ms": 1,
+                }
+
+            source = (
+                "# Paper Title\n\n"
+                "Author One, Author Two\n\n"
+                "# Abstract\n\n"
+                "This is the abstract.\n\n"
+                "# Introduction\n\n"
+                "Main body.\n\n"
+                "# References\n\n"
+                "[1] Foo Bar."
+            )
+            with patch.object(svc, "_translate_single_text", side_effect=_fake_translate_single_text) as m:
+                out = svc.translate_text(text=source, compare_by_paragraph=True)
+            rendered = str(out.get("formatted_text", "") or "")
+            self.assertIn("# Paper Title", rendered)
+            self.assertIn("Author One, Author Two", rendered)
+            self.assertIn("ZH:# Paper Title", rendered)
+            self.assertNotIn("ZH:Author One, Author Two", rendered)
+            self.assertIn("ZH:# Abstract", rendered)
+            self.assertIn("ZH:This is the abstract.", rendered)
+            self.assertIn("ZH:# Introduction", rendered)
+            self.assertIn("ZH:Main body.", rendered)
+            self.assertNotIn("ZH:[1] Foo Bar.", rendered)
+            self.assertEqual(m.call_count, 5)
+
 
 if __name__ == "__main__":
     unittest.main()

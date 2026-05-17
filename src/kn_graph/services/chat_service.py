@@ -861,30 +861,47 @@ class ChatService:
         translated_blocks = 0
         last_meta: dict[str, Any] = {}
         in_reference_h1_section = False
-        total_work = max(
-            1,
-            len(
-                [
-                    x
-                    for x in blocks
-                    if x.strip()
-                    and not self._is_fenced_code_block(x)
-                    and not self._is_reader_note_block(x)
-                    and not self._is_existing_translation_block(x)
-                    and not self._is_reference_h1_block(x)
-                ]
-            ),
-        )
+        has_abstract_h1 = any(self._is_abstract_h1_block(x) for x in blocks)
+        before_abstract_h1 = has_abstract_h1
+        count_before_abstract_h1 = has_abstract_h1
+        count_in_reference_h1_section = False
+        total_work_count = 0
+        for candidate in blocks:
+            if not candidate.strip():
+                continue
+            if self._is_h1_block(candidate):
+                if count_before_abstract_h1 and self._is_abstract_h1_block(candidate):
+                    count_before_abstract_h1 = False
+                if self._is_reference_h1_block(candidate):
+                    count_in_reference_h1_section = True
+                else:
+                    count_in_reference_h1_section = False
+            if count_before_abstract_h1 and not self._is_h1_block(candidate):
+                continue
+            if count_in_reference_h1_section:
+                continue
+            if self._is_fenced_code_block(candidate):
+                continue
+            if self._is_reader_note_block(candidate):
+                continue
+            if self._is_existing_translation_block(candidate):
+                continue
+            total_work_count += 1
+        total_work = max(1, total_work_count)
         done_work = 0
         for block in blocks:
             out.append(block)
             if not block.strip():
                 continue
             if self._is_h1_block(block):
+                if before_abstract_h1 and self._is_abstract_h1_block(block):
+                    before_abstract_h1 = False
                 if self._is_reference_h1_block(block):
                     in_reference_h1_section = True
                 else:
                     in_reference_h1_section = False
+            if before_abstract_h1 and not self._is_h1_block(block):
+                continue
             if in_reference_h1_section:
                 continue
             if self._is_fenced_code_block(block):
@@ -1078,6 +1095,15 @@ class ChatService:
             return False
         title = first[2:].strip().lower()
         return title in {"reference", "references"}
+
+    def _is_abstract_h1_block(self, block: str) -> bool:
+        first_lines = str(block or "").strip().splitlines()
+        if not first_lines:
+            return False
+        first = first_lines[0].strip()
+        if not first.startswith("# "):
+            return False
+        return first[2:].strip().lower() == "abstract"
 
     def test_provider(self, provider: str, model: str = "", options: dict[str, Any] | None = None, prompt: str = "") -> dict[str, Any]:
         if options is None:
