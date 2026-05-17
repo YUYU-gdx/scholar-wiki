@@ -1,7 +1,0 @@
-VERDICT: PASS
-Timestamp: 2026-05-04T23:48:03.531807
-
-Paper count: 3
-Issues: none
-Expected titles from mock data: ['Supply Chain Integration and Firm Performance', 'Digital Transformation and Green Innovation', 'Green Innovation and Sustainable Supply Chain']
-

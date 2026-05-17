@@ -1,6 +1,0 @@
-VERDICT: PASS
-Timestamp: 2026-05-04T23:48:28.600927
-
-Paper 0: MD present (correct)
-Paper 1: MD present (correct)
-Paper 2: MD absent (correct)

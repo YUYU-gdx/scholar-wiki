@@ -1,9 +1,0 @@
-Verdict: PASS
-Timestamp: 2026-05-04T23:31:39.778073
-Summary: Table uses table-fixed layout with overflow protection
-Details:
-  - Table has 'table-fixed' class: True
-  - Overflow container exists: True
-  - Found 16 filename cells with 'truncate' class
-  - Table header columns: 6
-  - Viewport: 1440x900

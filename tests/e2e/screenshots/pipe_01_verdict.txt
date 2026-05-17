@@ -1,9 +1,0 @@
-Verdict: PASS
-Timestamp: 2026-05-04T23:31:29.295260
-Summary: Pipeline panel loads: heading + upload section + table visible
-Details:
-  - Navigated to Pipeline view: True
-  - Heading 'Data Pipeline' visible: True
-  - 'Upload PDF' heading visible: True
-  - Job table visible: True
-  - File input #pdf-upload exists: True

@@ -1,6 +1,0 @@
-Verdict: PASS
-Timestamp: 2026-05-04T23:31:29.392495
-Summary: Import button is disabled when no file is selected
-Details:
-  - Import button disabled: True
-  - Placeholder 'Choose a PDF file' visible: True

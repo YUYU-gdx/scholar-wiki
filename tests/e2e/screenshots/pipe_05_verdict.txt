@@ -1,6 +1,0 @@
-Verdict: PASS
-Timestamp: 2026-05-04T23:31:37.250614
-Summary: Job status progressed beyond initial state (saw: {'failed', 'completed'})
-Details:
-  - Observed status texts: {'failed', 'completed'}
-  - Progressed past initial state: True

@@ -1,9 +1,0 @@
-Verdict: PASS
-Timestamp: 2026-05-04T23:31:39.651765
-Summary: At least one job reached terminal state with progress
-Details:
-  - Terminal state found: True
-  - Final job statuses: ['failed', 'failed', 'failed', 'failed', 'failed', 'failed', 'failed', 'failed', 'failed', 'completed', 'completed', 'completed', 'completed', 'completed', 'failed', 'failed']
-  - Progress values: ['8%', '8%', '8%', '8%', '8%', '8%', '8%', '8%', '8%', '100%', '100%', '100%', '100%', '100%', '97%', '97%']
-  - Has progress > 0%: True
-  - Has 100% progress: True

@@ -1,6 +1,0 @@
-VERDICT: PASS
-Timestamp: 2026-05-04T23:48:16.048892
-
-Paper 0: PDF present (correct)
-Paper 1: PDF present (correct)
-Paper 2: PDF absent (correct)

@@ -1,7 +1,0 @@
-Verdict: PASS
-Timestamp: 2026-05-04T23:31:34.947917
-Summary: After clicking Import: job appears in table
-Details:
-  - Job with 'job_' prefix visible: True
-  - Job rows count: 16
-  - New job IDs on server: {'job_60884a3d95f34d82b27f7ac51322d690'}

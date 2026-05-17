@@ -1,7 +1,0 @@
-Verdict: PASS
-Timestamp: 2026-05-04T23:31:44.959573
-Summary: Both jobs visible after second upload (17 rows)
-Details:
-  - Import enabled after selecting second PDF: True
-  - Second filename 'A Dynamic Clustering Approach to Data-Driven Assortment Personalization.pdf' shown: True
-  - Job rows after second upload: 17

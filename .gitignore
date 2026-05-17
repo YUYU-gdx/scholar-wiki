@@ -15,6 +15,9 @@ wheels/
 # Local runtime configuration
 .env
 !.env.example
+.mcp.json
+opencode.json
+lib_*.json
 
 # Local editor / agent state
 .obsidian/
@@ -53,10 +56,15 @@ frontend_legacy/**/node_modules/
 frontend_legacy/**/dist/
 .tmp/
 scripts/
+tests/
 
 # PyInstaller build artifacts
 build_pyi/
 dist_exe/
+
+# Legacy manual installer scripts
+setup.nsi
+setup_electron.nsi
 
 # Electron packaging artifacts
 scholarai-workbench/dist-electron-pkg/

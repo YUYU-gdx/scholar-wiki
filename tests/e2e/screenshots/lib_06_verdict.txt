@@ -1,9 +1,0 @@
-VERDICT: PASS
-Timestamp: 2026-05-04T23:48:55.742852
-
-Dialog triggered: True
-Dialog message: 确定删除「doi_10_1234_scm_2025」吗？
-将同时删除数据库记录和磁盘文件。
-Paper still visible: True
-Paper count: 3 (was 3)
-

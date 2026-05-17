@@ -1,9 +1,0 @@
-VERDICT: PASS
-Timestamp: 2026-05-04T23:47:50.941200
-
-Heading visible: True
-Papers tab visible: True
-Variables tab visible: True
-Paper cards found: 3
-Failures: none
-
