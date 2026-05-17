@@ -1,5 +1,0 @@
-[plugins."superpowers@openai-curated"]
-enabled = false
-
-[plugins."github@openai-curated"]
-enabled = false

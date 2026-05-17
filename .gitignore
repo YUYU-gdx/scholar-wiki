@@ -21,9 +21,12 @@ wheels/
 .learnings/
 .worktrees/
 .claude/
+.codex/
+.agents/skills/answer_library_question/
 
 # Generated run artifacts
 outputs/
+logs/
 *.log
 *.sqlite3
 *.db
@@ -35,6 +38,9 @@ prompt_structure_probe.py
 # Local copied references (not project source)
 docs/GitNexus/
 docs/mineru_api_docs/
+docs/
+prompt/
+reference/zotero/
 skills/*
 !skills/templates/
 
