@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import json
 from pathlib import Path
 from typing import Any
 
@@ -132,3 +133,25 @@ def build_import_path_diagnostics(
         },
         "paths": paths,
     }
+
+
+def write_import_path_diagnostics_log(
+    *,
+    data_dir: str | Path = "",
+    event: str,
+    payload: dict[str, Any],
+) -> str:
+    root = Path(str(data_dir or "").strip()) if str(data_dir or "").strip() else None
+    if root is None:
+        env_root = os.getenv("KN_GRAPH_DATA_DIR", "").strip()
+        root = Path(env_root) if env_root else Path.cwd()
+    log_path = root / "logs" / "import_path_diagnostics.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "event": str(event or "").strip(),
+        "payload": payload,
+    }
+    with log_path.open("a", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
+        f.write("\n")
+    return str(log_path)

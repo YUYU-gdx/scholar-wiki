@@ -15,7 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from kn_graph.services.pipeline_service import PipelineService
 from kn_graph.services import pipeline_runtime
-from kn_graph.services.file_access_diagnostics import build_import_path_diagnostics
+from kn_graph.services.file_access_diagnostics import build_import_path_diagnostics, write_import_path_diagnostics_log
 from kn_graph.services.workspace_paths import resolve_library_workspace
 
 _ALLOWED_UPLOAD_EXTS = {".pdf", ".docx", ".md", ".html"}
@@ -184,6 +184,11 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             input_path=input_path,
         )
         logger.warning("pipeline_import_path_diagnostics %s", json.dumps(path_diag, ensure_ascii=False))
+        write_import_path_diagnostics_log(
+            data_dir=getattr(pipeline_service._settings, "data_dir", ""),
+            event="pipeline_import_path_diagnostics",
+            payload=path_diag,
+        )
         parsed_options["_path_diagnostics"] = path_diag
         idempotency_key = hashlib.sha256((file_hash + ":" + _safe_json_dumps(parsed_options)).encode("utf-8")).hexdigest()
         now = _now_iso()

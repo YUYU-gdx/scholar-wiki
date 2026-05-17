@@ -18,7 +18,11 @@ from kn_graph.models.literature import (
     ZoteroScanRequest, ZoteroImportRequest,
 )
 from kn_graph.services.literature_service import LiteratureService
-from kn_graph.services.file_access_diagnostics import append_file_access_diagnostics, build_import_path_diagnostics
+from kn_graph.services.file_access_diagnostics import (
+    append_file_access_diagnostics,
+    build_import_path_diagnostics,
+    write_import_path_diagnostics_log,
+)
 from kn_graph.services.pipeline_runtime import dispatch_inline
 from kn_graph.services.workspace_paths import resolve_library_workspace
 from kn_graph.services.zotero_scanner import _find_data_dir, get_zotero_items_batch, scan_zotero
@@ -189,6 +193,11 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
                         source_path=candidate_path,
                     )
                     logger.warning("zotero_import_pdf_not_accessible %s", json.dumps(diag, ensure_ascii=False))
+                    write_import_path_diagnostics_log(
+                        data_dir=getattr(settings_obj, "data_dir", ""),
+                        event="zotero_import_pdf_not_accessible",
+                        payload=diag,
+                    )
                     skipped.append(
                         {
                             "item_id": zotero_data.get("item_id"),
@@ -222,6 +231,11 @@ def create_router(literature_service: LiteratureService, pipeline_service: Any =
                     source_path=src_pdf,
                 )
                 logger.warning("zotero_import_path_diagnostics %s", json.dumps(path_diag, ensure_ascii=False))
+                write_import_path_diagnostics_log(
+                    data_dir=getattr(settings_obj, "data_dir", ""),
+                    event="zotero_import_path_diagnostics",
+                    payload=path_diag,
+                )
                 try:
                     shutil.copy2(src_pdf, dest_pdf)
                 except OSError as exc:

@@ -13,7 +13,11 @@ import html
 from typing import Any, Protocol
 
 from kn_graph.providers.registry import ProviderRegistry
-from kn_graph.services.file_access_diagnostics import append_file_access_diagnostics, build_import_path_diagnostics
+from kn_graph.services.file_access_diagnostics import (
+    append_file_access_diagnostics,
+    build_import_path_diagnostics,
+    write_import_path_diagnostics_log,
+)
 from kn_graph.services.mcp_launch import default_mcp_server_command_and_args
 from kn_graph.services.graph_builder import _build_artifact_from_sqlite, run_build_from_artifact
 from kn_graph.services.import_sqlite import main_inline as _import_sqlite_main_inline
@@ -1330,6 +1334,11 @@ def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options:
         if existing_diag:
             failure_diag["initial"] = existing_diag
         logger.warning("pipeline_failure_path_diagnostics %s", json.dumps(failure_diag, ensure_ascii=False))
+        write_import_path_diagnostics_log(
+            data_dir=getattr(_pipeline_settings, "data_dir", "") if _pipeline_settings else "",
+            event="pipeline_failure_path_diagnostics",
+            payload=failure_diag,
+        )
         job_store.update_job(
             job_id,
             {
