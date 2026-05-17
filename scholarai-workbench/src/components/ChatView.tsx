@@ -211,6 +211,7 @@ export default function ChatView() {
   const [model, setModel] = useState('codex-local');
   const [submitting, setSubmitting] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [chatError, setChatError] = useState('');
   const [loadingSession, setLoadingSession] = useState(false);
   const [showModeSwitcher, setShowModeSwitcher] = useState(false);
   const [citationModal, setCitationModal] = useState<CitationType | null>(null);
@@ -283,11 +284,20 @@ export default function ChatView() {
     if (creating) return;
     setCreating(true);
     try {
+      setChatError('');
+      if (streamRef.current) {
+        streamRef.current.close();
+        streamRef.current = null;
+      }
       const session = await api.chat.createSession('新会话', activeLibraryId, mode);
       setSessions(prev => [session, ...prev]);
       setActiveSessionId(session.session_id);
+      setInput('');
       setMessages([]);
-    } catch { /* ignore */ }
+      setSubmitting(false);
+    } catch (err) {
+      setChatError(`创建会话失败: ${String((err as Error)?.message || err)}`);
+    }
     finally { setCreating(false); }
   };
 
@@ -387,7 +397,18 @@ export default function ChatView() {
     if (!activeSessionId || !input.trim() || submitting) return;
     const content = input.trim();
     setInput('');
+    setChatError('');
     setSubmitting(true);
+    const pendingUserId = `pending_user_${Date.now()}`;
+    setMessages(prev => [...prev, {
+      message_id: pendingUserId,
+      session_id: activeSessionId,
+      role: 'user' as const,
+      content,
+      status: 'completed' as const,
+      citations: [],
+      tool_trace: [],
+    }]);
     try {
       const res = await api.chat.sendMessage(activeSessionId, content, activeLibraryId, mode, provider, model);
       const userMsg: ChatMessage = {
@@ -408,18 +429,18 @@ export default function ChatView() {
         citations: [],
         tool_trace: [],
       };
-      setMessages(prev => [...prev, userMsg, assistantMsg]);
+      setMessages(prev => [...prev.filter(m => m.message_id !== pendingUserId), userMsg, assistantMsg]);
       if (res.stream_url) {
         attachStream(activeSessionId, res.assistant_message_id);
       }
-    } catch {
+    } catch (err) {
       setMessages(prev => [...prev, {
         message_id: `err_${Date.now()}`,
         session_id: activeSessionId,
         role: 'assistant' as const,
         content: '发送失败，请重试。',
         status: 'failed' as const,
-        error_detail: 'submit_failed',
+        error_detail: String((err as Error)?.message || err || 'submit_failed'),
         citations: [],
         tool_trace: [],
       }]);
@@ -489,6 +510,7 @@ export default function ChatView() {
                 {creating ? <span className="inline-block w-4 h-4 border-2 border-on-secondary/30 border-t-on-secondary rounded-full animate-spin" /> : <PlusSquare className="w-4 h-4" />}
                 {creating ? '创建中...' : '新会话'}
               </button>
+              {chatError && <div className="text-sm text-error max-w-md mx-auto">{chatError}</div>}
             </div>
           </div>
         ) : (
@@ -593,6 +615,7 @@ export default function ChatView() {
 
             <div className="p-6 border-t border-outline-variant bg-surface-container-lowest">
               <div className="max-w-4xl mx-auto space-y-3">
+                {chatError && <div className="text-sm text-error bg-error-container/10 border border-error/20 rounded-lg px-3 py-2">{chatError}</div>}
                 <div className="flex items-center gap-1 p-1 bg-surface-container-low w-fit rounded-xl border border-outline-variant">
                   <button
                     onClick={() => setMode('fast')}

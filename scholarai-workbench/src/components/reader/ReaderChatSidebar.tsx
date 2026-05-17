@@ -27,6 +27,7 @@ export default function ReaderChatSidebar({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [chatError, setChatError] = useState('');
   const [expandedToolItems, setExpandedToolItems] = useState<Record<string, boolean>>({});
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
@@ -132,7 +133,16 @@ export default function ReaderChatSidebar({
     const question = input.trim();
     if (!question || submitting) return;
     setInput('');
+    setChatError('');
     setSubmitting(true);
+    const pendingUserId = `pending_user_${Date.now()}`;
+    setMessages((prev) => [...prev, {
+      message_id: pendingUserId,
+      session_id: sessionId || '',
+      role: 'user',
+      content: question,
+      status: 'completed',
+    }]);
     try {
       const sid = await ensureSession();
       const contextSuffix = `\n\n当前用户正在文献阅读器中进行对话，当前文献的绝对路径：${absolutePath || '未知路径'}`;
@@ -153,16 +163,29 @@ export default function ReaderChatSidebar({
         status: 'running',
         tool_trace: [],
       };
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      setMessages((prev) => [...prev.filter((m) => m.message_id !== pendingUserId), userMsg, assistantMsg]);
       attachStream(sid, res.assistant_message_id);
+    } catch (err) {
+      const detail = String((err as Error)?.message || err || 'submit_failed');
+      setChatError(`发送失败: ${detail}`);
+      setMessages((prev) => [...prev, {
+        message_id: `err_${Date.now()}`,
+        session_id: sessionId || '',
+        role: 'assistant',
+        content: '发送失败，请重试。',
+        status: 'failed',
+        error_detail: detail,
+        tool_trace: [],
+      }]);
     } finally {
       setSubmitting(false);
     }
-  }, [absolutePath, attachStream, ensureSession, input, libraryId, submitting]);
+  }, [absolutePath, attachStream, ensureSession, input, libraryId, sessionId, submitting]);
 
   useEffect(() => {
     setSessionId(null);
     setMessages([]);
+    setChatError('');
     if (streamRef.current) {
       streamRef.current.close();
       streamRef.current = null;
@@ -272,6 +295,7 @@ export default function ReaderChatSidebar({
       </div>
 
       <div className="p-4 border-t border-outline-variant bg-surface-container-low">
+        {chatError && <div className="mb-2 text-xs text-error bg-error-container/10 border border-error/20 rounded-lg px-2.5 py-2">{chatError}</div>}
         <div className="text-xs text-outline mb-2">发送时会自动拼接文献绝对路径提示</div>
         <div className="flex items-end gap-2">
           <textarea

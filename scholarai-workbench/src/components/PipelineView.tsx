@@ -593,7 +593,7 @@ export default function PipelineView() {
       </div>
 
       <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-hidden glass-shadow mb-8">
-        <div className="min-h-[520px] max-h-[calc(100vh-260px)] overflow-y-auto">
+        <div className="min-h-0 max-h-[calc(100vh-260px)] overflow-y-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-surface-container-low/10 text-xs font-mono font-black text-outline uppercase tracking-widest border-b border-outline-variant/10">
