@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 
 
@@ -27,6 +28,7 @@ def main():
         if args.data_dir:
             kwargs["data_dir"] = Path(args.data_dir)
         settings = Settings(**kwargs)
+        os.environ["KN_GRAPH_API_BASE_URL"] = f"http://{settings.host}:{settings.port}"
         from kn_graph.app import create_app
         app = create_app(settings)
         uvicorn.run(app, host=settings.host, port=settings.port, reload=args.reload)

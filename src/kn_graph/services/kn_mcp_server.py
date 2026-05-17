@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -775,7 +776,7 @@ def main() -> None:
 
     boot = Settings()
     boot.load_global_settings()
-    default_url = f"http://{boot.host}:{boot.port}"
+    default_url = str(os.getenv("KN_GRAPH_API_BASE_URL", "") or "").strip() or f"http://{boot.host}:{boot.port}"
 
     parser = argparse.ArgumentParser(description="KN Graph MCP server")
     parser.add_argument("--api-base-url", default=default_url)

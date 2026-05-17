@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -10,6 +11,17 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _default_api_base_url() -> str:
+    return str(os.getenv("KN_GRAPH_API_BASE_URL", "") or "").strip()
+
+
+def _with_api_base_url(args: list[str]) -> list[str]:
+    api_base_url = _default_api_base_url()
+    if not api_base_url:
+        return args
+    return [*args, "--api-base-url", api_base_url]
+
+
 def default_mcp_server_command_and_args() -> tuple[str, list[str]]:
     """Return stable MCP launcher command for current runtime mode.
 
@@ -17,17 +29,17 @@ def default_mcp_server_command_and_args() -> tuple[str, list[str]]:
     Dev/source: launch via uv with explicit --project absolute path.
     """
     if getattr(sys, "frozen", False):
-        return str(Path(sys.executable).resolve()), ["mcp-server"]
+        return str(Path(sys.executable).resolve()), _with_api_base_url(["mcp-server"])
 
     uv_bin = shutil.which("uv") or "uv"
-    return uv_bin, [
+    return uv_bin, _with_api_base_url([
         "run",
         "--project",
         str(_project_root()),
         "python",
         "-m",
         "kn_graph.services.kn_mcp_server",
-    ]
+    ])
 
 
 def default_mcp_server_args() -> list[str]:
