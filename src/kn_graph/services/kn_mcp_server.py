@@ -284,7 +284,7 @@ def _handle_rag_search(base_url: str, arguments: dict[str, Any]) -> dict[str, An
         try:
             payload = _api_get_json(
                 base_url,
-                f"/literature/search?query={quote(query)}&top_k={top_k}&levels=paragraph"
+                f"/literature/search?query={quote(query)}&top_k={top_k}&levels=sentence"
                 f"&include_expanded_context=true&library_id={quote(lid)}&keyword_weight={kw:.6f}&rag_weight={vw:.6f}",
             )
         except Exception as exc:
