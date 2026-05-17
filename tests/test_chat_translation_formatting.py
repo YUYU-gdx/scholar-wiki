@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import time
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,7 +18,7 @@ class _FakeMessageClient:
 
 
 class _FakeRegistry:
-    def __init__(self, config_path):
+    def __init__(self, config_path=None):
         _ = config_path
 
     def create_message_client(self, provider, model, options):
@@ -34,6 +35,21 @@ class ChatTranslationFormattingTest(unittest.TestCase):
             self.assertEqual(out["translated_text"], "你好世界")
             self.assertIn('class="translation-label"', str(out["formatted_text"]))
             self.assertIn("【译文】", str(out["formatted_text"]))
+
+    def test_default_provider_registry_uses_bundle_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = ChatService(Settings(data_dir=Path(tmp)))
+            calls: list[object] = []
+
+            class _TrackingRegistry(_FakeRegistry):
+                def __init__(self, config_path=None):
+                    calls.append(config_path)
+                    super().__init__(config_path=config_path)
+
+            with patch("kn_graph.services.chat_service.ProviderRegistry", _TrackingRegistry):
+                svc.translate_text(text="hello", api_key="sk-test", compare_by_paragraph=False)
+
+            self.assertEqual(calls, [None])
 
     def test_markdown_compare_translation_per_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,6 +109,42 @@ class ChatTranslationFormattingTest(unittest.TestCase):
                 self.assertEqual(int(status.get("progress", 0) or 0), 100)
                 result = status.get("result") if isinstance(status.get("result"), dict) else {}
                 self.assertIn("ZH:A", str(result.get("translated_text", "") or ""))
+
+    def test_failed_translation_job_writes_diagnostic_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            svc = ChatService(Settings(data_dir=data_dir))
+
+            def _fail_translate(**kwargs):
+                _ = kwargs
+                raise RuntimeError("provider_timeout")
+
+            with patch.object(svc, "_translate_single_text", side_effect=_fail_translate):
+                submit = svc.submit_markdown_translation_job(
+                    "A\n\nB",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    endpoint_url="https://example.test/v1/chat/completions",
+                )
+                job_id = str(submit.get("job_id", "") or "")
+                status = {}
+                for _ in range(60):
+                    status = svc.get_translation_job(job_id)
+                    if str(status.get("status", "")) == "failed":
+                        break
+                    time.sleep(0.03)
+
+            self.assertEqual(status.get("status"), "failed")
+            log_path = data_dir / "logs" / "translation_failures.jsonl"
+            self.assertTrue(log_path.exists())
+            rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["job_id"], job_id)
+            self.assertEqual(rows[0]["phase"], "job_run")
+            self.assertEqual(rows[0]["provider"], "deepseek")
+            self.assertEqual(rows[0]["model"], "deepseek-v4-flash")
+            self.assertEqual(rows[0]["error"], "provider_timeout")
+            self.assertNotIn("api_key", rows[0])
 
     def test_markdown_compare_skips_existing_notes_and_translations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

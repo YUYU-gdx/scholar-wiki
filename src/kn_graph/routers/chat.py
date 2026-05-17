@@ -421,6 +421,19 @@ def create_router(chat_service: ChatService) -> APIRouter:
             )
             return result
         except Exception as exc:
+            try:
+                chat_service.log_translation_failure(
+                    phase="sync_route",
+                    error=exc,
+                    provider=str(body.provider or "deepseek"),
+                    model=str(body.model or "deepseek-v4-flash"),
+                    target_lang=str(body.target_lang or "zh"),
+                    endpoint_url=str(body.endpoint_url or ""),
+                    text_chars=len(text),
+                    compare_by_paragraph=bool(body.compare_by_paragraph),
+                )
+            except Exception:
+                pass
             return JSONResponse(status_code=400, content={"error": "translation_failed", "detail": str(exc)})
 
     @router.post("/translate/jobs")
@@ -440,6 +453,19 @@ def create_router(chat_service: ChatService) -> APIRouter:
             )
             return JSONResponse(status_code=202, content=result)
         except Exception as exc:
+            try:
+                chat_service.log_translation_failure(
+                    phase="job_submit",
+                    error=exc,
+                    provider=str(body.provider or "deepseek"),
+                    model=str(body.model or "deepseek-v4-flash"),
+                    target_lang=str(body.target_lang or "zh"),
+                    endpoint_url=str(body.endpoint_url or ""),
+                    text_chars=len(text),
+                    compare_by_paragraph=True,
+                )
+            except Exception:
+                pass
             return JSONResponse(status_code=400, content={"error": "translation_job_submit_failed", "detail": str(exc)})
 
     @router.get("/translate/jobs/{job_id}")

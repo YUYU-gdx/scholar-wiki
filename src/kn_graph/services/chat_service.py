@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
 
 import json
+import os
 import time
 import threading
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +29,7 @@ class ChatService:
         self._chat: Any = None
         self._translation_jobs_lock = threading.Lock()
         self._translation_jobs: dict[str, dict[str, Any]] = {}
+        self._translation_log_lock = threading.Lock()
 
     def _ensure_chat(self) -> Any:
         if self._chat is not None:
@@ -360,7 +363,7 @@ class ChatService:
 
     def get_provider_config(self) -> dict[str, Any]:
         try:
-            registry = ProviderRegistry(config_path=Path(self._settings.llm_provider_config_path))
+            registry = self._provider_registry()
             registry.reload()
             payload = registry.get_config()
             payload["config_path"] = str(registry.config_path)
@@ -369,7 +372,7 @@ class ChatService:
             return {}
 
     def update_provider_config(self, body: dict[str, Any]) -> dict[str, Any]:
-        registry = ProviderRegistry(config_path=Path(self._settings.llm_provider_config_path))
+        registry = self._provider_registry()
         saved = registry.update_config(body)
         saved["config_path"] = str(registry.config_path)
         return saved
@@ -747,7 +750,7 @@ class ChatService:
         if not resolved_base_url:
             resolved_base_url = resolved_endpoint.rsplit("/", 3)[0] if "/v1/" in resolved_endpoint else resolved_endpoint
 
-        registry = ProviderRegistry(config_path=Path(self._settings.llm_provider_config_path))
+        registry = self._provider_registry()
         options = {
             "api_key": resolved_api_key,
             "base_url": resolved_endpoint,
@@ -795,6 +798,48 @@ class ChatService:
 
     def _decorate_translation_line(self, translated: str) -> str:
         return f"{self.TRANSLATION_LABEL_HTML}: {str(translated or '').strip()}".rstrip()
+
+    def _provider_registry(self) -> ProviderRegistry:
+        configured = str(getattr(self._settings, "llm_provider_config_path", "") or "").strip()
+        if not configured or configured.replace("\\", "/") == "config/llm_providers.json":
+            return ProviderRegistry()
+        return ProviderRegistry(config_path=Path(configured))
+
+    def log_translation_failure(
+        self,
+        *,
+        phase: str,
+        error: BaseException | str,
+        job_id: str = "",
+        provider: str = "",
+        model: str = "",
+        target_lang: str = "",
+        endpoint_url: str = "",
+        text_chars: int = 0,
+        compare_by_paragraph: bool = False,
+    ) -> None:
+        try:
+            path = self._settings.data_dir / "logs" / "translation_failures.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "phase": str(phase or "").strip(),
+                "job_id": str(job_id or "").strip(),
+                "provider": str(provider or "").strip(),
+                "model": str(model or "").strip(),
+                "target_lang": str(target_lang or "").strip(),
+                "endpoint_url": str(endpoint_url or "").strip(),
+                "text_chars": int(text_chars or 0),
+                "compare_by_paragraph": bool(compare_by_paragraph),
+                "error_type": type(error).__name__ if isinstance(error, BaseException) else "Error",
+                "error": str(error),
+                "traceback": traceback.format_exc(limit=8) if isinstance(error, BaseException) else "",
+            }
+            with self._translation_log_lock:
+                with path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+        except Exception:
+            pass
 
     def translate_markdown_bilingual(
         self,
@@ -921,6 +966,17 @@ class ChatService:
                 )
                 self._update_translation_job(job_id, status="completed", progress=100, result=result)
             except Exception as exc:
+                self.log_translation_failure(
+                    phase="job_run",
+                    error=exc,
+                    job_id=job_id,
+                    provider=provider,
+                    model=model,
+                    target_lang=target_lang,
+                    endpoint_url=endpoint_url,
+                    text_chars=len(str(markdown_text or "")),
+                    compare_by_paragraph=True,
+                )
                 self._update_translation_job(job_id, status="failed", error=str(exc))
 
         threading.Thread(target=_run, name=f"translation-job-{job_id}", daemon=True).start()
@@ -1026,7 +1082,7 @@ class ChatService:
     def test_provider(self, provider: str, model: str = "", options: dict[str, Any] | None = None, prompt: str = "") -> dict[str, Any]:
         if options is None:
             options = {}
-        registry = ProviderRegistry(config_path=Path(self._settings.llm_provider_config_path))
+        registry = self._provider_registry()
         if not provider:
             return {"error": "provider_required"}
         resolved = registry.resolve_provider_id(provider)
