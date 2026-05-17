@@ -726,7 +726,7 @@ class LiteratureService:
             return f"doi_{doi_norm}"
         title = str(row.get("title", "") or "").strip()
         if title:
-            title_key = _bounded_safe_segment(title, max_length=90)
+            title_key = _bounded_safe_segment(title, max_length=42)
             if title_key and title_key not in {"job", "item", "paper", "article", "upload"}:
                 return f"title_{title_key}"
         if doi_norm:

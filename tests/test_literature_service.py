@@ -106,7 +106,29 @@ class LiteratureServiceTest(unittest.TestCase):
         paper_key = service._paper_key_for_row({"title": title, "doi": ""}, source_path=None, html_text="")
 
         self.assertTrue(paper_key.startswith("title_"))
-        self.assertLessEqual(len(paper_key), 96)
+        self.assertLessEqual(len(paper_key), 48)
+
+    def test_pdf_materialize_target_path_stays_under_windows_limit(self) -> None:
+        service = LiteratureService(
+            settings=_FakeSettings(),
+            embedding_client=_FakeEmbeddingClient(),
+            generator_client=_FakeGenerator(),
+        )
+        title = "Self-regulation, corruption, and competitiveness in extractive industries: Making transparency pay"
+        paper_key = service._paper_key_for_row({"title": title, "doi": "job::job_abc"}, source_path=None, html_text="")
+        target_root = (
+            Path(r"C:\Users\admin\AppData\Roaming\scholar-wiki\data\libraries\workspaces\ai washing")
+            / "corpus"
+            / "papers"
+            / paper_key
+            / "derived"
+            / "mineru"
+            / "latest"
+            / "images"
+            / "3dea82980b956e4637786d68313f2807b815f2e89605f6aa923b096d9c13247d.jpg"
+        )
+
+        self.assertLessEqual(len(str(target_root)), 240)
 
     def test_list_libraries_reads_workspaces_and_db_counts(self) -> None:
         service = LiteratureService(
