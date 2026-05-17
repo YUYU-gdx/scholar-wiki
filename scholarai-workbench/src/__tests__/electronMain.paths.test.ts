@@ -23,4 +23,10 @@ describe('Electron production data paths', () => {
 
     expect(source).toContain('app.isPackaged ? 8014 : 8013');
   });
+
+  it('does not enable Mica window material because it can hang maximize in VMs', () => {
+    const source = readFileSync(resolve(__dirname, '../../electron/main.cjs'), 'utf8');
+
+    expect(source).not.toContain('backgroundMaterial: "mica"');
+  });
 });

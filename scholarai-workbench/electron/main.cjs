@@ -363,7 +363,6 @@ function createMainWindow() {
       symbolColor: "#2c4368",
       height: 34,
     },
-    backgroundMaterial: "mica",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
