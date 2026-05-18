@@ -299,7 +299,7 @@ def _slug(text: str) -> str:
 
 
 def _canonical_var_id(text: str) -> str:
-    value = " ".join(str(text or "").strip().split())
+    value = " ".join(str(text or "").strip().split()).casefold()
     return f"var::{value}" if value else "var::unknown"
 
 

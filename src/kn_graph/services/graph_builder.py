@@ -27,8 +27,18 @@ def _slug(text: str) -> str:
 
 
 def _canonical_var_id(text: str) -> str:
-    value = " ".join(str(text or "").strip().split())
+    value = " ".join(str(text or "").strip().split()).casefold()
     return f"var::{value}" if value else "var::unknown"
+
+
+def _canonical_from_row(variable_name: object, stored_canonical_id: object = "") -> str:
+    name = str(variable_name or "").strip()
+    if name:
+        return _canonical_var_id(name)
+    raw = str(stored_canonical_id or "").strip()
+    if raw.startswith("var::"):
+        return _canonical_var_id(raw[5:])
+    return _canonical_var_id(raw)
 
 
 def _loads_json_list(raw: object) -> list[str]:
@@ -228,8 +238,8 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
         tgt = eff["target_var"]
         if pid not in papers_map or not src or not tgt:
             continue
-        sid = eff["source_canonical_var_id"]
-        tid = eff["target_canonical_var_id"]
+        sid = _canonical_from_row(src, eff.get("source_canonical_var_id", ""))
+        tid = _canonical_from_row(tgt, eff.get("target_canonical_var_id", ""))
         src_aliases = _loads_json_list(eff.get("source_alias_json"))
         tgt_aliases = _loads_json_list(eff.get("target_alias_json"))
         variable_nodes.setdefault(sid, {"id": sid, "type": "variable", "label": src, "name": src})
@@ -266,13 +276,13 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
         pid = mod["paper_id"]
         if pid not in papers_map:
             continue
-        mid = mod["moderator_canonical_var_id"]
         moderator = mod["moderator_var"]
+        mid = _canonical_from_row(moderator, mod.get("moderator_canonical_var_id", ""))
         variable_nodes.setdefault(mid, {"id": mid, "type": "variable", "label": moderator, "name": moderator})
-        src_id = mod.get("source_canonical_var_id", "")
-        tgt_id = mod.get("target_canonical_var_id", "")
         src = mod.get("source_var", "")
         tgt = mod.get("target_var", "")
+        src_id = _canonical_from_row(src, mod.get("source_canonical_var_id", "")) if src or mod.get("source_canonical_var_id") else ""
+        tgt_id = _canonical_from_row(tgt, mod.get("target_canonical_var_id", "")) if tgt or mod.get("target_canonical_var_id") else ""
         if src_id:
             variable_nodes.setdefault(src_id, {"id": src_id, "type": "variable", "label": src, "name": src})
         if tgt_id:
@@ -310,7 +320,7 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
             grouped_inter[key] = {
                 "paper_id": pid,
                 "output_var": row.get("output_var", ""),
-                "output_canonical_var_id": row.get("output_canonical_var_id", ""),
+                "output_canonical_var_id": _canonical_from_row(row.get("output_var", ""), row.get("output_canonical_var_id", "")),
                 "effect_form": row.get("effect_form", ""),
                 "theory_name": row.get("theory_name", ""),
                 "verification": row.get("verification", ""),
@@ -319,7 +329,7 @@ def _build_artifact_from_sqlite(db_path: Path) -> dict[str, Any]:
                 "input_canonical_var_ids": [],
             }
         iv = (row.get("input_var") or "").strip()
-        icv = (row.get("input_canonical_var_id") or "").strip()
+        icv = _canonical_from_row(iv, row.get("input_canonical_var_id", "")) if iv or row.get("input_canonical_var_id") else ""
         if iv:
             grouped_inter[key]["inputs"].append(iv)
         if icv:
