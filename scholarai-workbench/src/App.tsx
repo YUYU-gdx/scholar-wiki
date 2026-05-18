@@ -297,15 +297,22 @@ export default function App() {
                 title="创建文献库"
                 className="p-1 rounded border border-outline-variant text-outline hover:text-secondary hover:border-secondary"
                 onClick={() => {
-                  setCreatingLibrary((v) => !v);
-                  if (!creatingLibrary) setNewLibraryId('new_library');
+                  setCreatingLibrary((v) => {
+                    const next = !v;
+                    if (next) setNewLibraryId('');
+                    return next;
+                  });
                 }}
               >
                 <Plus className="w-3.5 h-3.5" />
               </button>
             </div>
             {creatingLibrary && (
-              <div className="mb-2 rounded-xl border border-outline-variant bg-surface-container-low/80 px-2 py-2 shadow-sm" key="create-lib">
+              <div
+                className="electron-no-drag mb-2 rounded-xl border border-outline-variant bg-surface-container-low/80 px-2 py-2 shadow-sm"
+                key="create-lib"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <div className="flex items-center gap-1.5">
                   <input
                     autoFocus
@@ -329,7 +336,7 @@ export default function App() {
                       }
                     }}
                     placeholder="输入文献库 ID"
-                    className="flex-1 bg-surface-container border border-outline-variant rounded-lg px-2.5 py-1.5 text-xs font-mono text-on-surface outline-none transition-colors focus:border-secondary focus:ring-1 focus:ring-secondary/30"
+                    className="electron-no-drag min-w-0 flex-1 bg-surface-container border border-outline-variant rounded-lg px-2.5 py-1.5 text-xs font-mono text-on-surface outline-none transition-colors focus:border-secondary focus:ring-1 focus:ring-secondary/30"
                   />
                   <button
                     type="button"

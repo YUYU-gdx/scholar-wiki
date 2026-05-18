@@ -400,13 +400,12 @@ export default function PipelineView() {
 
   const retryJob = async (jobId: string) => {
     try {
-      const res = await api.pipeline.retryJob(jobId);
-      const newJobId = (res as Record<string, unknown>)?.new_job as Record<string, unknown> | undefined;
-      if (newJobId?.job_id) {
-        streamJobEvents(String(newJobId.job_id));
-      }
-      fetchJobs();
-    } catch { /* ignore */ }
+      await api.pipeline.retryJob(jobId);
+      streamJobEvents(jobId);
+      await fetchJobs();
+    } catch (err) {
+      window.alert(`重试失败: ${String((err as Error)?.message || err)}`);
+    }
   };
 
   const visibleJobs = useMemo(() => pipelineJobs, [pipelineJobs]);
@@ -447,14 +446,6 @@ export default function PipelineView() {
     if (!confirm(`确认${labelMap[action]}已选中的 ${selectedJobs.length} 个任务？`)) return;
     try {
       const res = await api.pipeline.batchOperateJobs(action, selectedJobs.map((j) => j.job_id));
-      if (action === 'retry') {
-        const results = Array.isArray(res.results) ? res.results : [];
-        for (const item of results) {
-          if (item && typeof item === 'object' && item.retry_mode === 'recreate' && typeof item.job_id === 'string') {
-            // no-op: backend recreate path does not return new job id here
-          }
-        }
-      }
       const failed = Number(res.failure_count || 0);
       if (failed > 0) {
         window.alert(`批量${labelMap[action]}完成：成功 ${res.success_count}，失败 ${failed}`);
@@ -478,8 +469,8 @@ export default function PipelineView() {
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-y-auto px-8 py-8 bg-surface-container-low/30 relative">
-      <div className="flex justify-between items-end mb-8">
+    <div className="h-full min-h-0 flex-1 flex flex-col overflow-hidden px-8 py-8 bg-surface-container-low/30 relative">
+      <div className="shrink-0 flex justify-between items-end mb-6">
         <div className="space-y-1.5">
           <h2 className="text-3xl font-bold tracking-tight text-on-surface font-sans">文献导入</h2>
           <p className="text-sm text-on-surface-variant">导入论文并提取知识图谱</p>
@@ -490,7 +481,7 @@ export default function PipelineView() {
         </button>
       </div>
 
-      <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-visible glass-shadow mb-8">
+      <div className="shrink-0 bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-visible glass-shadow mb-6">
         <div className="p-4 bg-surface-container-lowest border-b border-outline-variant flex items-center gap-3">
           <CloudUpload className="w-5 h-5 text-secondary" />
           <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono">上传文档</h3>
@@ -552,7 +543,7 @@ export default function PipelineView() {
         </div>
       </div>
 
-      <div className="flex items-center gap-3 mb-4">
+      <div className="shrink-0 flex items-center gap-3 mb-4">
         <h3 className="text-xs font-bold text-on-surface uppercase tracking-widest font-mono flex-1">导入任务</h3>
         <span className="text-[13px] text-on-surface-variant font-mono">已选: {selectedJobs.length}</span>
         <button
@@ -592,11 +583,11 @@ export default function PipelineView() {
         </select>
       </div>
 
-      <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-hidden glass-shadow mb-8">
-        <div className="min-h-0 max-h-[calc(100vh-260px)] overflow-y-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-surface-container-low/10 text-xs font-mono font-black text-outline uppercase tracking-widest border-b border-outline-variant/10">
+      <div className="flex-1 min-h-0 bg-surface-container-lowest border border-outline-variant rounded-2xl overflow-hidden glass-shadow mb-4">
+        <div className="h-full min-h-0 overflow-y-auto">
+          <table className="w-full text-left border-separate border-spacing-0">
+            <thead className="sticky top-0 z-20">
+              <tr className="bg-surface-container-lowest text-xs font-mono font-black text-outline uppercase tracking-widest border-b border-outline-variant">
                 <th className="px-4 py-4 w-[44px] text-center">
                   <input type="checkbox" checked={allVisibleSelected} onChange={() => toggleSelectAllVisible()} />
                 </th>
@@ -670,7 +661,7 @@ export default function PipelineView() {
           </table>
         </div>
       </div>
-      <div className="flex items-center justify-between mb-8 text-xs text-on-surface-variant">
+      <div className="shrink-0 flex items-center justify-between text-xs text-on-surface-variant">
         <span>总任务 {totalJobs} 条 · 第 {page} / {totalPages} 页</span>
         <div className="flex items-center gap-2">
           <button
