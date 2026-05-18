@@ -1,5 +1,12 @@
 # Scholar Wiki
 
+[![Latest release](https://img.shields.io/github/v/release/YUYU-gdx/scholar-wiki?label=Latest%20Release)](https://github.com/YUYU-gdx/scholar-wiki/releases/latest)
+
+## 下载最新版
+
+Windows 安装包请从 GitHub 最新 Release 下载：
+https://github.com/YUYU-gdx/scholar-wiki/releases/latest
+
 学术知识图谱平台 — 将论文 PDF 自动解析、提取、构建为可交互的知识图谱，并支持 AI 对话问答。
 
 ## 功能概览
