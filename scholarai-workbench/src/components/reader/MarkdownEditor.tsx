@@ -31,6 +31,7 @@ import { isSelectionInside } from './selectionScope';
 import { resolveMarkdownLinkPath } from './readerLinks';
 import { sanitizeMarkdownBeforeRender } from './MarkdownRenderSanitizer';
 import { transformCallouts } from './MarkdownCallout';
+import { buildReaderPositionKey, readReaderPosition, writeReaderPosition } from './ReaderPositionStore';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -191,6 +192,12 @@ export default function MarkdownEditor({
   const readScrollRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const currentContentRef = useRef(content);
+  const readerPositionKey = useMemo(() => buildReaderPositionKey({
+    libraryId,
+    paperId,
+    absolutePath,
+    viewerType: 'markdown',
+  }), [absolutePath, libraryId, paperId]);
 
   // Ref for onContentChange to avoid stale closures in CM6 updateListener
   const onContentChangeRef = useRef(onContentChange);
@@ -203,13 +210,47 @@ export default function MarkdownEditor({
     currentContentRef.current = content;
   }, [content]);
 
-  // Reset read-mode scroll for newly opened markdown files.
   useEffect(() => {
+    if (mode !== 'read') return;
     const el = readScrollRef.current;
     if (!el) return;
-    el.scrollTop = 0;
-    el.scrollLeft = 0;
-  }, [absolutePath]);
+    const saved = readReaderPosition(readerPositionKey);
+    if (!saved) return;
+    const apply = () => {
+      el.scrollTop = saved.scrollTop || 0;
+      el.scrollLeft = saved.scrollLeft || 0;
+    };
+    const raf = window.requestAnimationFrame(() => {
+      apply();
+      window.requestAnimationFrame(apply);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [mode, readerPositionKey, renderedHtml]);
+
+  useEffect(() => {
+    if (mode !== 'read') return;
+    const el = readScrollRef.current;
+    if (!el) return;
+    let timer: number | null = null;
+    const save = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        writeReaderPosition(readerPositionKey, {
+          scrollTop: el.scrollTop,
+          scrollLeft: el.scrollLeft,
+        });
+      }, 120);
+    };
+    el.addEventListener('scroll', save, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', save);
+      if (timer !== null) window.clearTimeout(timer);
+      writeReaderPosition(readerPositionKey, {
+        scrollTop: el.scrollTop,
+        scrollLeft: el.scrollLeft,
+      });
+    };
+  }, [mode, readerPositionKey]);
 
   // Auto-save: 150ms debounced write to disk
   useEffect(() => {

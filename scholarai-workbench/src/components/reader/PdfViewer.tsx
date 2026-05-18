@@ -10,6 +10,7 @@ import { api } from '../../api';
 import { upsertNoteInMarkdown } from './NoteMarkdownSync';
 import { isSelectionInside } from './selectionScope';
 import { notesCache } from './NotesCache';
+import { buildReaderPositionKey, readReaderPosition, writeReaderPosition } from './ReaderPositionStore';
 
 interface PdfViewerProps {
   data: Uint8Array;
@@ -53,6 +54,12 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
   const [noteMeta, setNoteMeta] = useState<Map<string, { pageIndex: number; noteText: string; quote: string }>>(new Map());
   const [noteCards, setNoteCards] = useState<Array<{ noteId: string; x: number; y: number; noteText: string; quote: string }>>([]);
   const clampScale = (value: number): number => Math.max(0.6, Math.min(3.0, Math.round(value * 100) / 100));
+  const readerPositionKey = useMemo(() => buildReaderPositionKey({
+    libraryId,
+    paperId,
+    absolutePath: sourcePath,
+    viewerType: 'pdf',
+  }), [libraryId, paperId, sourcePath]);
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -515,14 +522,77 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
     };
   }, [noteMeta, highlights, scale, pageCount]);
 
+  useEffect(() => {
+    const host = selectionHostRef.current;
+    if (!host || !pageCount) return;
+    const saved = readReaderPosition(readerPositionKey);
+    if (!saved) return;
+    const apply = () => {
+      if (Number.isFinite(saved.scrollTop)) {
+        host.scrollTop = saved.scrollTop || 0;
+        host.scrollLeft = saved.scrollLeft || 0;
+        return;
+      }
+      if (saved.pageNumber) {
+        const pageEl = host.querySelector(`.react-pdf__Page[data-page-number="${saved.pageNumber}"]`) as HTMLElement | null;
+        pageEl?.scrollIntoView({ block: 'start' });
+      }
+    };
+    const raf = window.requestAnimationFrame(() => {
+      apply();
+      window.requestAnimationFrame(apply);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [pageCount, pdfUrl, readerPositionKey]);
+
+  useEffect(() => {
+    const host = selectionHostRef.current;
+    if (!host) return;
+    let timer: number | null = null;
+    const save = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const hostRect = host.getBoundingClientRect();
+        const pages = Array.from(host.querySelectorAll('.react-pdf__Page')) as HTMLElement[];
+        const visible = pages
+          .map((pageEl) => {
+            const rect = pageEl.getBoundingClientRect();
+            return {
+              pageEl,
+              distance: Math.abs(rect.top - hostRect.top),
+            };
+          })
+          .sort((a, b) => a.distance - b.distance)[0]?.pageEl;
+        const pageNumber = Number(visible?.getAttribute('data-page-number') || currentPage || 1);
+        writeReaderPosition(readerPositionKey, {
+          scrollTop: host.scrollTop,
+          scrollLeft: host.scrollLeft,
+          pageNumber,
+        });
+        if (Number.isFinite(pageNumber) && pageNumber > 0) setCurrentPage(pageNumber);
+      }, 120);
+    };
+    host.addEventListener('scroll', save, { passive: true });
+    return () => {
+      host.removeEventListener('scroll', save);
+      if (timer !== null) window.clearTimeout(timer);
+      writeReaderPosition(readerPositionKey, {
+        scrollTop: host.scrollTop,
+        scrollLeft: host.scrollLeft,
+        pageNumber: currentPage,
+      });
+    };
+  }, [currentPage, readerPositionKey]);
+
   const pdfDocumentNode = useMemo(() => (
     <Document
       key={pdfUrl || fileName}
       file={pdfUrl}
       onLoadSuccess={(pdf) => {
+        const saved = readReaderPosition(readerPositionKey);
         setPdfDocProxy(pdf as any);
         setPageCount(pdf.numPages);
-        setCurrentPage(1);
+        setCurrentPage(saved?.pageNumber || 1);
         setError(null);
         pageDimsRef.current.clear();
       }}
@@ -540,7 +610,7 @@ export default function PdfViewer({ data, fileName, paperId, libraryId, markdown
         />
       ))}
     </Document>
-  ), [pdfUrl, fileName, pageCount, scale, error]);
+  ), [pdfUrl, fileName, pageCount, scale, error, readerPositionKey]);
 
   if (!validHeader) {
     return (
