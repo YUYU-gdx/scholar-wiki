@@ -50,10 +50,13 @@ class _InMemoryJobStore:
             current_status = _norm_status(current.get("status"))
             payload = dict(updates)
             next_status = _norm_status(payload.get("status")) if "status" in payload else ""
+            retry_reset = next_status == "running" and str(payload.get("last_event", "") or "") == "retry_resume"
             if current_status in TERMINAL_JOB_STATUSES:
-                if not next_status:
+                if retry_reset:
+                    pass
+                elif not next_status:
                     return dict(current)
-                if next_status != current_status:
+                elif next_status != current_status:
                     return dict(current)
             current.update(payload)
             current["updated_at"] = _now_iso()
@@ -307,11 +310,15 @@ class _SQLiteJobStore:
             payload["requested_cancel"] = 1 if bool(payload.get("requested_cancel")) else 0
         keys = list(payload.keys())
         sets = ",".join(f"{k}=?" for k in keys)
+        is_retry_reset = _norm_status(payload.get("status")) == "running" and str(payload.get("last_event", "") or "") == "retry_resume"
         guard_sql = "lower(status) not in (?,?,?)"
         guard_args: list[Any] = ["completed", "failed", "cancelled"]
         if "status" in payload:
             guard_sql = f"({guard_sql} or lower(status)=?)"
             guard_args.append(_norm_status(payload.get("status")))
+        if is_retry_reset:
+            guard_sql = f"({guard_sql} or lower(status) in (?,?))"
+            guard_args.extend(["failed", "cancelled"])
         args = [payload[k] for k in keys] + [job_id] + guard_args
         with self._conn() as conn:
             cur = conn.execute(f"update pipeline_jobs set {sets} where job_id=? and {guard_sql}", args)

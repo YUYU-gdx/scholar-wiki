@@ -10,6 +10,7 @@ import {
 } from './settingsAgentInstall';
 
 type SectionState = { saving: boolean; message: string };
+type KeyTestState = { testing: boolean; message: string };
 type ProviderPreset = { id: string; name: string; base_url: string };
 type AgentTemplateTarget = 'pipeline_skill' | 'qa_skill' | 'claude_md' | 'agent_md';
 type AgentTemplateEditorState = {
@@ -52,6 +53,7 @@ const PROVIDER_KEY_GUIDE_URLS: Record<string, string> = {
 };
 
 const EMPTY_STATE: SectionState = { saving: false, message: '' };
+const EMPTY_TEST_STATE: KeyTestState = { testing: false, message: '' };
 const DEFAULT_PROVIDER_PRESETS: ProviderPreset[] = [
   { id: 'deepseek', name: 'DeepSeek', base_url: 'https://api.deepseek.com' },
   { id: 'openai', name: 'OpenAI', base_url: 'https://api.openai.com' },
@@ -69,6 +71,8 @@ const DEFAULT_PROVIDER_PRESETS: ProviderPreset[] = [
   { id: 'lmstudio', name: 'LM Studio', base_url: 'http://localhost:1234' },
   { id: 'new-api', name: 'New API', base_url: 'http://localhost:3000' },
 ];
+const EMBEDDING_PROVIDER_PRESETS = DEFAULT_PROVIDER_PRESETS.filter((p) => p.id === 'zhipu');
+const ONLY_AGENT_BACKEND = 'claude_code';
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -93,6 +97,14 @@ function providerKeyGuideUrl(provider: string): string {
   const normalized = String(provider || '').trim().toLowerCase();
   return PROVIDER_KEY_GUIDE_URLS[normalized] || 'https://docs.cherry-ai.com/pre-basic/settings/providers';
 }
+function keyTestMessage(result: Record<string, unknown>): string {
+  if (result.ok) {
+    const latency = Number(result.latency_ms ?? 0);
+    return latency > 0 ? `测试通过（${latency} ms）。` : '测试通过。';
+  }
+  const detail = str(result.detail || result.error || 'unknown_error');
+  return `测试失败: ${detail}`;
+}
 
 export default function SettingsView() {
   const [loading, setLoading] = useState(true);
@@ -100,6 +112,7 @@ export default function SettingsView() {
   const [payload, setPayload] = useState<GlobalSettingsPayload | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [sectionState, setSectionState] = useState<Record<string, SectionState>>({});
+  const [keyTestState, setKeyTestState] = useState<Record<string, KeyTestState>>({});
   const [installModal, setInstallModal] = useState<{
     open: boolean;
     scope: 'agent_settings' | 'pipeline_agent';
@@ -218,9 +231,34 @@ export default function SettingsView() {
 
   const getAgentIdByScope = (scope: 'agent_settings' | 'pipeline_agent'): string => {
     if (scope === 'pipeline_agent') {
-      return str(asRecord(drafts['pipeline_agent']).backend) || 'codex';
+      return ONLY_AGENT_BACKEND;
     }
-    return str(asRecord(drafts['agent_settings']).current_agent) || 'codex';
+    return ONLY_AGENT_BACKEND;
+  };
+
+  const apiKeyPayload = (category: string): Record<string, unknown> => {
+    const current = asRecord(drafts[category]);
+    const {
+      provider_presets: _drop1,
+      recommendation: _drop2,
+      reasoning_effort_options: _drop3,
+      available_agents: _drop4,
+      ...body
+    } = current;
+    if (category === 'embedding') return { ...body, provider: 'zhipu' };
+    if (category === 'pipeline_agent') return { ...body, backend: ONLY_AGENT_BACKEND };
+    if (category === 'agent_settings') return { ...body, current_agent: ONLY_AGENT_BACKEND };
+    return body;
+  };
+
+  const testApiKey = async (category: string) => {
+    setKeyTestState((prev) => ({ ...prev, [category]: { testing: true, message: '' } }));
+    try {
+      const result = await api.settings.testApiKey(category, apiKeyPayload(category));
+      setKeyTestState((prev) => ({ ...prev, [category]: { testing: false, message: keyTestMessage(result) } }));
+    } catch (err) {
+      setKeyTestState((prev) => ({ ...prev, [category]: { testing: false, message: `测试失败: ${(err as Error).message}` } }));
+    }
   };
 
   const reuseAgentConfig = (source: 'agent_settings' | 'pipeline_agent', target: 'agent_settings' | 'pipeline_agent') => {
@@ -431,11 +469,22 @@ export default function SettingsView() {
               </button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-              <label>
+              <div>
                 <div className="mb-1">MinerU API Key</div>
-                <input className="w-full px-3 py-2 rounded border" type="password" value={str(asRecord(drafts.pipeline).mineru_api_key)} onChange={(e) => updateField('pipeline', 'mineru_api_key', e.target.value)} />
+                <div className="flex gap-2">
+                  <input className="min-w-0 flex-1 px-3 py-2 rounded border" type="password" value={str(asRecord(drafts.pipeline).mineru_api_key)} onChange={(e) => updateField('pipeline', 'mineru_api_key', e.target.value)} />
+                  <button
+                    type="button"
+                    disabled={(keyTestState.pipeline ?? EMPTY_TEST_STATE).testing}
+                    onClick={() => testApiKey('pipeline')}
+                    className="px-3 py-2 rounded border border-outline-variant bg-surface-container-high text-on-surface disabled:opacity-50 text-xs whitespace-nowrap"
+                  >
+                    {(keyTestState.pipeline ?? EMPTY_TEST_STATE).testing ? '测试中...' : '测试 Key'}
+                  </button>
+                </div>
                 <div className="mt-1 text-xs text-on-surface-variant">获取地址：<a className="underline" href="https://mineru.net/apiManage/docs" target="_blank" rel="noreferrer">mineru.net/apiManage/docs</a></div>
-              </label>
+                {(keyTestState.pipeline ?? EMPTY_TEST_STATE).message ? <div className="mt-1 text-xs text-on-surface-variant">{(keyTestState.pipeline ?? EMPTY_TEST_STATE).message}</div> : null}
+              </div>
               <label>
                 <div className="mb-1">提取模式</div>
                 <input className="w-full px-3 py-2 rounded border bg-surface-container-low text-on-surface-variant" value="agent" readOnly />
@@ -491,7 +540,7 @@ export default function SettingsView() {
               const presets = (((values.provider_presets as ProviderPreset[]) || []).length > 0
                 ? ((values.provider_presets as ProviderPreset[]) || [])
                 : DEFAULT_PROVIDER_PRESETS);
-              const backend = str(values.backend) || 'codex';
+              const backend = ONLY_AGENT_BACKEND;
               const effortOptions = getEffortOptions(values, backend);
               const currentEffort = str(values.reasoning_effort).toLowerCase();
               const effectiveEffort = effortOptions.includes(currentEffort) ? currentEffort : (effortOptions[0] ?? '');
@@ -499,15 +548,8 @@ export default function SettingsView() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                   <label>
                     <div className="mb-1">Agent 后端</div>
-                    <select className="w-full px-3 py-2 rounded border" value={str(values.backend)} onChange={(e) => {
-                      const nextBackend = e.target.value;
-                      updateField('pipeline_agent', 'backend', nextBackend);
-                      const nextOptions = getEffortOptions(values, nextBackend);
-                      if (nextOptions.length > 0) updateField('pipeline_agent', 'reasoning_effort', nextOptions[0]);
-                    }}>
-                      <option value="codex">Codex</option>
+                    <select className="w-full px-3 py-2 rounded border bg-surface-container-low text-on-surface-variant" value={ONLY_AGENT_BACKEND} disabled onChange={() => {}}>
                       <option value="claude_code">Claude Code</option>
-                      <option value="gemini_cli">Gemini CLI</option>
                     </select>
                   </label>
                   <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('pipeline_agent', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
@@ -519,11 +561,22 @@ export default function SettingsView() {
                       {effortOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                     </select>
                   </label>
-                  <label>
+                  <div>
                     <div className="mb-1">API Key</div>
-                    <input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField('pipeline_agent', 'api_key', e.target.value)} />
+                    <div className="flex gap-2">
+                      <input className="min-w-0 flex-1 px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField('pipeline_agent', 'api_key', e.target.value)} />
+                      <button
+                        type="button"
+                        disabled={(keyTestState.pipeline_agent ?? EMPTY_TEST_STATE).testing}
+                        onClick={() => testApiKey('pipeline_agent')}
+                        className="px-3 py-2 rounded border border-outline-variant bg-surface-container-high text-on-surface disabled:opacity-50 text-xs whitespace-nowrap"
+                      >
+                        {(keyTestState.pipeline_agent ?? EMPTY_TEST_STATE).testing ? '测试中...' : '测试 Key'}
+                      </button>
+                    </div>
                     <div className="mt-1 text-xs text-on-surface-variant">获取地址：<a className="underline" href={providerKeyGuideUrl(str(values.provider))} target="_blank" rel="noreferrer">{providerKeyGuideUrl(str(values.provider))}</a></div>
-                  </label>
+                    {(keyTestState.pipeline_agent ?? EMPTY_TEST_STATE).message ? <div className="mt-1 text-xs text-on-surface-variant">{(keyTestState.pipeline_agent ?? EMPTY_TEST_STATE).message}</div> : null}
+                  </div>
                   <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField('pipeline_agent', 'base_url', e.target.value)} /></label>
                 </div>
               );
@@ -545,18 +598,27 @@ export default function SettingsView() {
             </div>
             {(() => {
               const values = asRecord(drafts.embedding);
-              const presets = (((values.provider_presets as ProviderPreset[]) || []).length > 0
-                ? ((values.provider_presets as ProviderPreset[]) || [])
-                : DEFAULT_PROVIDER_PRESETS);
+              const presets = EMBEDDING_PROVIDER_PRESETS;
               return (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                  <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('embedding', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
+                  <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border bg-surface-container-low text-on-surface-variant" value="zhipu" disabled onChange={() => {}}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
                   <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField('embedding', 'model', e.target.value)} /></label>
-                  <label>
+                  <div>
                     <div className="mb-1">API Key</div>
-                    <input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField('embedding', 'api_key', e.target.value)} />
+                    <div className="flex gap-2">
+                      <input className="min-w-0 flex-1 px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField('embedding', 'api_key', e.target.value)} />
+                      <button
+                        type="button"
+                        disabled={(keyTestState.embedding ?? EMPTY_TEST_STATE).testing}
+                        onClick={() => testApiKey('embedding')}
+                        className="px-3 py-2 rounded border border-outline-variant bg-surface-container-high text-on-surface disabled:opacity-50 text-xs whitespace-nowrap"
+                      >
+                        {(keyTestState.embedding ?? EMPTY_TEST_STATE).testing ? '测试中...' : '测试 Key'}
+                      </button>
+                    </div>
                     <div className="mt-1 text-xs text-on-surface-variant">获取地址：<a className="underline" href={providerKeyGuideUrl(str(values.provider))} target="_blank" rel="noreferrer">{providerKeyGuideUrl(str(values.provider))}</a></div>
-                  </label>
+                    {(keyTestState.embedding ?? EMPTY_TEST_STATE).message ? <div className="mt-1 text-xs text-on-surface-variant">{(keyTestState.embedding ?? EMPTY_TEST_STATE).message}</div> : null}
+                  </div>
                   <label className="md:col-span-2"><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField('embedding', 'endpoint_url', e.target.value)} /></label>
                 </div>
               );
@@ -619,7 +681,21 @@ export default function SettingsView() {
 
               {id === 'pipeline' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                  <label><div className="mb-1">MinerU API Key</div><input className="w-full px-3 py-2 rounded border" type="password" value={str(values.mineru_api_key)} onChange={(e) => updateField(id, 'mineru_api_key', e.target.value)} /></label>
+                  <div>
+                    <div className="mb-1">MinerU API Key</div>
+                    <div className="flex gap-2">
+                      <input className="min-w-0 flex-1 px-3 py-2 rounded border" type="password" value={str(values.mineru_api_key)} onChange={(e) => updateField(id, 'mineru_api_key', e.target.value)} />
+                      <button
+                        type="button"
+                        disabled={(keyTestState[id] ?? EMPTY_TEST_STATE).testing}
+                        onClick={() => testApiKey(id)}
+                        className="px-3 py-2 rounded border border-outline-variant bg-surface-container-high text-on-surface disabled:opacity-50 text-xs whitespace-nowrap"
+                      >
+                        {(keyTestState[id] ?? EMPTY_TEST_STATE).testing ? '测试中...' : '测试 Key'}
+                      </button>
+                    </div>
+                    {(keyTestState[id] ?? EMPTY_TEST_STATE).message ? <div className="mt-1 text-xs text-on-surface-variant">{(keyTestState[id] ?? EMPTY_TEST_STATE).message}</div> : null}
+                  </div>
                   <label><div className="mb-1">提取模式</div><input className="w-full px-3 py-2 rounded border bg-surface-container-low text-on-surface-variant" value="agent" readOnly /></label>
                   <div className="md:col-span-2 text-on-surface-variant">文献导入仅支持 Agent 模式，使用下方「Pipeline Agent」分类中配置的 Agent 后端进行三步提取（提取→消歧→笔记）。</div>
                 </div>
@@ -629,11 +705,22 @@ export default function SettingsView() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                   <label><div className="mb-1">翻译提供商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('translation', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
                   <label><div className="mb-1">翻译模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
-                  <label>
+                  <div>
                     <div className="mb-1">API Key</div>
-                    <input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} />
+                    <div className="flex gap-2">
+                      <input className="min-w-0 flex-1 px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} />
+                      <button
+                        type="button"
+                        disabled={(keyTestState[id] ?? EMPTY_TEST_STATE).testing}
+                        onClick={() => testApiKey(id)}
+                        className="px-3 py-2 rounded border border-outline-variant bg-surface-container-high text-on-surface disabled:opacity-50 text-xs whitespace-nowrap"
+                      >
+                        {(keyTestState[id] ?? EMPTY_TEST_STATE).testing ? '测试中...' : '测试 Key'}
+                      </button>
+                    </div>
                     <div className="mt-1 text-xs text-on-surface-variant">获取地址：<a className="underline" href={providerKeyGuideUrl(str(values.provider))} target="_blank" rel="noreferrer">{providerKeyGuideUrl(str(values.provider))}</a></div>
-                  </label>
+                    {(keyTestState[id] ?? EMPTY_TEST_STATE).message ? <div className="mt-1 text-xs text-on-surface-variant">{(keyTestState[id] ?? EMPTY_TEST_STATE).message}</div> : null}
+                  </div>
                   <label><div className="mb-1">目标语言</div><input className="w-full px-3 py-2 rounded border" value={str(values.target_lang)} onChange={(e) => updateField(id, 'target_lang', e.target.value)} /></label>
                   <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField(id, 'base_url', e.target.value)} /></label>
                   <label><div className="mb-1">Endpoint URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.endpoint_url)} onChange={(e) => updateField(id, 'endpoint_url', e.target.value)} /></label>
@@ -645,19 +732,30 @@ export default function SettingsView() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                   <label>
                     <div className="mb-1">当前应用 Agent</div>
-                    <select className="w-full px-3 py-2 rounded border" value={str(values.current_agent || 'codex')} onChange={(e) => updateField(id, 'current_agent', e.target.value)}>
-                      {(values.available_agents as string[] || ['codex', 'claude_code', 'gemini_cli', 'hermes', 'opencode', 'openclaw']).map((a) => (
+                    <select className="w-full px-3 py-2 rounded border bg-surface-container-low text-on-surface-variant" value={ONLY_AGENT_BACKEND} disabled onChange={() => {}}>
+                      {['claude_code'].map((a) => (
                         <option key={a} value={a}>{a.replace(/_/g, ' ')}</option>
                       ))}
                     </select>
                   </label>
                   <label><div className="mb-1">供应商</div><select className="w-full px-3 py-2 rounded border" value={str(values.provider)} onChange={(e) => applyProviderPreset('agent_settings', e.target.value)}>{presets.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></label>
                   <label><div className="mb-1">模型</div><input className="w-full px-3 py-2 rounded border" value={str(values.model)} onChange={(e) => updateField(id, 'model', e.target.value)} /></label>
-                  <label>
+                  <div>
                     <div className="mb-1">API Key</div>
-                    <input className="w-full px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} />
+                    <div className="flex gap-2">
+                      <input className="min-w-0 flex-1 px-3 py-2 rounded border" type="password" value={str(values.api_key)} onChange={(e) => updateField(id, 'api_key', e.target.value)} />
+                      <button
+                        type="button"
+                        disabled={(keyTestState[id] ?? EMPTY_TEST_STATE).testing}
+                        onClick={() => testApiKey(id)}
+                        className="px-3 py-2 rounded border border-outline-variant bg-surface-container-high text-on-surface disabled:opacity-50 text-xs whitespace-nowrap"
+                      >
+                        {(keyTestState[id] ?? EMPTY_TEST_STATE).testing ? '测试中...' : '测试 Key'}
+                      </button>
+                    </div>
                     <div className="mt-1 text-xs text-on-surface-variant">获取地址：<a className="underline" href={providerKeyGuideUrl(str(values.provider))} target="_blank" rel="noreferrer">{providerKeyGuideUrl(str(values.provider))}</a></div>
-                  </label>
+                    {(keyTestState[id] ?? EMPTY_TEST_STATE).message ? <div className="mt-1 text-xs text-on-surface-variant">{(keyTestState[id] ?? EMPTY_TEST_STATE).message}</div> : null}
+                  </div>
                   <label><div className="mb-1">Base URL</div><input className="w-full px-3 py-2 rounded border" value={str(values.base_url)} onChange={(e) => updateField(id, 'base_url', e.target.value)} /></label>
                 </div>
               )}

@@ -2,14 +2,17 @@
 
 import json
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from kn_graph._compat import bundle_root
 from kn_graph.config import Settings
+from kn_graph.services.literature_service import OpenAICompatibleEmbeddingClient
 from kn_graph.services.chat_service import ChatService
 from kn_graph.services.cherry_provider_catalog import attach_provider_meta, default_endpoint_url, provider_map
+from kn_graph.services.mineru_batch import request_file_urls
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -39,6 +42,22 @@ def _mask_sensitive_fields(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_mask_sensitive_fields(item) for item in obj]
     return obj
+
+
+def _is_masked_api_key(value: str) -> bool:
+    return str(value or "").strip().startswith("****")
+
+
+def _resolve_draft_api_key(draft_value: Any, saved_value: Any = "") -> str:
+    value = str(draft_value or "").strip()
+    if value and not _is_masked_api_key(value):
+        return value
+    return str(saved_value or "").strip()
+
+
+def _zhipu_provider_presets() -> list[dict[str, Any]]:
+    from kn_graph.services.cherry_provider_catalog import provider_presets
+    return [p for p in provider_presets() if str(p.get("id", "") or "").strip() == "zhipu"]
 
 
 class SettingsService:
@@ -108,9 +127,7 @@ class SettingsService:
         saved = store.get("categories", {}).get("pipeline_agent", {})
         if not isinstance(saved, dict):
             saved = {}
-        backend = str(saved.get("backend", "") or "codex").strip().lower()
-        if backend not in ("codex", "claude_code", "gemini_cli"):
-            backend = "codex"
+        backend = "claude_code"
         provider = str(saved.get("provider", "") or "deepseek").strip()
         base_url = str(saved.get("base_url", "") or "").strip()
         if not base_url:
@@ -131,9 +148,7 @@ class SettingsService:
             "reasoning_effort": str(saved.get("reasoning_effort", "") or ""),
             "provider_presets": provider_presets(),
             "reasoning_effort_options": {
-                "codex": ["none", "minimal", "low", "medium", "high", "xhigh"],
                 "claude_code": ["low", "medium", "high", "max"],
-                "gemini_cli": [],
             },
         }
 
@@ -144,21 +159,15 @@ class SettingsService:
         saved = categories.get("pipeline_agent", {}) if isinstance(categories.get("pipeline_agent"), dict) else {}
         if not isinstance(saved, dict):
             saved = {}
-        if "backend" in body:
-            backend = str(body.get("backend", "") or "codex").strip().lower()
-            if backend not in ("codex", "claude_code", "gemini_cli"):
-                raise ValueError("settings_validation_failed: pipeline_agent.backend")
-            saved["backend"] = backend
-        backend = str(saved.get("backend", "") or "codex").strip().lower()
+        saved["backend"] = "claude_code"
+        backend = "claude_code"
         for key in ("provider", "model", "api_key", "base_url"):
             if key in body:
                 saved[key] = str(body.get(key, "") or "").strip()
         if "reasoning_effort" in body:
             effort = str(body.get("reasoning_effort", "") or "").strip().lower()
             allowed_by_backend = {
-                "codex": {"", "none", "minimal", "low", "medium", "high", "xhigh"},
                 "claude_code": {"", "low", "medium", "high", "max"},
-                "gemini_cli": {""},
             }
             allowed = allowed_by_backend.get(backend, {""})
             if effort not in allowed:
@@ -220,12 +229,12 @@ class SettingsService:
             )
 
     def _get_embedding_category(self) -> dict[str, Any]:
-        from kn_graph.services.cherry_provider_catalog import default_embedding_endpoint_url, provider_presets  # noqa: F811
+        from kn_graph.services.cherry_provider_catalog import default_embedding_endpoint_url  # noqa: F811
         store = self._read_store()
         saved = store.get("categories", {}).get("embedding", {})
         if not isinstance(saved, dict):
             saved = {}
-        provider = str(saved.get("provider", "") or "zhipu").strip()
+        provider = "zhipu"
         providers = saved.get("providers", {}) if isinstance(saved.get("providers"), dict) else {}
         provider_data = providers.get(provider, {}) if isinstance(providers, dict) else {}
         if not isinstance(provider_data, dict):
@@ -243,7 +252,7 @@ class SettingsService:
             "model": model,
             "api_key": str(provider_data.get("api_key", "") or ""),
             "endpoint_url": endpoint_url,
-            "provider_presets": provider_presets(),
+            "provider_presets": _zhipu_provider_presets(),
         }
 
     def _save_embedding_category(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -253,10 +262,8 @@ class SettingsService:
         saved = categories.get("embedding", {}) if isinstance(categories, dict) else {}
         if not isinstance(saved, dict):
             saved = {}
-        requested = str(body.get("provider", "") or "").strip()
-        if requested:
-            saved["provider"] = requested
-        active = str(saved.get("provider", "") or "zhipu").strip()
+        saved["provider"] = "zhipu"
+        active = "zhipu"
         saved.setdefault("providers", {})
         if not isinstance(saved.get("providers"), dict):
             saved["providers"] = {}
@@ -335,6 +342,194 @@ class SettingsService:
         if key == "agent_settings":
             return _mask_sensitive_fields(self._chat_service.save_agent_settings(payload))
         raise KeyError(f"unknown_settings_category:{key}")
+
+    def test_api_key(self, category: str, body: dict[str, Any]) -> dict[str, Any]:
+        key = str(category or "").strip().lower()
+        payload = body if isinstance(body, dict) else {}
+        try:
+            if key == "pipeline":
+                return self._test_mineru_api_key(payload)
+            if key == "embedding":
+                return self._test_embedding_api_key(payload)
+            if key in {"pipeline_agent", "translation", "agent_settings"}:
+                return self._test_chat_api_key(key, payload)
+            raise KeyError(f"unknown_settings_category:{key}")
+        except KeyError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "category": key, "error": "api_key_test_failed", "detail": str(exc)}
+
+    def _saved_api_key_for_category(self, category: str) -> str:
+        key = str(category or "").strip().lower()
+        if key == "pipeline":
+            return str(self._get_pipeline_category().get("mineru_api_key", "") or "").strip()
+        if key == "pipeline_agent":
+            return str(self._get_pipeline_agent_category().get("api_key", "") or "").strip()
+        if key == "embedding":
+            return str(self._get_embedding_category().get("api_key", "") or "").strip()
+        if key == "translation":
+            return str(self._get_translation_category().get("api_key", "") or "").strip()
+        if key == "agent_settings":
+            return str(self._chat_service.get_agent_settings().get("api_key", "") or "").strip()
+        return ""
+
+    def _test_mineru_api_key(self, payload: dict[str, Any]) -> dict[str, Any]:
+        api_key = _resolve_draft_api_key(payload.get("mineru_api_key"), self._saved_api_key_for_category("pipeline"))
+        if not api_key:
+            return {"ok": False, "category": "pipeline", "error": "api_key_required"}
+        base_url = str(payload.get("base_url", "") or "https://mineru.net/api/v4").strip()
+        url = f"{base_url.rstrip('/')}/file-urls/batch"
+        test_payload = {
+            "files": [{"name": "settings_api_key_test.pdf", "data_id": "settings-api-key-test"}],
+            "model_version": "vlm",
+            "enable_table": True,
+            "is_ocr": False,
+            "enable_formula": True,
+            "language": "auto",
+        }
+        begin = time.perf_counter()
+        resp = request_file_urls(
+            url,
+            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            test_payload,
+            timeout=20,
+        )
+        latency_ms = int((time.perf_counter() - begin) * 1000)
+        if resp.status_code in {401, 403}:
+            return {"ok": False, "category": "pipeline", "error": "api_key_invalid", "status_code": resp.status_code, "latency_ms": latency_ms}
+        if resp.status_code >= 500:
+            return {"ok": False, "category": "pipeline", "error": "provider_unavailable", "status_code": resp.status_code, "latency_ms": latency_ms}
+        try:
+            data = resp.json()
+        except Exception:
+            data = {}
+        code = data.get("code") if isinstance(data, dict) else None
+        if resp.status_code == 200 and (code in (0, "0", None)):
+            return {"ok": True, "category": "pipeline", "provider": "mineru", "latency_ms": latency_ms}
+        return {
+            "ok": resp.status_code < 500 and code not in (401, 403, "401", "403"),
+            "category": "pipeline",
+            "provider": "mineru",
+            "status_code": resp.status_code,
+            "remote_code": code,
+            "latency_ms": latency_ms,
+        }
+
+    def _test_embedding_api_key(self, payload: dict[str, Any]) -> dict[str, Any]:
+        api_key = _resolve_draft_api_key(payload.get("api_key"), self._saved_api_key_for_category("embedding"))
+        if not api_key:
+            return {"ok": False, "category": "embedding", "error": "api_key_required"}
+        provider = "zhipu"
+        model = str(payload.get("model", "") or self._get_embedding_category().get("model", "") or "embedding-3").strip()
+        endpoint_url = str(payload.get("endpoint_url", "") or self._get_embedding_category().get("endpoint_url", "") or "").strip()
+        if not endpoint_url:
+            endpoint_url = "https://open.bigmodel.cn/api/paas/v4/embeddings"
+        begin = time.perf_counter()
+        client = OpenAICompatibleEmbeddingClient(
+            api_key=api_key,
+            model=model,
+            endpoint_url=endpoint_url,
+            timeout_seconds=20,
+            max_retries=1,
+            batch_size=1,
+        )
+        vectors = client.embed_texts(["connection test"])
+        latency_ms = int((time.perf_counter() - begin) * 1000)
+        return {"ok": True, "category": "embedding", "provider": provider, "model": model, "vector_dim": len(vectors[0]) if vectors else 0, "latency_ms": latency_ms}
+
+    def _test_chat_api_key(self, category: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if category == "translation":
+            return self._test_translation_api_key(payload)
+        if category in {"pipeline_agent", "agent_settings"}:
+            return self._test_agent_api_key(category, payload)
+        return {"ok": False, "category": category, "error": "unsupported_api_key_test"}
+
+    def _test_translation_api_key(self, payload: dict[str, Any]) -> dict[str, Any]:
+        saved = self._saved_chat_config("translation")
+        api_key = _resolve_draft_api_key(payload.get("api_key"), saved.get("api_key", ""))
+        if not api_key:
+            return {"ok": False, "category": "translation", "error": "api_key_required"}
+        provider = str(payload.get("provider", "") or saved.get("provider", "") or "deepseek").strip()
+        model = str(payload.get("model", "") or saved.get("model", "") or "deepseek-v4-flash").strip()
+        target_lang = str(payload.get("target_lang", "") or saved.get("target_lang", "") or "zh").strip()
+        base_url = str(payload.get("base_url", "") or saved.get("base_url", "") or "").strip()
+        endpoint_url = str(payload.get("endpoint_url", "") or saved.get("endpoint_url", "") or "").strip()
+        begin = time.perf_counter()
+        result = self._chat_service.translate_text(
+            text="Connection test.",
+            target_lang=target_lang,
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            endpoint_url=endpoint_url,
+            compare_by_paragraph=False,
+        )
+        latency_ms = int((time.perf_counter() - begin) * 1000)
+        return {
+            "ok": True,
+            "category": "translation",
+            "provider": result.get("provider", provider) if isinstance(result, dict) else provider,
+            "model": result.get("model", model) if isinstance(result, dict) else model,
+            "latency_ms": latency_ms,
+        }
+
+    def _test_agent_api_key(self, category: str, payload: dict[str, Any]) -> dict[str, Any]:
+        saved = self._saved_chat_config(category)
+        api_key = _resolve_draft_api_key(payload.get("api_key"), saved.get("api_key", ""))
+        if not api_key:
+            return {"ok": False, "category": category, "error": "api_key_required"}
+        backend = "claude_code"
+        provider = str(payload.get("provider", "") or saved.get("provider", "") or "deepseek").strip()
+        model = str(payload.get("model", "") or saved.get("model", "") or "").strip()
+        base_url = str(payload.get("base_url", "") or saved.get("base_url", "") or "").strip()
+        if not base_url:
+            base_url = str(provider_map().get(provider, {}).get("base_url", "") or "").strip()
+        agent_config = {
+            "provider": provider,
+            "model": model,
+            "api_key": api_key,
+            "base_url": base_url,
+            "reasoning_effort": str(payload.get("reasoning_effort", "") or saved.get("reasoning_effort", "") or "").strip().lower(),
+        }
+        begin = time.perf_counter()
+        runner = self._build_agent_runner(backend, agent_config)
+        result = runner.run_turn(
+            "Reply with OK only.",
+            workdir=str(self._settings.workspaces_dir.resolve()),
+            library_id="",
+            runtime_overrides={},
+        )
+        latency_ms = int((time.perf_counter() - begin) * 1000)
+        answer = str(result.get("answer", "") or "").strip() if isinstance(result, dict) else ""
+        return {
+            "ok": True,
+            "category": category,
+            "backend": backend,
+            "provider": provider,
+            "model": model,
+            "response_preview": answer[:120],
+            "latency_ms": latency_ms,
+        }
+
+    def _build_agent_runner(self, backend: str, agent_config: dict[str, Any]) -> Any:
+        from kn_graph.services.agent_runner import ClaudeCodeRunner, CodexRunner, GeminiCLIRunner
+        if backend == "claude_code":
+            return ClaudeCodeRunner(config=agent_config)
+        if backend == "gemini_cli":
+            return GeminiCLIRunner(config=agent_config)
+        model = str(agent_config.get("model", "") or "gpt-5.2").strip()
+        return CodexRunner(codex_bin="codex", model=model, agent_config=agent_config)
+
+    def _saved_chat_config(self, category: str) -> dict[str, Any]:
+        key = str(category or "").strip().lower()
+        if key == "pipeline_agent":
+            return self._get_pipeline_agent_category()
+        if key == "translation":
+            return self._get_translation_category()
+        if key == "agent_settings":
+            return self._chat_service.get_agent_settings()
+        return {}
 
     def get_agent_template(self, target: str) -> dict[str, Any]:
         path = self._resolve_agent_template_path(target)

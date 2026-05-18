@@ -7,7 +7,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-import io
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse
@@ -56,6 +55,26 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_RETRY_SETTINGS_OPTION_KEYS = {
+    "mineru_api_key",
+    "extraction_mode",
+    "pipeline_agent_backend",
+    "pipeline_agent_provider",
+    "pipeline_agent_model",
+    "pipeline_agent_api_key",
+    "pipeline_agent_base_url",
+    "pipeline_agent_reasoning_effort",
+}
+
+
+def _drop_retry_settings_overrides(options: dict[str, Any]) -> dict[str, Any]:
+    """Remove persisted Settings-derived options so retry uses current Settings values."""
+    out = dict(options)
+    for key in _RETRY_SETTINGS_OPTION_KEYS:
+        out.pop(key, None)
+    return out
+
+
 def create_router(pipeline_service: PipelineService) -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["pipeline"])
 
@@ -67,30 +86,6 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
                 return JSONResponse(status_code=404, content={"error": "job_not_found", "job_id": job_id})
 
             run_dir = pipeline_service.resolve_run_dir(row)
-            if run_dir and (run_dir / "parse_meta.json").exists():
-                source_path = pipeline_service.resolve_retry_source_pdf(row)
-                if source_path is None:
-                    return JSONResponse(status_code=404, content={"error": "retry_source_pdf_missing", "job_id": job_id})
-                raw_options = str(row.get("options_json", "") or "").strip()
-                parsed_options: dict[str, Any] = {}
-                if raw_options:
-                    try:
-                        parsed = json.loads(raw_options)
-                        if isinstance(parsed, dict):
-                            parsed_options = parsed
-                    except Exception:
-                        parsed_options = {}
-                parsed_options["_job_root"] = str(run_dir.parent)
-                parsed_options["library_id"] = str(row.get("library_id", "") or "").strip()
-                pipeline_service.update_job(job_id, {"status": "running", "stage": "accepted", "error_code": "", "error_detail": "", "progress": 0, "last_event": "retry_resume"})
-                from kn_graph.services.pipeline_runtime import dispatch_inline
-                dispatch_inline(
-                    pipeline_service.store, job_id,
-                    str(source_path.resolve()), parsed_options,
-                    pipeline_service.runs_root,
-                )
-                return JSONResponse(status_code=202, content={"job_id": job_id, "resumed": True})
-
             source_path = pipeline_service.resolve_retry_source_pdf(row)
             if source_path is None:
                 return JSONResponse(status_code=404, content={"error": "retry_source_pdf_missing", "job_id": job_id})
@@ -106,22 +101,33 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
                         parsed_options = parsed
                 except Exception:
                     parsed_options = {}
-            parsed_options.pop("_job_root", None)
-            parsed_options.pop("_workspace_path", None)
-            with source_path.open("rb") as fp:
-                retry_upload = UploadFile(
-                    filename=str(row.get("file_name", "") or source_path.name),
-                    file=io.BytesIO(fp.read()),
-                )
-                created = await create_parse_extract_job(file=retry_upload, library_id=lib, options=json.dumps(parsed_options, ensure_ascii=False))
-            payload: dict[str, Any]
-            if isinstance(created.body, (bytes, bytearray)):
-                payload = json.loads(created.body.decode("utf-8"))
-            elif isinstance(created.body, str):
-                payload = json.loads(created.body)
+            parsed_options = _drop_retry_settings_overrides(parsed_options)
+            if run_dir is not None:
+                parsed_options["_job_root"] = str(run_dir.parent.resolve())
             else:
-                payload = {}
-            return JSONResponse(status_code=202, content={"source_job_id": job_id, "new_job": payload})
+                parsed_options.pop("_job_root", None)
+            parsed_options.pop("_workspace_path", None)
+            parsed_options["library_id"] = lib
+            pipeline_service.update_job(
+                job_id,
+                {
+                    "status": "running",
+                    "stage": "accepted",
+                    "error_code": "",
+                    "error_detail": "",
+                    "progress": 0,
+                    "last_event": "retry_resume",
+                    "requested_cancel": False,
+                },
+            )
+            pipeline_runtime.dispatch_inline(
+                pipeline_service.store,
+                job_id,
+                str(source_path.resolve()),
+                parsed_options,
+                pipeline_service.runs_root,
+            )
+            return JSONResponse(status_code=202, content={"job_id": job_id, "resumed": True, "retry_mode": "resume"})
         if isinstance(result, dict) and "error" in result and result.get("error") == "job_not_retryable":
             return JSONResponse(status_code=400, content=result)
         return result

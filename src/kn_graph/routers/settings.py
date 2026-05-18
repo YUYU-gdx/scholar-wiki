@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from kn_graph.services.settings_service import SettingsService
 
@@ -18,6 +19,19 @@ def create_router(settings_service: SettingsService) -> APIRouter:
     @router.get("/schema")
     async def get_settings_schema():
         return settings_service.get_schema()
+
+    @router.post("/test-key")
+    async def test_settings_api_key(body: dict[str, Any]):
+        category = str(body.get("category", "") or "").strip()
+        payload = body.get("config", {})
+        if not category:
+            return JSONResponse(status_code=400, content={"error": "category_required"})
+        if not isinstance(payload, dict):
+            payload = {}
+        try:
+            return await run_in_threadpool(settings_service.test_api_key, category, payload)
+        except KeyError as exc:
+            return JSONResponse(status_code=404, content={"error": str(exc)})
 
     @router.put("/{category}")
     async def update_settings(category: str, body: dict[str, Any]):

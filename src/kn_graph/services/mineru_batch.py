@@ -171,6 +171,15 @@ def _append_poll(task_path: Path, row: dict[str, Any]) -> None:
     write_json_atomic(poll_path, payload)
 
 
+def request_file_urls(
+    create_url: str,
+    headers: dict[str, str],
+    create_payload: dict[str, Any],
+    timeout: int = 60,
+) -> requests.Response:
+    return requests.post(create_url, headers=headers, json=create_payload, timeout=timeout)
+
+
 def _submit_one(
     item: dict[str, Any],
     args: argparse.Namespace,
@@ -205,7 +214,7 @@ def _submit_one(
         started_at = _now_iso()
         try:
             _log(f"[submit] item={item_id} attempt={attempt}/{attempts} ask upload url")
-            res = requests.post(create_url, headers=headers, json=create_payload, timeout=60)
+            res = request_file_urls(create_url, headers, create_payload, timeout=60)
             (task_path / "response_file_urls_status.txt").write_text(str(res.status_code), encoding="utf-8")
             (task_path / "response_file_urls.json").write_text(res.text, encoding="utf-8")
             if res.status_code != 200:

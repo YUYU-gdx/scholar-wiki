@@ -29,6 +29,7 @@ import { convertScriptOnlyKatexToHtml } from './katexScriptAlignment';
 import { useApp } from '../../app-context';
 import { isSelectionInside } from './selectionScope';
 import { resolveMarkdownLinkPath } from './readerLinks';
+import { sanitizeMarkdownBeforeRender } from './MarkdownRenderSanitizer';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -113,14 +114,15 @@ const CALLOUT_ICONS: Record<string, string> = {
   info: '<svg viewBox="0 0 24 24" fill="none" stroke="#00b8d4" stroke-width="2" style="width:100%;height:100%"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
   example: '<svg viewBox="0 0 24 24" fill="none" stroke="#9c27b0" stroke-width="2" style="width:100%;height:100%"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>',
   quote: '<svg viewBox="0 0 24 24" fill="#9e9e9e" style="width:100%;height:100%"><path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/></svg>',
+  translation: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:100%;height:100%"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>',
 };
 
 const CALLOUT_LABELS: Record<string, string> = {
   note: 'Note', warning: 'Warning', danger: 'Danger', tip: 'Tip',
-  info: 'Info', example: 'Example', quote: 'Quote',
+  info: 'Info', example: 'Example', quote: 'Quote', translation: '译文',
 };
 
-function transformCallouts(doc: Document): void {
+export function transformCallouts(doc: Document): void {
   const blockquotes = Array.from(doc.querySelectorAll('blockquote'));
   for (const bq of blockquotes) {
     const firstP = bq.querySelector(':scope > p:first-child');
@@ -397,7 +399,7 @@ export default function MarkdownEditor({
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      const clean = DOMPurify.sanitize(md.render(text), {
+      const clean = DOMPurify.sanitize(md.render(sanitizeMarkdownBeforeRender(text)), {
         ALLOWED_TAGS: [
           'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
           'strong', 'em', 's', 'mark', 'u', 'sub', 'sup',

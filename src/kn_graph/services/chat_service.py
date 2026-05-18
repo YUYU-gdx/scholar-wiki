@@ -1,7 +1,9 @@
 ﻿from __future__ import annotations
 
 import json
+import html
 import os
+import re
 import time
 import threading
 import traceback
@@ -23,6 +25,8 @@ from kn_graph.services.agent_runner import CodexRunner  # noqa: E402
 
 class ChatService:
     TRANSLATION_LABEL_HTML = '<span class="translation-label">【译文】</span>'
+    TRANSLATION_CALLOUT_HEADER = "[!TRANSLATION] 译文"
+    FORMULA_PLACEHOLDER_PREFIX = "__KN_FORMULA_"
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -207,7 +211,7 @@ class ChatService:
                         return agent
             except Exception:
                 pass
-        return "codex"
+        return "claude_code"
 
     def _set_current_agent(self, agent_id: str) -> None:
         path = self._agent_settings_path()
@@ -237,10 +241,10 @@ class ChatService:
     def get_agent_settings(self) -> dict[str, Any]:
         """Read agent settings from the active agent's config file."""
         from kn_graph.services.cherry_provider_catalog import provider_map, provider_presets  # noqa: F811
-        known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
+        known = {"claude_code"}
         current_agent = self._get_current_agent()
         if current_agent not in known:
-            current_agent = "codex"
+            current_agent = "claude_code"
         config = self._read_agent_config(current_agent)
         defaults = self._default_agent_provider_config(current_agent)
         provider_id = str(config.get("provider", "") or defaults["provider"]).strip()
@@ -263,14 +267,14 @@ class ChatService:
 
     def save_agent_settings(self, body: dict[str, Any]) -> dict[str, Any]:
         from kn_graph.services.cherry_provider_catalog import provider_map  # noqa: F811
-        known = {"codex", "claude_code", "gemini_cli", "hermes", "opencode", "openclaw"}
+        known = {"claude_code"}
         # Handle agent switch
         requested_agent = str(body.get("current_agent", "") or "").strip()
         if requested_agent and requested_agent in known:
             self._set_current_agent(requested_agent)
         current_agent = self._get_current_agent()
         if current_agent not in known:
-            current_agent = "codex"
+            current_agent = "claude_code"
             self._set_current_agent(current_agent)
         # Build updates for agent config file
         updates: dict[str, Any] = {}
@@ -757,13 +761,14 @@ class ChatService:
             "timeout_seconds": 90,
             "temperature": 0.1,
         }
+        protected_src, formulas = self._protect_markdown_formulas(src)
         messages = [
-            {"role": "system", "content": f"You are a translator. Translate the user text into {resolved_target}. Output translation only."},
-            {"role": "user", "content": src},
+            {"role": "system", "content": f"You are a translator. Translate the user text into {resolved_target}. Output translation only. Preserve placeholders like __KN_FORMULA_0__ exactly."},
+            {"role": "user", "content": protected_src},
         ]
         begin = time.perf_counter()
         client = registry.create_message_client(provider=resolved_provider, model=resolved_model, options=options)
-        translated = str(client.complete_messages(messages=messages, timeout_seconds=90) or "").strip()
+        translated = self._restore_markdown_formulas(str(client.complete_messages(messages=messages, timeout_seconds=90) or "").strip(), formulas)
         latency_ms = int((time.perf_counter() - begin) * 1000)
         decorated = self._decorate_translation_line(translated)
         return {
@@ -797,7 +802,43 @@ class ChatService:
         )
 
     def _decorate_translation_line(self, translated: str) -> str:
-        return f"{self.TRANSLATION_LABEL_HTML}: {str(translated or '').strip()}".rstrip()
+        safe = self._escape_translation_html_preserving_formulas(str(translated or "").strip())
+        if not safe:
+            return f"> {self.TRANSLATION_CALLOUT_HEADER}"
+        lines = safe.splitlines()
+        return "\n".join([f"> {self.TRANSLATION_CALLOUT_HEADER}", *[f"> {line}" if line else ">" for line in lines]]).rstrip()
+
+    def _escape_translation_html_preserving_formulas(self, text: str) -> str:
+        protected, formulas = self._protect_markdown_formulas(text)
+        return self._restore_markdown_formulas(html.escape(protected, quote=False), formulas)
+
+    def _protect_markdown_formulas(self, text: str) -> tuple[str, list[str]]:
+        src = str(text or "")
+        formulas: list[str] = []
+        pattern = re.compile(
+            r"(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\\begin\{(?:equation|align|aligned|gather|multline)\*?\}[\s\S]*?\\end\{(?:equation|align|aligned|gather|multline)\*?\}|\$(?!\$)(?:\\.|[^$\n])+\$)",
+            re.MULTILINE,
+        )
+
+        def repl(match: re.Match[str]) -> str:
+            formulas.append(match.group(0))
+            return f"{self.FORMULA_PLACEHOLDER_PREFIX}{len(formulas) - 1}__"
+
+        return pattern.sub(repl, src), formulas
+
+    def _restore_markdown_formulas(self, text: str, formulas: list[str]) -> str:
+        out = str(text or "")
+        for idx, formula in enumerate(formulas):
+            out = out.replace(f"{self.FORMULA_PLACEHOLDER_PREFIX}{idx}__", formula)
+        return out
+
+    def _is_math_only_block(self, block: str) -> bool:
+        text = str(block or "").strip()
+        if not text:
+            return False
+        protected, formulas = self._protect_markdown_formulas(text)
+        without_placeholders = re.sub(rf"{re.escape(self.FORMULA_PLACEHOLDER_PREFIX)}\d+__", "", protected).strip()
+        return bool(formulas) and not without_placeholders
 
     def _provider_registry(self) -> ProviderRegistry:
         configured = str(getattr(self._settings, "llm_provider_config_path", "") or "").strip()
@@ -882,6 +923,8 @@ class ChatService:
                 continue
             if self._is_fenced_code_block(candidate):
                 continue
+            if self._is_math_only_block(candidate):
+                continue
             if self._is_reader_note_block(candidate):
                 continue
             if self._is_existing_translation_block(candidate):
@@ -906,12 +949,15 @@ class ChatService:
                 continue
             if self._is_fenced_code_block(block):
                 continue
+            if self._is_math_only_block(block):
+                continue
             if self._is_reader_note_block(block):
                 continue
             if self._is_existing_translation_block(block):
                 continue
+            protected_block, formulas = self._protect_markdown_formulas(block)
             result = self._translate_single_text(
-                text=block,
+                text=protected_block,
                 target_lang=target_lang,
                 provider=provider,
                 model=model,
@@ -919,7 +965,7 @@ class ChatService:
                 base_url=base_url,
                 endpoint_url=endpoint_url,
             )
-            translated = str(result.get("translated_text", "") or "").strip()
+            translated = self._restore_markdown_formulas(str(result.get("translated_text", "") or "").strip(), formulas)
             out.append(self._decorate_translation_line(translated))
             translated_blocks += 1
             total_latency += int(result.get("latency_ms", 0) or 0)
@@ -1075,6 +1121,8 @@ class ChatService:
         if lower.startswith("【译文】"):
             return True
         if lower.startswith('<span class="translation-label">【译文】</span>:'):
+            return True
+        if lower.startswith(f"> {self.TRANSLATION_CALLOUT_HEADER}".lower()):
             return True
         if label_lower in lower:
             return True

@@ -379,6 +379,12 @@ export const api = {
         body: JSON.stringify(payload),
       });
     },
+    testApiKey(category: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+      return jsonFetch('/settings/test-key', {
+        method: 'POST',
+        body: JSON.stringify({ category, config: payload }),
+      });
+    },
     getAgentTemplate(target: string): Promise<AgentTemplatePayload> {
       return jsonFetch(`/settings/agent-templates/${encodeURIComponent(target)}`);
     },
