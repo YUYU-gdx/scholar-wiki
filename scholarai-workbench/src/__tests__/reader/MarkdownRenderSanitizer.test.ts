@@ -38,4 +38,28 @@ describe('sanitizeMarkdownBeforeRender', () => {
 
     expect(sanitizeMarkdownBeforeRender(raw)).toBe(raw);
   });
+
+  it('deindents html table blocks so markdown does not render them as code blocks', () => {
+    const raw = [
+      'Before',
+      '',
+      '    <table>',
+      '      <thead>',
+      '        <tr><th>Feature</th><th>Value</th></tr>',
+      '      </thead>',
+      '      <tbody>',
+      '        <tr><td>AIW</td><td>0.082</td></tr>',
+      '      </tbody>',
+      '    </table>',
+      '',
+      '    const unchanged = true;',
+    ].join('\n');
+
+    const sanitized = sanitizeMarkdownBeforeRender(raw);
+
+    expect(sanitized).toContain('<table>\n  <thead>');
+    expect(sanitized).toContain('    <tr><th>Feature</th><th>Value</th></tr>');
+    expect(sanitized).toContain('</table>');
+    expect(sanitized).toContain('    const unchanged = true;');
+  });
 });

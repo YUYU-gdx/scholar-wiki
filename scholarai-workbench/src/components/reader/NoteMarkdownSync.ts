@@ -1,3 +1,5 @@
+import { buildMarkdownCallout, READER_NOTE_CALLOUT_TITLE, READER_NOTE_CALLOUT_TYPE } from './MarkdownCallout';
+
 export interface NoteBlock {
   id: string;
   pageIndex: number;
@@ -27,10 +29,8 @@ function findReaderNoteBlockEnd(src: string, start: number): number {
   return upperBound;
 }
 
-function toQuotedLines(value: string): string {
-  const normalized = String(value || '').replace(/\r\n/g, '\n');
-  const lines = normalized.split('\n');
-  return lines.map((line) => `> ${line}`).join('\n');
+function toCalloutBodyLines(value: string): string[] {
+  return normalizeNewlines(value).split('\n');
 }
 
 function buildAnchorCandidates(anchorText: string, quote: string): string[] {
@@ -154,12 +154,14 @@ export function buildNoteBlock(
   opts?: { time?: string; pageIndex?: number; rect?: string; quads?: string },
 ): string {
   const time = opts?.time || new Date().toISOString();
-  const pageLine = opts?.pageIndex != null && opts.pageIndex >= 0 ? `>\n> Page: ${opts.pageIndex}\n` : '';
-  const rectLine = opts?.rect ? `>\n> Rect: ${opts.rect}\n` : '';
-  const quadsLine = opts?.quads ? `>\n> Quads: ${opts.quads}\n` : '';
-  const quoteLines = toQuotedLines(String(quote || ''));
-  const noteLines = toQuotedLines(String(note || ''));
-  return `\n\n> [!NOTE] Reader Note\n>\n> Note ID: ${id}\n${pageLine}${rectLine}${quadsLine}>\n> Quote:\n${quoteLines}\n>\n> Note:\n${noteLines}\n>\n> Time:\n> ${time}\n`;
+  const bodyLines = ['', `Note ID: ${id}`];
+  if (opts?.pageIndex != null && opts.pageIndex >= 0) bodyLines.push('', `Page: ${opts.pageIndex}`);
+  if (opts?.rect) bodyLines.push('', `Rect: ${opts.rect}`);
+  if (opts?.quads) bodyLines.push('', `Quads: ${opts.quads}`);
+  bodyLines.push('', 'Quote:', ...toCalloutBodyLines(String(quote || '')));
+  bodyLines.push('', 'Note:', ...toCalloutBodyLines(String(note || '')));
+  bodyLines.push('', 'Time:', time);
+  return `\n\n${buildMarkdownCallout(READER_NOTE_CALLOUT_TYPE, READER_NOTE_CALLOUT_TITLE, bodyLines)}\n`;
 }
 
 export function extractNoteBlocks(raw: string): Array<{ id: string; start: number; end: number; text: string }> {
