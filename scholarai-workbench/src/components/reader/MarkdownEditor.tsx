@@ -32,6 +32,7 @@ import { resolveMarkdownLinkPath } from './readerLinks';
 import { sanitizeMarkdownBeforeRender } from './MarkdownRenderSanitizer';
 import { transformCallouts } from './MarkdownCallout';
 import { buildReaderPositionKey, readReaderPosition, writeReaderPosition } from './ReaderPositionStore';
+import { hasTranslationBlocks, removeTranslationBlocks } from './TranslationMarkdown';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -174,6 +175,7 @@ export default function MarkdownEditor({
   const [docTranslationStatus, setDocTranslationStatus] = useState('');
   const [docHasActiveTask, setDocHasActiveTask] = useState(false);
   const docTranslationPollingRef = useRef(false);
+  const hasDocumentTranslations = useMemo(() => hasTranslationBlocks(text), [text]);
   const [noteRanges, setNoteRanges] = useState<Array<{
     start: number;
     end: number;
@@ -815,6 +817,20 @@ export default function MarkdownEditor({
     }
   };
 
+  const handleRemoveWholeDocumentTranslation = async () => {
+    const ok = window.confirm('确定取消翻译吗？\n这会删除当前 Markdown 文件中的所有译文文本块，原文和笔记会保留。');
+    if (!ok) return;
+    const next = removeTranslationBlocks(currentContentRef.current);
+    setText(next);
+    currentContentRef.current = next;
+    onContentChange?.(next);
+    if (window.desktopShell?.runtime === 'electron' && absolutePath) {
+      await window.desktopShell.writeLocalText(absolutePath, next);
+    }
+    setDocTranslationStatus('已删除所有译文块');
+    setTranslationText('已取消翻译。');
+  };
+
   useEffect(() => {
     const pending = loadPersistedTranslationJob();
     if (!pending) return;
@@ -1131,11 +1147,11 @@ export default function MarkdownEditor({
           {!docHasActiveTask && (
             <button
               className="px-3 py-1 text-xs rounded-md border border-outline-variant text-on-surface-variant hover:bg-surface-container-low"
-              onClick={handleTranslateWholeDocument}
+              onClick={hasDocumentTranslations ? handleRemoveWholeDocumentTranslation : handleTranslateWholeDocument}
               disabled={docTranslationRunning}
-              title="全文段落对照翻译"
+              title={hasDocumentTranslations ? '删除当前 Markdown 中所有译文块' : '全文段落对照翻译'}
             >
-              全文对照翻译
+              {hasDocumentTranslations ? '取消翻译' : '全文对照翻译'}
             </button>
           )}
           {(docTranslationRunning || docHasActiveTask) && (
