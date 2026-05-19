@@ -37,6 +37,24 @@ function compactPreview(raw: string, n: number = 120): string {
   return `${t.slice(0, n)}…`;
 }
 
+export function formatMeasurementMethods(methods: unknown): string {
+  if (!Array.isArray(methods)) return '';
+  return methods
+    .map((item) => {
+      if (typeof item === 'string') return item.trim();
+      if (!item || typeof item !== 'object') return '';
+      const row = item as Record<string, unknown>;
+      const variable = String(row.variable || row.variable_name || '').trim();
+      const operationalizedAs = Array.isArray(row.operationalized_as)
+        ? row.operationalized_as.map((x) => String(x || '').trim()).filter(Boolean).join('、')
+        : String(row.operationalized_as || row.measurement || row.measurement_text || '').trim();
+      if (!operationalizedAs) return '';
+      return variable ? `${variable}：${operationalizedAs}` : operationalizedAs;
+    })
+    .filter(Boolean)
+    .join('；');
+}
+
 export default function RelatedEntities({ paperId, libraryId, graphData, isOpen, onToggle }: RelatedEntitiesProps) {
   if (!isOpen) return null;
 
@@ -59,6 +77,7 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
     const scopedKey = `${libraryId}::${paperId}`;
     const paper = graphData.paper_map?.[scopedKey] || graphData.paper_map?.[paperId];
     const defs = Array.isArray((paper as any)?.variable_definitions) ? (paper as any).variable_definitions : [];
+    const operationalization = ((paper as any)?.operationalization || {}) as Record<string, { operationalized_as?: unknown[] }>;
 
     const aliasToPapers = new Map<string, Array<{ paperId: string; title: string }>>();
     for (const [k, p] of Object.entries(graphData.paper_map || {})) {
@@ -89,7 +108,10 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
       }
       const aliases = Array.isArray((d as any)?.aliases) ? (d as any).aliases : [];
       const definition = String((d as any)?.definition || (d as any)?.definition_text || '').trim();
-      const measurement = String((d as any)?.measurement || (d as any)?.measurement_text || '').trim();
+      const opFromPaper = operationalization[name]?.operationalized_as;
+      const measurement = String((d as any)?.measurement || (d as any)?.measurement_text || '').trim()
+        || formatMeasurementMethods((d as any)?.measurement_methods)
+        || formatMeasurementMethods(opFromPaper);
       const aliasNames = [name, ...aliases.map((x: any) => String(x || '').trim())].filter(Boolean);
       const relatedMap = new Map<string, { paperId: string; title: string }>();
       for (const a of aliasNames) {

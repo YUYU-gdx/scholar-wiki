@@ -160,6 +160,9 @@ export interface VariableDefinition {
   aliases?: string[];
   definition?: string;
   definition_evidence_section?: string;
+  measurement?: string;
+  measurement_text?: string;
+  measurement_methods?: Array<string | { variable?: string; variable_name?: string; operationalized_as?: string[] }>;
 }
 
 export interface MainEffect {
@@ -198,7 +201,7 @@ export interface VariablePaperGroup {
   open_local_html?: string;
   open_online_url?: string;
   concepts: string[];
-  measurement_methods: string[];
+  measurement_methods: Array<string | { variable?: string; variable_name?: string; operationalized_as?: string[] }>;
   relations: VariableRelation[];
 }
 
