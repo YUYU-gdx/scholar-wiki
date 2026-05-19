@@ -495,6 +495,7 @@ export interface TranslateJobStatusResponse {
   job_id: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   progress: number;
+  queue_scope?: string;
   created_at?: string;
   updated_at?: string;
   error?: string;

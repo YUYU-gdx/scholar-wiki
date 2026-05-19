@@ -450,6 +450,7 @@ def create_router(chat_service: ChatService) -> APIRouter:
                 api_key=str(body.api_key or ""),
                 base_url=str(body.base_url or ""),
                 endpoint_url=str(body.endpoint_url or ""),
+                queue_scope=str(body.queue_scope or ""),
             )
             return JSONResponse(status_code=202, content=result)
         except Exception as exc:

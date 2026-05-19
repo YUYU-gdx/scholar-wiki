@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useApp } from '../app-context';
 import { api } from '../api';
 import type { GraphNode, LiteraturePaper } from '../types';
+import { hasTranslationBlocks } from './reader/TranslationMarkdown';
 
 const MODE_KEY = 'kn_graph_library_mode';
 
@@ -22,8 +23,15 @@ type LibraryPaperRow = {
   libraryId: string;
   title: string;
   metaLine: string;
+  sourceMdPath: string;
   files: PaperFileAvailability;
   variables: GraphNode[];
+};
+type PaperTranslationState = {
+  jobId: string;
+  progress: number;
+  status: string;
+  running: boolean;
 };
 
 type SelectionState = {
@@ -80,6 +88,8 @@ export default function LibraryView() {
   const [mode, setMode] = useState<Mode>(() => (localStorage.getItem(MODE_KEY) as Mode) || 'papers');
   const [libraryPapers, setLibraryPapers] = useState<LiteraturePaper[]>([]);
   const [papersLoading, setPapersLoading] = useState(false);
+  const [paperTranslations, setPaperTranslations] = useState<Record<string, PaperTranslationState>>({});
+  const [translatedPaperFlags, setTranslatedPaperFlags] = useState<Record<string, boolean>>({});
 
   const selRef = useRef<SelectionState>(createSelection());
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; visible: boolean } | null>(null);
@@ -155,6 +165,7 @@ export default function LibraryView() {
         libraryId,
         title: firstTitle(d as unknown as Record<string, unknown>, paperId),
         metaLine: metaLine(d as unknown as Record<string, unknown>),
+        sourceMdPath: String(d.source_md_path || '').trim(),
         files: {
           pdf: !!d.files?.pdf,
           markdown: !!d.files?.markdown,
@@ -177,6 +188,34 @@ export default function LibraryView() {
       next[p.scopedKey] = { ...p.files, loading: false };
     }
     return next;
+  }, [paperList]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const shell = window.desktopShell;
+      if (!shell || shell.runtime !== 'electron') {
+        if (!cancelled) setTranslatedPaperFlags({});
+        return;
+      }
+      const entries = await Promise.all(paperList.map(async (p) => {
+        const mdPath = String(p.sourceMdPath || '').trim();
+        if (!mdPath || !p.files.markdown) return [p.scopedKey, false] as const;
+        try {
+          const read = await shell.readLocalText(mdPath);
+          const raw = String(read?.data || '');
+          return [p.scopedKey, hasTranslationBlocks(raw)] as const;
+        } catch {
+          return [p.scopedKey, false] as const;
+        }
+      }));
+      if (cancelled) return;
+      const next: Record<string, boolean> = {};
+      for (const [key, flag] of entries) next[key] = !!flag;
+      setTranslatedPaperFlags(next);
+    };
+    run();
+    return () => { cancelled = true; };
   }, [paperList]);
 
   // 鈹€鈹€ Selection logic 鈹€鈹€
@@ -251,6 +290,75 @@ export default function LibraryView() {
     setReaderReturnView('library');
     setCurrentView('reader');
   };
+
+  const pollPaperTranslationJob = useCallback(async (scopedKey: string, mdPath: string, jobId: string) => {
+    const startedAt = Date.now();
+    while (true) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1200));
+      const row = await api.chat.getTranslateJob(jobId);
+      const status = String(row.status || 'queued');
+      const progress = Math.max(0, Math.min(100, Number(row.progress || 0)));
+      setPaperTranslations((prev) => ({
+        ...prev,
+        [scopedKey]: { jobId, progress, status, running: status === 'queued' || status === 'running' },
+      }));
+      if (status === 'completed') {
+        const translated = String(row.result?.formatted_text || row.result?.translated_text || '').trim();
+        if (!translated) throw new Error('translation_result_empty');
+        if (window.desktopShell?.runtime === 'electron') {
+          await window.desktopShell.writeLocalText(mdPath, translated);
+        }
+        setPaperTranslations((prev) => ({
+          ...prev,
+          [scopedKey]: { jobId, progress: 100, status: 'completed', running: false },
+        }));
+        return;
+      }
+      if (status === 'failed') {
+        throw new Error(String(row.error || 'translation_job_failed'));
+      }
+      if (Date.now() - startedAt > 4 * 60 * 60 * 1000) {
+        throw new Error('translation_job_timeout');
+      }
+    }
+  }, []);
+
+  const handleTranslatePaper = useCallback(async (p: LibraryPaperRow) => {
+    const mdPath = String(p.sourceMdPath || '').trim();
+    if (!mdPath || window.desktopShell?.runtime !== 'electron') {
+      window.alert('当前环境不支持直接写回 MD 文件');
+      return;
+    }
+    const existing = paperTranslations[p.scopedKey];
+    if (existing?.running) return;
+    try {
+      setPaperTranslations((prev) => ({
+        ...prev,
+        [p.scopedKey]: { jobId: '', progress: 0, status: 'submitting', running: true },
+      }));
+      const read = await window.desktopShell.readLocalText(mdPath);
+      if (!read?.ok) throw new Error(String(read?.error || 'read_markdown_failed'));
+      const markdown = String(read.data || '').trim();
+      if (!markdown) throw new Error('markdown_empty');
+      const cfg = await api.chat.getTranslationProviderConfig();
+      const submit = await api.chat.submitTranslateJob(markdown, cfg, `library:${p.libraryId}`);
+      const jobId = String(submit.job_id || '').trim();
+      if (!jobId) throw new Error('translation_job_id_missing');
+      setPaperTranslations((prev) => ({
+        ...prev,
+        [p.scopedKey]: { jobId, progress: 0, status: 'queued', running: true },
+      }));
+      await pollPaperTranslationJob(p.scopedKey, mdPath, jobId);
+      window.dispatchEvent(new CustomEvent('paper-translation-completed', { detail: { libraryId: p.libraryId, paperId: p.paperId } }));
+    } catch (e) {
+      const msg = String((e as Error).message || 'unknown_error');
+      setPaperTranslations((prev) => ({
+        ...prev,
+        [p.scopedKey]: { jobId: prev[p.scopedKey]?.jobId || '', progress: prev[p.scopedKey]?.progress || 0, status: `failed:${msg}`, running: false },
+      }));
+      window.alert(`全文对照翻译失败：${msg}`);
+    }
+  }, [paperTranslations, pollPaperTranslationJob]);
 
   const variableRows = useMemo(() => {
     const paperTitleById = new Map<string, string>();
@@ -347,6 +455,8 @@ export default function LibraryView() {
             const hasPdf = !!detected?.pdf;
             const hasMd = !!detected?.markdown;
             const loadingFiles = !detected || !!detected.loading;
+            const tr = paperTranslations[p.scopedKey];
+            const translated = !!translatedPaperFlags[p.scopedKey];
             return (
               <div
                 key={p.scopedKey}
@@ -368,6 +478,11 @@ export default function LibraryView() {
                       <div>
                         <div className="text-sm font-semibold text-on-surface">{p.title}</div>
                       <div className="text-xs text-on-surface-variant">{p.metaLine}</div>
+                      {translated && (
+                        <div className="mt-1 inline-flex items-center rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-700">
+                          已翻译
+                        </div>
+                      )}
                       </div>
                   </button>
                   {loadingFiles ? (
@@ -378,11 +493,26 @@ export default function LibraryView() {
                     <div className="flex items-center gap-2">
                       {hasPdf && <button onClick={(e) => (e.stopPropagation(), openInReader(p.paperId, p.libraryId, p.rawPaperId, 'pdf'))} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />PDF</button>}
                       {hasMd && <button onClick={(e) => (e.stopPropagation(), openInReader(p.paperId, p.libraryId, p.rawPaperId, 'markdown'))} className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary flex items-center gap-1"><ExternalLink className="w-3 h-3" />MD</button>}
+                      {hasMd && (
+                        <button
+                          onClick={(e) => (e.stopPropagation(), void handleTranslatePaper(p))}
+                          disabled={!!tr?.running}
+                          className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary disabled:opacity-50"
+                          title="全文对照翻译"
+                        >
+                          全文对照翻译
+                        </button>
+                      )}
                       <button onClick={(e) => (e.stopPropagation(), deletePaper(p))} className="text-xs px-2 py-1 rounded border border-red-200 hover:border-red-400 hover:bg-red-50 text-red-600 flex items-center gap-1">删除</button>
                     </div>
                   )}
                 </div>
                 <div className="mt-2 text-xs text-on-surface-variant">变量: {previewVars.map((v) => v.label || v.name || v.id).join('、') || '无'}{remain > 0 && `（+${remain} 个已折叠）`}</div>
+                {!!tr && (
+                  <div className="mt-2 text-xs text-on-surface-variant">
+                    翻译任务: {tr.status} {tr.progress}%
+                  </div>
+                )}
                 {expanded && (
                   <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
                     {p.variables.map((v) => (
@@ -433,6 +563,20 @@ export default function LibraryView() {
                   }}
                 >
                   在阅读器中打开 (MD)
+                </button>
+              )}
+              {hasMd && (
+                <button
+                  className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-container"
+                  onClick={() => {
+                    const targets = papers.filter((p) => paperFilesByScopedKey[p.scopedKey]?.markdown);
+                    for (const p of targets) {
+                      void handleTranslatePaper(p);
+                    }
+                    setCtxMenu(null);
+                  }}
+                >
+                  全文对照翻译 (MD) ({papers.filter((p) => paperFilesByScopedKey[p.scopedKey]?.markdown).length} 篇)
                 </button>
               )}
               <button

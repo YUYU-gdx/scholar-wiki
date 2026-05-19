@@ -191,6 +191,7 @@ export const api = {
     submitTranslateJob(
       text: string,
       options: Partial<TranslationProviderConfig> = {},
+      queueScope: string = '',
     ): Promise<TranslateJobSubmitResponse> {
       return jsonFetch('/chat/translate/jobs', {
         method: 'POST',
@@ -202,6 +203,7 @@ export const api = {
           api_key: options.api_key || '',
           base_url: options.base_url || '',
           endpoint_url: options.endpoint_url || '',
+          queue_scope: queueScope || '',
         }),
       });
     },

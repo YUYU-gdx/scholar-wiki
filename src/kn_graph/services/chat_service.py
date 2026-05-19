@@ -8,6 +8,8 @@ import time
 import threading
 import traceback
 import uuid
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -27,6 +29,7 @@ class ChatService:
     TRANSLATION_LABEL_HTML = '<span class="translation-label">【译文】</span>'
     TRANSLATION_CALLOUT_HEADER = "[!TRANSLATION] 译文"
     FORMULA_PLACEHOLDER_PREFIX = "__KN_FORMULA_"
+    TABLE_TAG_PLACEHOLDER_PREFIX = "__KN_TABLE_TAG_"
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -34,6 +37,19 @@ class ChatService:
         self._translation_jobs_lock = threading.Lock()
         self._translation_jobs: dict[str, dict[str, Any]] = {}
         self._translation_log_lock = threading.Lock()
+        self._translation_queue_lock = threading.Lock()
+        self._translation_queue_cv = threading.Condition(self._translation_queue_lock)
+        self._translation_pending: deque[str] = deque()
+        self._translation_running_scopes: set[str] = set()
+        self._translation_scheduler_running = True
+        self._translation_dispatch_parallel = max(1, int(os.environ.get("KN_TRANSLATION_DISPATCH_PARALLEL", "4") or "4"))
+        self._translation_block_parallel = max(1, int(os.environ.get("KN_TRANSLATION_BLOCK_PARALLEL", "4") or "4"))
+        self._translation_scheduler_thread = threading.Thread(
+            target=self._translation_scheduler_loop,
+            name="translation-job-scheduler",
+            daemon=True,
+        )
+        self._translation_scheduler_thread.start()
 
     def _ensure_chat(self) -> Any:
         if self._chat is not None:
@@ -831,7 +847,30 @@ class ChatService:
 
     def _escape_translation_html_preserving_formulas(self, text: str) -> str:
         protected, formulas = self._protect_markdown_formulas(text)
-        return self._restore_markdown_formulas(html.escape(protected, quote=False), formulas)
+        table_safe, table_tags = self._protect_translation_table_tags(protected)
+        escaped = html.escape(table_safe, quote=False)
+        restored_tables = self._restore_translation_table_tags(escaped, table_tags)
+        return self._restore_markdown_formulas(restored_tables, formulas)
+
+    def _protect_translation_table_tags(self, text: str) -> tuple[str, list[str]]:
+        src = str(text or "")
+        tags: list[str] = []
+        table_tag_re = re.compile(
+            r"</?(?:table|thead|tbody|tfoot|tr|th|td|caption|colgroup|col)\b[^>]*>",
+            re.IGNORECASE,
+        )
+
+        def repl(match: re.Match[str]) -> str:
+            tags.append(match.group(0))
+            return f"{self.TABLE_TAG_PLACEHOLDER_PREFIX}{len(tags) - 1}__"
+
+        return table_tag_re.sub(repl, src), tags
+
+    def _restore_translation_table_tags(self, text: str, table_tags: list[str]) -> str:
+        out = str(text or "")
+        for idx, tag in enumerate(table_tags):
+            out = out.replace(f"{self.TABLE_TAG_PLACEHOLDER_PREFIX}{idx}__", tag)
+        return out
 
     def _protect_markdown_formulas(self, text: str) -> tuple[str, list[str]]:
         src = str(text or "")
@@ -927,8 +966,8 @@ class ChatService:
         before_abstract_h1 = has_abstract_h1
         count_before_abstract_h1 = has_abstract_h1
         count_in_reference_h1_section = False
-        total_work_count = 0
-        for candidate in blocks:
+        translatable_indexes: list[int] = []
+        for idx, candidate in enumerate(blocks):
             if not candidate.strip():
                 continue
             if self._is_h1_block(candidate):
@@ -950,32 +989,14 @@ class ChatService:
                 continue
             if self._is_existing_translation_block(candidate):
                 continue
-            total_work_count += 1
+            translatable_indexes.append(idx)
+        total_work_count = len(translatable_indexes)
         total_work = max(1, total_work_count)
         done_work = 0
-        for block in blocks:
-            out.append(block)
-            if not block.strip():
-                continue
-            if self._is_h1_block(block):
-                if before_abstract_h1 and self._is_abstract_h1_block(block):
-                    before_abstract_h1 = False
-                if self._is_reference_h1_block(block):
-                    in_reference_h1_section = True
-                else:
-                    in_reference_h1_section = False
-            if before_abstract_h1 and not self._is_h1_block(block):
-                continue
-            if in_reference_h1_section:
-                continue
-            if self._is_fenced_code_block(block):
-                continue
-            if self._is_math_only_block(block):
-                continue
-            if self._is_reader_note_block(block):
-                continue
-            if self._is_existing_translation_block(block):
-                continue
+        translated_by_idx: dict[int, tuple[str, dict[str, Any]]] = {}
+
+        def _translate_idx(idx: int) -> tuple[int, str, dict[str, Any]]:
+            block = blocks[idx]
             protected_block, formulas = self._protect_markdown_formulas(block)
             result = self._translate_single_text(
                 text=protected_block,
@@ -987,13 +1008,27 @@ class ChatService:
                 endpoint_url=endpoint_url,
             )
             translated = self._restore_markdown_formulas(str(result.get("translated_text", "") or "").strip(), formulas)
-            out.append(self._decorate_translation_line(translated))
-            translated_blocks += 1
-            total_latency += int(result.get("latency_ms", 0) or 0)
-            last_meta = result
-            done_work += 1
-            if callable(progress_cb):
-                progress_cb(done_work, total_work)
+            return idx, self._decorate_translation_line(translated), result
+
+        if translatable_indexes:
+            workers = min(self._translation_block_parallel, max(1, len(translatable_indexes)))
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="translate-block") as pool:
+                futures = [pool.submit(_translate_idx, idx) for idx in translatable_indexes]
+                for fut in as_completed(futures):
+                    idx, decorated, result = fut.result()
+                    translated_by_idx[idx] = (decorated, result)
+                    translated_blocks += 1
+                    total_latency += int(result.get("latency_ms", 0) or 0)
+                    last_meta = result
+                    done_work += 1
+                    if callable(progress_cb):
+                        progress_cb(done_work, total_work)
+
+        for idx, block in enumerate(blocks):
+            out.append(block)
+            translated = translated_by_idx.get(idx)
+            if translated:
+                out.append(translated[0])
         return {
             "translated_text": "\n\n".join(out).strip(),
             "formatted_text": "\n\n".join(out).strip(),
@@ -1014,57 +1049,124 @@ class ChatService:
         api_key: str = "",
         base_url: str = "",
         endpoint_url: str = "",
+        queue_scope: str = "",
     ) -> dict[str, Any]:
         src = str(markdown_text or "").strip()
         if not src:
             raise ValueError("text_required")
         job_id = f"tr_{uuid.uuid4().hex[:16]}"
+        scope = str(queue_scope or "").strip() or "global_default"
         now = datetime.now(timezone.utc).isoformat()
         with self._translation_jobs_lock:
             self._translation_jobs[job_id] = {
                 "job_id": job_id,
                 "status": "queued",
                 "progress": 0,
+                "queue_scope": scope,
                 "created_at": now,
                 "updated_at": now,
                 "result": None,
                 "error": "",
+                "params": {
+                    "markdown_text": markdown_text,
+                    "target_lang": target_lang,
+                    "provider": provider,
+                    "model": model,
+                    "api_key": api_key,
+                    "base_url": base_url,
+                    "endpoint_url": endpoint_url,
+                },
             }
-
-        def _run() -> None:
-            self._update_translation_job(job_id, status="running", progress=0)
-            try:
-                result = self.translate_markdown_bilingual(
-                    markdown_text=markdown_text,
-                    target_lang=target_lang,
-                    provider=provider,
-                    model=model,
-                    api_key=api_key,
-                    base_url=base_url,
-                    endpoint_url=endpoint_url,
-                    progress_cb=lambda done, total: self._update_translation_job(
-                        job_id,
-                        status="running",
-                        progress=int(max(0, min(100, round((done / max(1, total)) * 100)))),
-                    ),
-                )
-                self._update_translation_job(job_id, status="completed", progress=100, result=result)
-            except Exception as exc:
-                self.log_translation_failure(
-                    phase="job_run",
-                    error=exc,
-                    job_id=job_id,
-                    provider=provider,
-                    model=model,
-                    target_lang=target_lang,
-                    endpoint_url=endpoint_url,
-                    text_chars=len(str(markdown_text or "")),
-                    compare_by_paragraph=True,
-                )
-                self._update_translation_job(job_id, status="failed", error=str(exc))
-
-        threading.Thread(target=_run, name=f"translation-job-{job_id}", daemon=True).start()
+        with self._translation_queue_cv:
+            self._translation_pending.append(job_id)
+            self._translation_queue_cv.notify_all()
         return {"job_id": job_id, "status": "queued", "progress": 0}
+
+    def _translation_scheduler_loop(self) -> None:
+        while self._translation_scheduler_running:
+            start_job_id = ""
+            with self._translation_queue_cv:
+                while self._translation_scheduler_running:
+                    if not self._translation_pending:
+                        self._translation_queue_cv.wait(timeout=0.5)
+                        continue
+                    if len(self._translation_running_scopes) >= self._translation_dispatch_parallel:
+                        self._translation_queue_cv.wait(timeout=0.2)
+                        continue
+                    picked_index = -1
+                    picked_scope = ""
+                    for idx, jid in enumerate(self._translation_pending):
+                        row = self._translation_jobs.get(jid) or {}
+                        scope = str(row.get("queue_scope", "") or "global_default").strip() or "global_default"
+                        if scope in self._translation_running_scopes:
+                            continue
+                        picked_index = idx
+                        picked_scope = scope
+                        break
+                    if picked_index < 0:
+                        self._translation_queue_cv.wait(timeout=0.2)
+                        continue
+                    start_job_id = self._translation_pending[picked_index]
+                    del self._translation_pending[picked_index]
+                    self._translation_running_scopes.add(picked_scope)
+                    break
+            if not start_job_id:
+                continue
+            threading.Thread(
+                target=self._run_translation_job,
+                args=(start_job_id,),
+                name=f"translation-job-{start_job_id}",
+                daemon=True,
+            ).start()
+
+    def _run_translation_job(self, job_id: str) -> None:
+        row: dict[str, Any] = {}
+        scope = "global_default"
+        with self._translation_jobs_lock:
+            row = dict(self._translation_jobs.get(job_id) or {})
+            scope = str(row.get("queue_scope", "") or "global_default").strip() or "global_default"
+        params = row.get("params", {}) if isinstance(row.get("params"), dict) else {}
+        markdown_text = str(params.get("markdown_text", "") or "")
+        target_lang = str(params.get("target_lang", "zh") or "zh")
+        provider = str(params.get("provider", "deepseek") or "deepseek")
+        model = str(params.get("model", "deepseek-v4-flash") or "deepseek-v4-flash")
+        api_key = str(params.get("api_key", "") or "")
+        base_url = str(params.get("base_url", "") or "")
+        endpoint_url = str(params.get("endpoint_url", "") or "")
+        self._update_translation_job(job_id, status="running", progress=0)
+        try:
+            result = self.translate_markdown_bilingual(
+                markdown_text=markdown_text,
+                target_lang=target_lang,
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                endpoint_url=endpoint_url,
+                progress_cb=lambda done, total: self._update_translation_job(
+                    job_id,
+                    status="running",
+                    progress=int(max(0, min(100, round((done / max(1, total)) * 100)))),
+                ),
+            )
+            self._update_translation_job(job_id, status="completed", progress=100, result=result)
+        except Exception as exc:
+            self.log_translation_failure(
+                phase="job_run",
+                error=exc,
+                job_id=job_id,
+                provider=provider,
+                model=model,
+                target_lang=target_lang,
+                endpoint_url=endpoint_url,
+                text_chars=len(str(markdown_text or "")),
+                compare_by_paragraph=True,
+            )
+            self._update_translation_job(job_id, status="failed", error=str(exc))
+        finally:
+            with self._translation_queue_cv:
+                self._translation_running_scopes.discard(scope)
+                self._translation_queue_cv.notify_all()
 
     def get_translation_job(self, job_id: str) -> dict[str, Any]:
         jid = str(job_id or "").strip()

@@ -170,6 +170,7 @@ class TranslateRequest(BaseModel):
     base_url: str = ""
     endpoint_url: str = ""
     compare_by_paragraph: bool = False
+    queue_scope: str = ""
 
 
 class TranslationProviderConfig(BaseModel):

@@ -243,7 +243,10 @@ def _build_tools() -> list[dict[str, Any]]:
     return [
         {
             "name": "rag_search",
-            "description": "Search ChromaDB evidence with hybrid retrieval and return sentence/paragraph + paper absolute path.",
+            "description": (
+                "Search ChromaDB evidence with hybrid retrieval. Returns up to top_k keyword hits plus up to top_k "
+                "vector/rag hits, each with sentence/paragraph + paper absolute path."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -314,40 +317,44 @@ def _handle_rag_search(base_url: str, arguments: dict[str, Any]) -> dict[str, An
             )
         except Exception as exc:
             return _error("backend_timeout", f"literature search failed for library {lid}", str(exc))
-        hits = payload.get("merged_hits", []) if isinstance(payload, dict) else []
-        if not isinstance(hits, list):
-            continue
-        for item in hits:
-            if not isinstance(item, dict):
+        for route_key, route_name in (("keyword_hits", "keyword"), ("rag_hits", "rag")):
+            hits = payload.get(route_key, []) if isinstance(payload, dict) else []
+            if not isinstance(hits, list):
                 continue
-            ctx = item.get("context") if isinstance(item.get("context"), dict) else {}
-            paragraph = ctx.get("paragraph") if isinstance(ctx.get("paragraph"), dict) else {}
-            sentence = ctx.get("sentence") if isinstance(ctx.get("sentence"), dict) else {}
-            sentence_text = str(sentence.get("text", "") or item.get("text", "") or "").strip()
-            paragraph_text = str(paragraph.get("text", "") or "").strip()
-            if not sentence_text and not paragraph_text:
-                continue
-            merged_rows.append(
-                {
-                    "score": _safe_float(item, ["score", "rrf_score", "final_score"]),
-                    "sentence_text": sentence_text,
-                    "paragraph_text": paragraph_text,
-                    "paper_path_abs": _paper_path_from_hit(item),
-                    "paper_id": str(item.get("paper_id", "") or ""),
-                    "library_id": lid,
-                }
-            )
+            for item in hits[:top_k]:
+                if not isinstance(item, dict):
+                    continue
+                ctx = item.get("context") if isinstance(item.get("context"), dict) else {}
+                paragraph = ctx.get("paragraph") if isinstance(ctx.get("paragraph"), dict) else {}
+                sentence = ctx.get("sentence") if isinstance(ctx.get("sentence"), dict) else {}
+                sentence_text = str(sentence.get("text", "") or item.get("text", "") or "").strip()
+                paragraph_text = str(paragraph.get("text", "") or "").strip()
+                if not sentence_text and not paragraph_text:
+                    continue
+                merged_rows.append(
+                    {
+                        "route": str(item.get("route", "") or route_name),
+                        "level": str(item.get("level", "") or "sentence"),
+                        "score": _safe_float(item, ["score", "rrf_score", "final_score"]),
+                        "sentence_text": sentence_text,
+                        "paragraph_text": paragraph_text,
+                        "paper_path_abs": _paper_path_from_hit(item),
+                        "paper_id": str(item.get("paper_id", "") or ""),
+                        "library_id": lid,
+                    }
+                )
     if not merged_rows:
         return _error("no_hits", "no evidence hits found")
 
-    merged_rows.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
     out = {
         "ok": True,
         "query": query,
         "library_scope": scope,
         "weights": {"vector": round(vw, 6), "keyword": round(kw, 6)},
         "top_k": top_k,
-        "hits": merged_rows[:top_k],
+        "return_mode": "keyword_top_k_plus_vector_top_k",
+        "total_returned": len(merged_rows),
+        "hits": merged_rows,
     }
     return _truncate_payload(out)
 

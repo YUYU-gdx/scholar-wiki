@@ -773,7 +773,7 @@ export default function MarkdownEditor({
       const jobsUnsupported = window.sessionStorage.getItem(jobsUnsupportedKey) === '1';
       try {
         if (jobsUnsupported) throw new Error('http_405');
-        const submit = await api.chat.submitTranslateJob(currentContentRef.current, cfg);
+        const submit = await api.chat.submitTranslateJob(currentContentRef.current, cfg, `library:${libraryId || 'default'}`);
         const jobId = String(submit.job_id || '').trim();
         if (!jobId) throw new Error('translation_job_id_missing');
         const startedAt = Date.now();
