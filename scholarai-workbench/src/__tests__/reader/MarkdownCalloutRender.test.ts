@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import MarkdownIt from 'markdown-it';
 import { buildMarkdownCallout, transformCallouts } from '../../components/reader/MarkdownCallout';
 
 describe('transformCallouts', () => {
@@ -37,5 +38,18 @@ describe('transformCallouts', () => {
     expect(buildMarkdownCallout('NOTE', 'Reader Note', ['', 'Note ID: n1', '', 'Quote:', '原文', '', 'Note:', '笔记'])).toBe(
       '> [!NOTE] Reader Note\n>\n> Note ID: n1\n>\n> Quote:\n> 原文\n>\n> Note:\n> 笔记',
     );
+  });
+
+  it('keeps translation body on the next blockquote line for plain text affiliation lines', () => {
+    const md = new MarkdownIt({ html: true, breaks: false });
+    const raw = '> [!TRANSLATION] 译文\n> b 商学院，西华师范大学，南充市，四川省，中国';
+    const html = md.render(raw);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    transformCallouts(doc);
+
+    const callout = doc.querySelector('.callout-translation');
+    expect(callout?.querySelector('.callout-title')?.textContent).toBe('译文');
+    expect(callout?.querySelector('p')?.textContent).toContain('b 商学院');
   });
 });

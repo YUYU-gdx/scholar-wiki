@@ -86,8 +86,10 @@ export function transformCallouts(doc: Document): void {
   for (const bq of blockquotes) {
     const firstP = bq.querySelector(':scope > p:first-child');
     if (!firstP) continue;
-    const text = (firstP.textContent || '').trim();
-    const m = text.match(/^\[!(\w+)\]\s*(.*)$/);
+    const text = String(firstP.textContent || '').replace(/\r\n/g, '\n').trim();
+    const [headerLineRaw, ...carryBodyLinesRaw] = text.split('\n');
+    const headerLine = String(headerLineRaw || '').trim();
+    const m = headerLine.match(/^\[!(\w+)\]\s*(.*)$/);
     if (!m) continue;
     const type = m[1].toLowerCase();
     const rest = m[2].trim();
@@ -111,9 +113,14 @@ export function transformCallouts(doc: Document): void {
     titleDiv.textContent = title;
     callout.appendChild(titleDiv);
 
-    if (inlineBody) {
+    const carryBody = carryBodyLinesRaw
+      .map((line) => String(line || '').trim())
+      .filter((line) => line.length > 0)
+      .join('\n');
+    const bodyText = [inlineBody, carryBody].filter((x) => String(x || '').trim().length > 0).join('\n');
+    if (bodyText) {
       const bodyP = doc.createElement('p');
-      bodyP.textContent = inlineBody;
+      bodyP.textContent = bodyText;
       callout.appendChild(bodyP);
     }
 

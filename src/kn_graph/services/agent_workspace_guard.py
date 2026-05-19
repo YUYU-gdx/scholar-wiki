@@ -44,8 +44,9 @@ def _claude_md_template(instance_type: str) -> str:
         return (
             "# CLAUDE.md\n\n"
             "## Tool Boundaries And Priority\n"
-            "- Allowed MCP tools: `rag_search`, `graph_variable_neighbors`.\n"
+            "- Allowed MCP tools: `rag_search`, `graph_variable_concept_search`, `graph_variable_neighbors`.\n"
             "- Use `rag_search` as primary evidence retrieval.\n"
+            "- Use `graph_variable_concept_search` to map concept descriptions to variable candidates; check `in_kg` / `kg_node_id` before graph traversal.\n"
             "- Use `graph_variable_neighbors` for real KG variable nodes only; concept-only variables may not have neighbors.\n"
             "- For mechanism/context/conflict judgments, verify with paragraph evidence from `rag_search`.\n"
             "- If results are truncated or empty, rewrite query and retry before concluding.\n\n"
@@ -70,8 +71,9 @@ def _claude_md_template(instance_type: str) -> str:
         return (
             "# CLAUDE.md\n\n"
             "## Tool Boundaries And Priority\n"
-            "- Allowed MCP tools: `rag_search`, `graph_variable_neighbors`.\n"
-            "- For extraction/disambiguation, run variable alignment as: `exact` first, then `semantic` when needed.\n"
+            "- Allowed MCP tools: `rag_search`, `graph_variable_concept_search`, `graph_variable_neighbors`.\n"
+            "- For extraction/disambiguation, run variable alignment as: exact variable-name lookup first, then `graph_variable_concept_search` for semantic concept mapping when needed.\n"
+            "- Check `graph_variable_concept_search` results for `in_kg` / `kg_node_id`; only real KG nodes should be passed to `graph_variable_neighbors`.\n"
             "- `graph_variable_neighbors` is for real KG node mapping/neighbor reference, not standalone proof; definition-only concept matches are not KG neighbors.\n"
             "- For relation/mechanism/context/conflict decisions, validate with `rag_search` paragraph evidence.\n"
             "- If tool returns truncated/empty/error, adjust query or weights and retry.\n\n"
