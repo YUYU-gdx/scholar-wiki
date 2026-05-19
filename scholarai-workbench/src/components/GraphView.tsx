@@ -1,7 +1,33 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../app-context';
 import { api } from '../api';
-import type { SemanticNeighborResultItem, SemanticVariableMatch } from '../types';
+import type { SemanticNeighborResultItem, SemanticVariableMatch, VariableDetail } from '../types';
+
+function formatMeasurementMethods(methods: unknown): string {
+  if (!Array.isArray(methods)) return '';
+  return methods
+    .map((row) => {
+      if (typeof row === 'string') return row.trim();
+      if (!row || typeof row !== 'object') return '';
+      const item = row as { variable?: string; variable_name?: string; operationalized_as?: unknown; measurement?: unknown; measurement_text?: unknown };
+      const variable = String(item.variable || item.variable_name || '').trim();
+      const operationalizedAs = Array.isArray(item.operationalized_as)
+        ? item.operationalized_as.map((x) => String(x || '').trim()).filter(Boolean).join('、')
+        : String(item.operationalized_as || item.measurement || item.measurement_text || '').trim();
+      if (!operationalizedAs) return '';
+      return variable ? `${variable}：${operationalizedAs}` : operationalizedAs;
+    })
+    .filter(Boolean)
+    .join('；');
+}
+
+function extractMeasurement(detail: VariableDetail | null | undefined): string {
+  if (!detail || !Array.isArray(detail.paper_groups)) return '';
+  const rows = detail.paper_groups
+    .map((group) => formatMeasurementMethods(group?.measurement_methods))
+    .filter(Boolean);
+  return [...new Set(rows)].join('；');
+}
 
 export default function GraphView() {
   const iframeRevRef = useRef<string>(String(Date.now()));
@@ -27,6 +53,8 @@ export default function GraphView() {
   const [loadingNeighborsFor, setLoadingNeighborsFor] = useState('');
   const [searchResult, setSearchResult] = useState<SemanticVariableMatch[]>([]);
   const [neighborsByKey, setNeighborsByKey] = useState<Record<string, SemanticNeighborResultItem[]>>({});
+  const [detailByKey, setDetailByKey] = useState<Record<string, VariableDetail>>({});
+  const [loadingDetailFor, setLoadingDetailFor] = useState('');
   const [errorText, setErrorText] = useState('');
   const [activeKey, setActiveKey] = useState('');
 
@@ -108,6 +136,7 @@ export default function GraphView() {
     setSearching(true);
     setErrorText('');
     setNeighborsByKey({});
+    setDetailByKey({});
     setActiveKey('');
     try {
       const res = await api.graph.semanticVariableSearch(q, Math.max(3, Math.min(20, topK)), libraryIds);
@@ -132,6 +161,21 @@ export default function GraphView() {
       setErrorText(String((err as Error)?.message || err));
     } finally {
       setLoadingNeighborsFor('');
+    }
+  };
+
+  const loadDetail = async (row: SemanticVariableMatch) => {
+    if (!row.node_id) return;
+    const key = `${row.library_id}::${row.variable_name}`;
+    if (detailByKey[key]) return;
+    setLoadingDetailFor(key);
+    try {
+      const detail = await api.graph.variable(row.node_id, row.library_id);
+      setDetailByKey((prev) => ({ ...prev, [key]: detail }));
+    } catch (err) {
+      setErrorText(String((err as Error)?.message || err));
+    } finally {
+      setLoadingDetailFor('');
     }
   };
 
@@ -185,6 +229,8 @@ export default function GraphView() {
               {searchResult.map((row) => {
                 const key = `${row.library_id}::${row.variable_name}`;
                 const neighborSets = neighborsByKey[key] || [];
+                const detail = detailByKey[key];
+                const measurement = extractMeasurement(detail);
                 const active = activeKey === key;
                 return (
                   <div key={`${row.id}-${key}`} className={`rounded-2xl border p-3 transition-all ${active ? 'border-secondary/50 bg-secondary-container/10' : 'border-outline-variant bg-surface-container'}`}>
@@ -195,7 +241,7 @@ export default function GraphView() {
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <button
-                          onClick={() => void loadNeighbors(row)}
+                          onClick={() => { void loadNeighbors(row); void loadDetail(row); }}
                           className="text-xs px-2.5 py-1 rounded-lg border border-outline-variant hover:border-secondary bg-surface-container"
                         >
                           查看前后因
@@ -211,6 +257,12 @@ export default function GraphView() {
                       </div>
                     </div>
                     <div className="text-xs text-on-surface-variant mt-2 line-clamp-3">{row.concept_text || '暂无概念'}</div>
+                    {(loadingDetailFor === key || measurement) && (
+                      <div className="mt-2 text-xs text-on-surface-variant">
+                        <span className="font-semibold text-on-surface">测量方式：</span>
+                        {loadingDetailFor === key ? '加载中...' : (measurement || '暂无测量方式')}
+                      </div>
+                    )}
                     <div className="mt-2">
                       {loadingNeighborsFor === key && <div className="text-xs text-on-surface-variant">正在加载前后因...</div>}
                       {neighborSets.map((group, idx) => (

@@ -33,6 +33,18 @@ type PaperTranslationState = {
   status: string;
   running: boolean;
 };
+type PersistedPaperTranslationJob = {
+  scopedKey: string;
+  libraryId: string;
+  paperId: string;
+  mdPath: string;
+  jobId: string;
+  progress: number;
+  status: string;
+  running: boolean;
+};
+
+const LIB_TRANSLATION_JOB_STORAGE_KEY = 'library_translation_jobs_v1';
 
 type SelectionState = {
   pivot: number;
@@ -90,6 +102,36 @@ export default function LibraryView() {
   const [papersLoading, setPapersLoading] = useState(false);
   const [paperTranslations, setPaperTranslations] = useState<Record<string, PaperTranslationState>>({});
   const [translatedPaperFlags, setTranslatedPaperFlags] = useState<Record<string, boolean>>({});
+  const pollingJobsRef = useRef<Set<string>>(new Set());
+
+  const persistPaperTranslationJobs = useCallback((jobs: PersistedPaperTranslationJob[]) => {
+    try {
+      window.sessionStorage.setItem(LIB_TRANSLATION_JOB_STORAGE_KEY, JSON.stringify(jobs));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const loadPersistedPaperTranslationJobs = useCallback((): PersistedPaperTranslationJob[] => {
+    try {
+      const raw = window.sessionStorage.getItem(LIB_TRANSLATION_JOB_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((x) => (x && typeof x === 'object' ? x as PersistedPaperTranslationJob : null))
+        .filter((x): x is PersistedPaperTranslationJob => !!x && !!x.scopedKey && !!x.jobId);
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const upsertPersistedPaperTranslationJob = useCallback((entry: PersistedPaperTranslationJob) => {
+    const current = loadPersistedPaperTranslationJobs();
+    const next = current.filter((x) => x.scopedKey !== entry.scopedKey);
+    next.push(entry);
+    persistPaperTranslationJobs(next);
+  }, [loadPersistedPaperTranslationJobs, persistPaperTranslationJobs]);
 
   const selRef = useRef<SelectionState>(createSelection());
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; visible: boolean } | null>(null);
@@ -292,36 +334,54 @@ export default function LibraryView() {
   };
 
   const pollPaperTranslationJob = useCallback(async (scopedKey: string, mdPath: string, jobId: string) => {
+    if (pollingJobsRef.current.has(jobId)) return;
+    pollingJobsRef.current.add(jobId);
     const startedAt = Date.now();
-    while (true) {
-      await new Promise((resolve) => window.setTimeout(resolve, 1200));
-      const row = await api.chat.getTranslateJob(jobId);
-      const status = String(row.status || 'queued');
-      const progress = Math.max(0, Math.min(100, Number(row.progress || 0)));
-      setPaperTranslations((prev) => ({
-        ...prev,
-        [scopedKey]: { jobId, progress, status, running: status === 'queued' || status === 'running' },
-      }));
-      if (status === 'completed') {
-        const translated = String(row.result?.formatted_text || row.result?.translated_text || '').trim();
-        if (!translated) throw new Error('translation_result_empty');
-        if (window.desktopShell?.runtime === 'electron') {
-          await window.desktopShell.writeLocalText(mdPath, translated);
-        }
+    try {
+      while (true) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1200));
+        const row = await api.chat.getTranslateJob(jobId);
+        const status = String(row.status || 'queued');
+        const progress = Math.max(0, Math.min(100, Number(row.progress || 0)));
+        const running = status === 'queued' || status === 'running';
         setPaperTranslations((prev) => ({
           ...prev,
-          [scopedKey]: { jobId, progress: 100, status: 'completed', running: false },
+          [scopedKey]: { jobId, progress, status, running },
         }));
-        return;
+        const base = scopedKey.split('::');
+        upsertPersistedPaperTranslationJob({
+          scopedKey,
+          libraryId: base[0] || '',
+          paperId: base[1] || '',
+          mdPath,
+          jobId,
+          progress,
+          status,
+          running,
+        });
+        if (status === 'completed') {
+          const translated = String(row.result?.formatted_text || row.result?.translated_text || '').trim();
+          if (!translated) throw new Error('translation_result_empty');
+          if (window.desktopShell?.runtime === 'electron') {
+            await window.desktopShell.writeLocalText(mdPath, translated);
+          }
+          setPaperTranslations((prev) => ({
+            ...prev,
+            [scopedKey]: { jobId, progress: 100, status: 'completed', running: false },
+          }));
+          return;
+        }
+        if (status === 'failed') {
+          throw new Error(String(row.error || 'translation_job_failed'));
+        }
+        if (Date.now() - startedAt > 4 * 60 * 60 * 1000) {
+          throw new Error('translation_job_timeout');
+        }
       }
-      if (status === 'failed') {
-        throw new Error(String(row.error || 'translation_job_failed'));
-      }
-      if (Date.now() - startedAt > 4 * 60 * 60 * 1000) {
-        throw new Error('translation_job_timeout');
-      }
+    } finally {
+      pollingJobsRef.current.delete(jobId);
     }
-  }, []);
+  }, [upsertPersistedPaperTranslationJob]);
 
   const handleTranslatePaper = useCallback(async (p: LibraryPaperRow) => {
     const mdPath = String(p.sourceMdPath || '').trim();
@@ -331,6 +391,10 @@ export default function LibraryView() {
     }
     const existing = paperTranslations[p.scopedKey];
     if (existing?.running) return;
+    if (translatedPaperFlags[p.scopedKey]) {
+      window.alert('该论文已存在译文块，已跳过。');
+      return;
+    }
     try {
       setPaperTranslations((prev) => ({
         ...prev,
@@ -341,13 +405,23 @@ export default function LibraryView() {
       const markdown = String(read.data || '').trim();
       if (!markdown) throw new Error('markdown_empty');
       const cfg = await api.chat.getTranslationProviderConfig();
-      const submit = await api.chat.submitTranslateJob(markdown, cfg, `library:${p.libraryId}`);
+      const submit = await api.chat.submitTranslateJob(markdown, cfg, `library:${p.libraryId}`, true);
       const jobId = String(submit.job_id || '').trim();
       if (!jobId) throw new Error('translation_job_id_missing');
       setPaperTranslations((prev) => ({
         ...prev,
         [p.scopedKey]: { jobId, progress: 0, status: 'queued', running: true },
       }));
+      upsertPersistedPaperTranslationJob({
+        scopedKey: p.scopedKey,
+        libraryId: p.libraryId,
+        paperId: p.paperId,
+        mdPath,
+        jobId,
+        progress: 0,
+        status: 'queued',
+        running: true,
+      });
       await pollPaperTranslationJob(p.scopedKey, mdPath, jobId);
       window.dispatchEvent(new CustomEvent('paper-translation-completed', { detail: { libraryId: p.libraryId, paperId: p.paperId } }));
     } catch (e) {
@@ -358,7 +432,36 @@ export default function LibraryView() {
       }));
       window.alert(`全文对照翻译失败：${msg}`);
     }
-  }, [paperTranslations, pollPaperTranslationJob]);
+  }, [paperTranslations, pollPaperTranslationJob, translatedPaperFlags, upsertPersistedPaperTranslationJob]);
+
+  useEffect(() => {
+    const persisted = loadPersistedPaperTranslationJobs();
+    if (!persisted.length) return;
+    const next: Record<string, PaperTranslationState> = {};
+    for (const row of persisted) {
+      next[row.scopedKey] = {
+        jobId: row.jobId,
+        progress: Math.max(0, Math.min(100, Number(row.progress || 0))),
+        status: String(row.status || 'queued'),
+        running: !!row.running,
+      };
+    }
+    setPaperTranslations((prev) => ({ ...next, ...prev }));
+  }, [loadPersistedPaperTranslationJobs]);
+
+  useEffect(() => {
+    if (!paperList.length) return;
+    const scopedMap = new Map(paperList.map((p) => [p.scopedKey, p]));
+    const persisted = loadPersistedPaperTranslationJobs();
+    for (const row of persisted) {
+      if (!row.running) continue;
+      const paper = scopedMap.get(row.scopedKey);
+      if (!paper) continue;
+      const mdPath = String(row.mdPath || paper.sourceMdPath || '').trim();
+      if (!mdPath || !row.jobId) continue;
+      void pollPaperTranslationJob(row.scopedKey, mdPath, row.jobId);
+    }
+  }, [paperList, loadPersistedPaperTranslationJobs, pollPaperTranslationJob]);
 
   const variableRows = useMemo(() => {
     const paperTitleById = new Map<string, string>();
@@ -569,14 +672,18 @@ export default function LibraryView() {
                 <button
                   className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-container"
                   onClick={() => {
-                    const targets = papers.filter((p) => paperFilesByScopedKey[p.scopedKey]?.markdown);
+                    const targets = papers.filter((p) => paperFilesByScopedKey[p.scopedKey]?.markdown && !translatedPaperFlags[p.scopedKey]);
+                    const skipped = papers.filter((p) => paperFilesByScopedKey[p.scopedKey]?.markdown && translatedPaperFlags[p.scopedKey]).length;
                     for (const p of targets) {
                       void handleTranslatePaper(p);
+                    }
+                    if (skipped > 0) {
+                      window.alert(`已跳过 ${skipped} 篇已翻译论文。`);
                     }
                     setCtxMenu(null);
                   }}
                 >
-                  全文对照翻译 (MD) ({papers.filter((p) => paperFilesByScopedKey[p.scopedKey]?.markdown).length} 篇)
+                  全文对照翻译 (MD) ({papers.filter((p) => paperFilesByScopedKey[p.scopedKey]?.markdown && !translatedPaperFlags[p.scopedKey]).length} 篇)
                 </button>
               )}
               <button

@@ -451,6 +451,7 @@ def create_router(chat_service: ChatService) -> APIRouter:
                 base_url=str(body.base_url or ""),
                 endpoint_url=str(body.endpoint_url or ""),
                 queue_scope=str(body.queue_scope or ""),
+                skip_if_has_translation=bool(body.skip_if_has_translation),
             )
             return JSONResponse(status_code=202, content=result)
         except Exception as exc:

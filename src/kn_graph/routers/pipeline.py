@@ -3,12 +3,13 @@
 import hashlib
 import json
 import logging
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, Body, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -45,6 +46,61 @@ def _save_upload(file: UploadFile, target: Path) -> tuple[str, int]:
             hasher.update(content)
             size = len(content)
     return hasher.hexdigest(), size
+
+
+def _copy_file_with_hash(source: Path, target: Path) -> tuple[str, int]:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    h = hashlib.sha256()
+    size = 0
+    with source.open("rb") as src, target.open("wb") as dst:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            dst.write(chunk)
+            h.update(chunk)
+            size += len(chunk)
+    return h.hexdigest(), size
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _find_duplicate_pdf_by_hash(workspace_root: Path, upload_hash: str) -> dict[str, str] | None:
+    db_path = workspace_root / "kn_gragh.db"
+    if not db_path.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute("SELECT paper_id, title, source_pdf_path FROM papers").fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    for row in rows:
+        src_pdf = Path(str(row["source_pdf_path"] or "").strip())
+        if not src_pdf.is_file():
+            continue
+        try:
+            if _sha256_file(src_pdf) == upload_hash:
+                return {
+                    "paper_id": str(row["paper_id"] or "").strip(),
+                    "title": str(row["title"] or "").strip(),
+                    "source_pdf_path": str(src_pdf.resolve()),
+                }
+        except Exception:
+            continue
+    return None
 
 
 def _safe_json_dumps(payload: dict[str, Any]) -> str:
@@ -180,6 +236,22 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
         parsed_options["_job_root"] = str(run_dir.resolve())
 
         file_hash, file_size = _save_upload(file, input_path)
+        duplicate = _find_duplicate_pdf_by_hash(workspace_root, file_hash)
+        if isinstance(duplicate, dict):
+            try:
+                input_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "duplicate_pdf_in_library",
+                    "message": "已有相同文献",
+                    "library_id": lib,
+                    "file_name": upload_name,
+                    "existing_paper": duplicate,
+                },
+            )
         path_diag = build_import_path_diagnostics(
             data_dir=getattr(pipeline_service._settings, "data_dir", ""),
             workspaces_dir=getattr(pipeline_service._settings, "workspaces_dir", ""),
@@ -313,6 +385,184 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
                 "rejected": rejected,
             },
         )
+
+    @router.post("/pipeline/parse-extract/path-batch")
+    async def create_parse_extract_path_batch(payload: dict[str, Any] = Body(default={})):
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        if not isinstance(items, list) or not items:
+            return JSONResponse(status_code=400, content={"error": "items_required"})
+        accepted: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
+        for raw in items:
+            if not isinstance(raw, dict):
+                rejected.append({"error": "invalid_item"})
+                continue
+            lib = str(raw.get("library_id", "") or "").strip()
+            pdf_path_raw = str(raw.get("pdf_path", "") or "").strip()
+            options_obj = raw.get("options", {})
+            if not lib:
+                rejected.append({"library_id": lib, "pdf_path": pdf_path_raw, "error": "library_id_required"})
+                continue
+            if not pdf_path_raw:
+                rejected.append({"library_id": lib, "pdf_path": pdf_path_raw, "error": "pdf_path_required"})
+                continue
+            src = Path(pdf_path_raw).expanduser().resolve()
+            if not src.is_file():
+                rejected.append({"library_id": lib, "pdf_path": pdf_path_raw, "error": "pdf_not_found"})
+                continue
+            ext = src.suffix.lower()
+            if ext not in _ALLOWED_UPLOAD_EXTS:
+                rejected.append(
+                    {
+                        "library_id": lib,
+                        "pdf_path": pdf_path_raw,
+                        "error": "unsupported_file_type",
+                        "allowed_extensions": sorted(_ALLOWED_UPLOAD_EXTS),
+                    }
+                )
+                continue
+            if not isinstance(options_obj, dict):
+                rejected.append({"library_id": lib, "pdf_path": pdf_path_raw, "error": "options_must_be_object"})
+                continue
+            try:
+                workspace_root = _resolve_library_workspace(lib, pipeline_service._settings.workspaces_dir)
+            except Exception as exc:
+                rejected.append(
+                    {"library_id": lib, "pdf_path": pdf_path_raw, "error": "library_workspace_missing", "detail": str(exc)}
+                )
+                continue
+
+            parsed_options = dict(options_obj)
+            parsed_options["library_id"] = lib
+            parsed_options["_workspace_path"] = str(workspace_root.resolve())
+
+            job_id = f"job_{uuid.uuid4().hex}"
+            runs_root = Path(str(getattr(pipeline_service, "_runs_root", workspace_root / "runs")))
+            run_dir = runs_root / job_id
+            input_path = run_dir / "input" / src.name
+            parsed_options["_job_root"] = str(run_dir.resolve())
+            try:
+                file_hash, file_size = _copy_file_with_hash(src, input_path)
+            except Exception as exc:
+                rejected.append({"library_id": lib, "pdf_path": pdf_path_raw, "error": "copy_failed", "detail": str(exc)})
+                continue
+
+            duplicate = _find_duplicate_pdf_by_hash(workspace_root, file_hash)
+            if isinstance(duplicate, dict):
+                try:
+                    input_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                rejected.append(
+                    {
+                        "library_id": lib,
+                        "pdf_path": pdf_path_raw,
+                        "file_name": src.name,
+                        "error": "duplicate_pdf_in_library",
+                        "message": "已有相同文献",
+                        "existing_paper": duplicate,
+                    }
+                )
+                continue
+
+            path_diag = build_import_path_diagnostics(
+                data_dir=getattr(pipeline_service._settings, "data_dir", ""),
+                workspaces_dir=getattr(pipeline_service._settings, "workspaces_dir", ""),
+                library_id=lib,
+                workspace_path=workspace_root,
+                runs_root=runs_root,
+                run_dir=run_dir,
+                input_path=input_path,
+            )
+            parsed_options["_path_diagnostics"] = path_diag
+            idempotency_key = hashlib.sha256((file_hash + ":" + _safe_json_dumps(parsed_options)).encode("utf-8")).hexdigest()
+            now = _now_iso()
+            job_payload = {
+                "job_id": job_id,
+                "status": "queued",
+                "stage": "accepted",
+                "progress": 0,
+                "error_code": "",
+                "error_detail": "",
+                "input_path": str(input_path),
+                "output_path": "",
+                "options_json": _safe_json_dumps(parsed_options),
+                "result_json": _safe_json_dumps({"path_diagnostics": path_diag}),
+                "requested_cancel": False,
+                "idempotency_key": idempotency_key,
+                "last_event": "accepted",
+                "created_at": now,
+                "updated_at": now,
+                "file_size": file_size,
+                "file_hash": file_hash,
+                "library_id": lib,
+                "workspace_path": str(workspace_root.resolve()),
+                "source_job_id": "",
+                "file_name": src.name,
+            }
+            pipeline_service.create_job(job_payload)
+            use_stage_queue = str(parsed_options.get("use_stage_queue", "") or "").strip().lower() in {"1", "true", "yes"}
+            if not use_stage_queue:
+                use_stage_queue = pipeline_service._settings.pipeline_executor.strip().lower() == "stage_queue"
+            if use_stage_queue:
+                pipeline_service.enqueue_stage_task(
+                    {
+                        "job_id": job_id,
+                        "stage": "mineru_parse",
+                        "status": "queued",
+                        "priority": 100,
+                        "attempt": 0,
+                        "max_attempts": 3,
+                        "idempotency_key": f"{job_id}:mineru_parse",
+                        "input_json": {},
+                    }
+                )
+            elif pipeline_service._settings.pipeline_executor.strip().lower() == "inline":
+                store = pipeline_service._ensure_store()
+                pipeline_runtime.dispatch_inline(
+                    store,
+                    job_id,
+                    str(input_path),
+                    dict(parsed_options),
+                    pipeline_service._runs_root,
+                )
+            accepted.append(
+                {
+                    "job_id": job_id,
+                    "status": "queued",
+                    "library_id": lib,
+                    "workspace_path": str(workspace_root.resolve()),
+                    "file_name": src.name,
+                    "sse_url": f"/v1/jobs/{job_id}/events",
+                    "result_url": f"/v1/jobs/{job_id}/result",
+                }
+            )
+        return JSONResponse(
+            status_code=202 if accepted else 400,
+            content={
+                "accepted_count": len(accepted),
+                "rejected_count": len(rejected),
+                "accepted": accepted,
+                "rejected": rejected,
+            },
+        )
+
+    @router.post("/jobs/batch-status")
+    async def batch_job_status(payload: dict[str, Any] = Body(default={})):
+        job_ids = payload.get("job_ids", []) if isinstance(payload, dict) else []
+        if not isinstance(job_ids, list) or not job_ids:
+            return JSONResponse(status_code=400, content={"error": "job_ids_required"})
+        out: list[dict[str, Any]] = []
+        for raw_id in job_ids:
+            job_id = str(raw_id or "").strip()
+            if not job_id:
+                continue
+            row = pipeline_service.get_job(job_id)
+            if row is None:
+                out.append({"job_id": job_id, "error": "job_not_found"})
+            else:
+                out.append(row)
+        return {"total": len(out), "jobs": out}
 
     @router.get("/jobs")
     async def list_jobs(

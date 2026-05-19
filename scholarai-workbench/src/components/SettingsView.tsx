@@ -12,7 +12,7 @@ import {
 type SectionState = { saving: boolean; message: string };
 type KeyTestState = { testing: boolean; message: string };
 type ProviderPreset = { id: string; name: string; base_url: string };
-type AgentTemplateTarget = 'pipeline_skill' | 'qa_skill' | 'claude_md' | 'agent_md';
+type AgentTemplateTarget = 'pipeline_skill' | 'qa_skill' | 'scrapling_skill' | 'claude_md' | 'agent_md';
 type AgentTemplateEditorState = {
   open: boolean;
   section: 'pipeline_agent' | 'agent_settings' | '';
@@ -650,6 +650,12 @@ export default function SettingsView() {
                         className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest border border-outline-variant"
                       >
                         编辑 Skill
+                      </button>
+                      <button
+                        onClick={() => loadTemplateEditor('agent_settings', 'skill', 'scrapling_skill', '编辑 Scrapling Skill 模板')}
+                        className="px-3 py-1.5 text-xs rounded bg-surface-container-high text-on-surface hover:bg-surface-container-highest border border-outline-variant"
+                      >
+                        编辑 Scrapling Skill
                       </button>
                       <button
                         onClick={() => loadTemplateEditor('agent_settings', 'md', 'claude_md', '编辑知识问答 Agent MD')}

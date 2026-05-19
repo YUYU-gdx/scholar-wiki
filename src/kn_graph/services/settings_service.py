@@ -553,6 +553,7 @@ class SettingsService:
         mapping: dict[str, Path] = {
             "pipeline_skill": template_root / "skills" / "scholarly-paper-extraction" / "SKILL.md",
             "qa_skill": template_root / "skills" / "answer_library_question" / "SKILL.md",
+            "scrapling_skill": template_root / "skills" / "scrapling" / "SKILL.md",
             "claude_md": template_root / "agent-docs" / "template_agent.md",
             "agent_md": template_root / "agent-docs" / "template_agent.md",
         }
@@ -567,8 +568,9 @@ class SettingsService:
         root = (self._settings.data_dir / "templates").resolve()
         (root / "skills" / "scholarly-paper-extraction").mkdir(parents=True, exist_ok=True)
         (root / "skills" / "answer_library_question").mkdir(parents=True, exist_ok=True)
+        (root / "skills" / "scrapling").mkdir(parents=True, exist_ok=True)
         (root / "agent-docs").mkdir(parents=True, exist_ok=True)
-        for key in ("pipeline_skill", "qa_skill", "claude_md", "agent_md"):
+        for key in ("pipeline_skill", "qa_skill", "scrapling_skill", "claude_md", "agent_md"):
             path = self._resolve_agent_template_path(key)
             path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -579,6 +581,7 @@ class SettingsService:
         defaults: dict[str, Path] = {
             "pipeline_skill": bundle / "skills" / "templates" / "scholarly-paper-extraction" / "SKILL.md",
             "qa_skill": bundle / "skills" / "templates" / "answer_library_question" / "SKILL.md",
+            "scrapling_skill": bundle / "skills" / "templates" / "scrapling" / "SKILL.md",
             "claude_md": bundle / "skills" / "templates" / "agent-docs" / "template_agent.md",
             "agent_md": bundle / "skills" / "templates" / "agent-docs" / "template_agent.md",
         }

@@ -171,6 +171,7 @@ class TranslateRequest(BaseModel):
     endpoint_url: str = ""
     compare_by_paragraph: bool = False
     queue_scope: str = ""
+    skip_if_has_translation: bool = False
 
 
 class TranslationProviderConfig(BaseModel):

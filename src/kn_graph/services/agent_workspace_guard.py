@@ -214,7 +214,7 @@ def ensure_agent_workspace_minimal_config(
     """Ensure a workspace exposes only the required skills/MCP/plugins.
 
     instance_type:
-    - "chat_root": keep only answer_library_question
+    - "chat_root": keep only answer_library_question + scrapling
     - "pipeline_library": keep only scholarly-paper-extraction
     """
     ws = Path(str(workspace_path or "").strip()).resolve()
@@ -222,7 +222,7 @@ def ensure_agent_workspace_minimal_config(
         raise RuntimeError(f"workspace_path_invalid:{ws}")
 
     if instance_type == "chat_root":
-        skill_names = ["answer_library_question"]
+        skill_names = ["answer_library_question", "scrapling"]
     elif instance_type == "pipeline_library":
         skill_names = ["scholarly-paper-extraction"]
     else:

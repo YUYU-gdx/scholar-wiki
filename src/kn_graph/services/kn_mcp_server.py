@@ -44,6 +44,32 @@ def _api_get_json(base_url: str, path: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _api_post_json(base_url: str, path: str, payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = Request(
+        f"{base_url.rstrip('/')}{path}",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+    try:
+        with urlopen(req, timeout=90) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+            data = json.loads(raw) if raw else {}
+            return (data if isinstance(data, dict) else {}), int(getattr(resp, "status", 200) or 200)
+    except HTTPError as exc:
+        detail_raw = ""
+        try:
+            detail_raw = exc.read().decode("utf-8", errors="ignore")
+        except Exception:
+            detail_raw = ""
+        try:
+            data = json.loads(detail_raw) if detail_raw else {}
+        except Exception:
+            data = {"error": f"http_{exc.code}", "detail": detail_raw}
+        return (data if isinstance(data, dict) else {"error": f"http_{exc.code}"}), int(exc.code)
+
+
 def _api_get_json_or_error(base_url: str, path: str) -> tuple[dict[str, Any], str]:
     try:
         return _api_get_json(base_url, path), ""
@@ -291,6 +317,42 @@ def _build_tools() -> list[dict[str, Any]]:
                     "library_id": {"type": "string"},
                 },
                 "required": ["query"],
+            },
+        },
+        {
+            "name": "library_import_submit_batch",
+            "description": "Batch submit local PDF paths into literature libraries via pipeline.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "library_id": {"type": "string"},
+                                "pdf_path": {"type": "string"},
+                                "options": {"type": "object"},
+                            },
+                            "required": ["library_id", "pdf_path"],
+                        },
+                    }
+                },
+                "required": ["items"],
+            },
+        },
+        {
+            "name": "library_import_query_batch",
+            "description": "Batch query pipeline job statuses by job_ids.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "job_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    }
+                },
+                "required": ["job_ids"],
             },
         },
     ]
@@ -869,6 +931,43 @@ def _handle_graph_variable_concept_search(base_url: str, arguments: dict[str, An
     return _truncate_payload(out)
 
 
+def _handle_pipeline_import_batch_submit(base_url: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    items = arguments.get("items", [])
+    if not isinstance(items, list) or not items:
+        return _error("invalid_args", "items is required")
+    payload, status = _api_post_json(base_url, "/v1/pipeline/parse-extract/path-batch", {"items": items})
+    ok = status < 400 and int(payload.get("accepted_count", 0) or 0) > 0
+    out = {
+        "ok": ok,
+        "http_status": status,
+        "accepted_count": int(payload.get("accepted_count", 0) or 0),
+        "rejected_count": int(payload.get("rejected_count", 0) or 0),
+        "accepted": payload.get("accepted", []) if isinstance(payload.get("accepted"), list) else [],
+        "rejected": payload.get("rejected", []) if isinstance(payload.get("rejected"), list) else [],
+    }
+    if not ok and not out["rejected"]:
+        out["error_code"] = str(payload.get("error", "") or f"http_{status}")
+        out["error_message"] = str(payload.get("message", "") or "batch submit failed")
+    return _truncate_payload(out)
+
+
+def _handle_pipeline_import_batch_status(base_url: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    job_ids = arguments.get("job_ids", [])
+    if not isinstance(job_ids, list) or not job_ids:
+        return _error("invalid_args", "job_ids is required")
+    payload, status = _api_post_json(base_url, "/v1/jobs/batch-status", {"job_ids": job_ids})
+    if status >= 400:
+        return _error(str(payload.get("error", "") or f"http_{status}"), "batch status failed", json.dumps(payload, ensure_ascii=False))
+    jobs = payload.get("jobs", []) if isinstance(payload.get("jobs"), list) else []
+    return _truncate_payload(
+        {
+            "ok": True,
+            "total": int(payload.get("total", len(jobs)) or len(jobs)),
+            "jobs": jobs,
+        }
+    )
+
+
 def _call_tool(base_url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if name == "rag_search":
         return _handle_rag_search(base_url, arguments)
@@ -876,6 +975,10 @@ def _call_tool(base_url: str, name: str, arguments: dict[str, Any]) -> dict[str,
         return _handle_graph_variable_neighbors(base_url, arguments)
     if name == "graph_variable_concept_search":
         return _handle_graph_variable_concept_search(base_url, arguments)
+    if name == "library_import_submit_batch":
+        return _handle_pipeline_import_batch_submit(base_url, arguments)
+    if name == "library_import_query_batch":
+        return _handle_pipeline_import_batch_status(base_url, arguments)
     return _error("tool_not_found", f"tool not found: {name}")
 
 

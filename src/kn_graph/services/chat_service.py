@@ -90,7 +90,10 @@ class ChatService:
         # (whose cwd is the root workspace) auto-discovers it.
         from kn_graph.services.codex_library_config import bootstrap_workspace_project_skills
         root_ws = str(self._settings.workspaces_dir.resolve())
-        bootstrap_workspace_project_skills(root_ws, skill_names=["answer_library_question"])
+        bootstrap_workspace_project_skills(
+            root_ws,
+            skill_names=["answer_library_question", "scrapling"],
+        )
         # Set the initial backend from persisted settings.
         current = self._get_current_agent()
         if current:
@@ -1050,10 +1053,15 @@ class ChatService:
         base_url: str = "",
         endpoint_url: str = "",
         queue_scope: str = "",
+        skip_if_has_translation: bool = False,
     ) -> dict[str, Any]:
         src = str(markdown_text or "").strip()
         if not src:
             raise ValueError("text_required")
+        if bool(skip_if_has_translation):
+            for candidate in self._split_markdown_blocks(str(markdown_text or "")):
+                if self._is_existing_translation_block(candidate):
+                    raise ValueError("translation_already_exists")
         job_id = f"tr_{uuid.uuid4().hex[:16]}"
         scope = str(queue_scope or "").strip() or "global_default"
         now = datetime.now(timezone.utc).isoformat()
