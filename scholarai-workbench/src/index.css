@@ -254,13 +254,13 @@
 .callout-example { background: rgba(156, 39, 176, 0.08);  border-color: #9c27b0; }
 .callout-quote   { background: rgba(158, 158, 158, 0.08); border-color: #9e9e9e; }
 .callout-translation {
-  background: color-mix(in srgb, var(--color-secondary-container) 22%, transparent);
-  border-color: var(--color-secondary);
+  background: rgba(34, 197, 94, 0.045);
+  border-color: rgba(34, 197, 94, 0.28);
   color: var(--color-on-surface);
 }
 .callout-translation .callout-icon,
 .callout-translation .callout-title {
-  color: var(--color-secondary);
+  color: #15803d;
 }
 
 /* ---- Inline code ---- */

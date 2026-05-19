@@ -802,11 +802,32 @@ class ChatService:
         )
 
     def _decorate_translation_line(self, translated: str) -> str:
-        safe = self._escape_translation_html_preserving_formulas(str(translated or "").strip())
+        normalized = self._normalize_translation_body(translated)
+        safe = self._escape_translation_html_preserving_formulas(normalized)
         if not safe:
             return f"> {self.TRANSLATION_CALLOUT_HEADER}"
         lines = safe.splitlines()
         return "\n".join([f"> {self.TRANSLATION_CALLOUT_HEADER}", *[f"> {line}" if line else ">" for line in lines]]).rstrip()
+
+    def _normalize_translation_body(self, translated: str) -> str:
+        text = str(translated or "").strip()
+        if not text:
+            return ""
+
+        lines = [re.sub(r"^\s*>\s?", "", line).rstrip() for line in text.splitlines()]
+        text = "\n".join(lines).strip()
+
+        header = self.TRANSLATION_CALLOUT_HEADER
+        if text.startswith(header):
+            text = text[len(header):].lstrip(" \t\r\n:：")
+
+        label = "译文"
+        if text == label:
+            return ""
+        if text.startswith(label):
+            text = text[len(label):].lstrip(" \t:：")
+
+        return text.strip()
 
     def _escape_translation_html_preserving_formulas(self, text: str) -> str:
         protected, formulas = self._protect_markdown_formulas(text)

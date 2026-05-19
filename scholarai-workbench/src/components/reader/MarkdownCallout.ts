@@ -33,7 +33,7 @@ const CALLOUT_COLORS: Record<string, string> = {
   info: '#00b8d4',
   example: '#9c27b0',
   quote: '#9e9e9e',
-  translation: 'var(--color-secondary)',
+  translation: '#15803d',
 };
 
 const CALLOUT_BG: Record<string, string> = {
@@ -44,7 +44,7 @@ const CALLOUT_BG: Record<string, string> = {
   info: 'rgba(0,184,212,0.08)',
   example: 'rgba(156,39,176,0.08)',
   quote: 'rgba(158,158,158,0.08)',
-  translation: 'color-mix(in srgb, var(--color-secondary-container) 22%, transparent)',
+  translation: 'rgba(34,197,94,0.045)',
 };
 
 export function getMarkdownCalloutStyle(type: string): { color: string; background: string } {
@@ -65,6 +65,22 @@ export function buildMarkdownCallout(type: string, title: string, bodyLines: str
   return body ? `${header}\n${body}` : header;
 }
 
+function splitCalloutTitleAndInlineBody(type: string, rest: string): { title: string; inlineBody: string } {
+  const normalizedType = String(type || '').trim().toLowerCase();
+  const raw = String(rest || '').trim();
+  const fallbackTitle = CALLOUT_LABELS[normalizedType] || normalizedType;
+  if (normalizedType !== 'translation') {
+    return { title: raw || fallbackTitle, inlineBody: '' };
+  }
+  const label = TRANSLATION_CALLOUT_TITLE;
+  if (!raw) return { title: label, inlineBody: '' };
+  if (raw === label) return { title: label, inlineBody: '' };
+  if (raw.startsWith(`${label} `)) {
+    return { title: label, inlineBody: raw.slice(label.length).trim() };
+  }
+  return { title: raw, inlineBody: '' };
+}
+
 export function transformCallouts(doc: Document): void {
   const blockquotes = Array.from(doc.querySelectorAll('blockquote'));
   for (const bq of blockquotes) {
@@ -78,8 +94,7 @@ export function transformCallouts(doc: Document): void {
     const icon = CALLOUT_ICONS[type];
     if (!icon) continue;
 
-    const label = CALLOUT_LABELS[type] || type;
-    const title = rest || label;
+    const { title, inlineBody } = splitCalloutTitleAndInlineBody(type, rest);
 
     firstP.remove();
 
@@ -95,6 +110,12 @@ export function transformCallouts(doc: Document): void {
     titleDiv.className = 'callout-title';
     titleDiv.textContent = title;
     callout.appendChild(titleDiv);
+
+    if (inlineBody) {
+      const bodyP = doc.createElement('p');
+      bodyP.textContent = inlineBody;
+      callout.appendChild(bodyP);
+    }
 
     while (bq.firstChild) {
       callout.appendChild(bq.firstChild);

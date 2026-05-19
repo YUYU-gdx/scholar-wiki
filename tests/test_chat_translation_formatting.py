@@ -16,6 +16,24 @@ def test_translation_line_uses_translation_callout_and_escapes_html(tmp_path: Pa
     )
 
 
+def test_translation_line_normalizes_echoed_callout_header(tmp_path: Path) -> None:
+    service = ChatService(Settings(data_dir=tmp_path))
+    body = "随着企业日益夸大AI应用。"
+
+    decorated = service._decorate_translation_line(f"[!TRANSLATION] 译文 {body}")
+
+    assert decorated == f"> [!TRANSLATION] 译文\n> {body}"
+
+
+def test_translation_line_normalizes_echoed_translation_label(tmp_path: Path) -> None:
+    service = ChatService(Settings(data_dir=tmp_path))
+    body = "随着企业日益夸大AI应用。"
+
+    decorated = service._decorate_translation_line(f"译文：{body}")
+
+    assert decorated == f"> [!TRANSLATION] 译文\n> {body}"
+
+
 def test_bilingual_translation_protects_math_before_provider_call(tmp_path: Path, monkeypatch) -> None:
     service = ChatService(Settings(data_dir=tmp_path))
     calls: list[str] = []
@@ -40,7 +58,7 @@ def test_bilingual_translation_protects_math_before_provider_call(tmp_path: Path
         "Plain conclusion.",
     ]
     text = str(result["translated_text"])
-    assert "> [!TRANSLATION] 译文\n> 译文：This result follows $y = x + 1$ in the model." in text
+    assert "> [!TRANSLATION] 译文\n> This result follows $y = x + 1$ in the model." in text
     assert "$$\nz = x^2\n$$" in text
     assert text.count("> [!TRANSLATION] 译文") == 2
 
@@ -72,7 +90,7 @@ def test_single_translation_protects_math_before_provider_call(tmp_path: Path, m
 
     assert calls == ["Translate __KN_FORMULA_0__ exactly."]
     assert result["translated_text"] == "译文：Translate $a < b$ exactly."
-    assert result["formatted_text"] == "> [!TRANSLATION] 译文\n> 译文：Translate $a < b$ exactly."
+    assert result["formatted_text"] == "> [!TRANSLATION] 译文\n> Translate $a < b$ exactly."
 
 
 def test_existing_translation_detection_accepts_new_and_old_formats(tmp_path: Path) -> None:
