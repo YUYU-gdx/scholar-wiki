@@ -177,6 +177,22 @@
     const showTip = (lines,x,y) => { if(!lines?.length){ els.tooltip.style.display="none"; return; } els.tooltip.innerHTML=lines.join("<br>"); els.tooltip.style.left=`${x+12}px`; els.tooltip.style.top=`${y+12}px`; els.tooltip.style.display="block"; };
     const hideTip = () => { els.tooltip.style.display = "none"; };
     const nodeConcept = n => String(n?.latest_concept || "").trim() || "暂无概念定义";
+    const nodeMeasurement = n => {
+      const direct = String(n?.measurement || "").trim();
+      if (direct) return direct;
+      const methods = Array.isArray(n?.measurement_methods) ? n.measurement_methods : [];
+      const rows = methods.map(row => {
+        if (typeof row === "string") return row.trim();
+        if (!row || typeof row !== "object") return "";
+        const variable = String(row.variable || row.variable_name || "").trim();
+        const op = Array.isArray(row.operationalized_as)
+          ? row.operationalized_as.map(x => String(x || "").trim()).filter(Boolean).join("、")
+          : String(row.operationalized_as || row.measurement || row.measurement_text || "").trim();
+        if (!op) return "";
+        return variable ? `${variable}：${op}` : op;
+      }).filter(Boolean);
+      return [...new Set(rows)].join("；");
+    };
     const nodeTheories = n => Array.isArray(n?.latest_theories) ? n.latest_theories.filter(Boolean).slice(0,6) : [];
     const openReader = (paperId, libraryId) => window.parent.postMessage({ type:"KN_GRAPH_OPEN_READER", payload:{ paperId, libraryId: libraryId || activeLibraryId } }, "*");
     const findByName = (name,nodes) => { const norm = String(name||"").trim().toLowerCase(); if(!norm) return null; return nodes.find(n => [n.label,n.name,n.id].some(v => String(v||"").trim().toLowerCase()===norm)) || null; };
@@ -357,6 +373,7 @@
       els.detailScroll.innerHTML =
         `<section class="card"><h3>变量名称</h3><div class="text">${esc(nodeName(node))}</div></section>` +
         `<section class="card"><h3>变量概念</h3><div class="text">${esc(nodeConcept(node))}</div></section>` +
+        `<section class="card"><h3>测量方式</h3><div class="text">${nodeMeasurement(node)?esc(nodeMeasurement(node)):'<span class="muted">暂无测量方式</span>'}</div></section>` +
         `<section class="card"><h3>来源论文</h3>${srcPid?`<button class="link-btn" id="openSourcePaper">${esc(String(srcPaper?.title||srcPid))}</button>`:'<div class="muted">暂无来源论文</div>'}</section>` +
         `<section class="card"><h3>相关关系</h3>${rels.length?rows:'<div class="muted">暂无相关关系</div>'}${rels.length>3?`<button class="link-btn" id="toggleRelations">${state.expandedRelations?"收起":"展开更多"}</button>`:""}</section>`;
 

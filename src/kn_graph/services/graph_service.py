@@ -520,6 +520,7 @@ class GraphService:
                         "variable": variable,
                         "definition": definition,
                         "evidence_section": evidence,
+                        "measurement": evidence,
                         "theories": theories,
                     }
                 )
@@ -565,12 +566,40 @@ class GraphService:
                     "evidence_section": str(concept_entry.get("evidence_text", "") or ""),
                 }
                 payload["latest_theories"] = list(concept_entry.get("theories", []) or [])
+                measurements: list[dict[str, Any]] = []
+                seen_measurements: set[str] = set()
+                for entry in entries:
+                    measurement = str(entry.get("measurement", "") or entry.get("evidence_section", "") or "").strip()
+                    if not measurement or measurement in seen_measurements:
+                        continue
+                    seen_measurements.add(measurement)
+                    measurements.append(
+                        {
+                            "variable": str(entry.get("variable", "") or node.get("label") or node.get("name") or nid),
+                            "paper_id": str(entry.get("paper_id", "") or ""),
+                            "publication_year": entry.get("publication_year"),
+                            "operationalized_as": [measurement],
+                        }
+                    )
+                payload["measurement_methods"] = measurements
+                payload["measurement"] = "; ".join(
+                    str(item.get("operationalized_as", [""])[0] if item.get("operationalized_as") else "").strip()
+                    for item in measurements
+                    if str(item.get("operationalized_as", [""])[0] if item.get("operationalized_as") else "").strip()
+                )
             else:
                 # Fall back to extracted definition from paper if no concept entry
                 extracted_def = str(node.get("definition", "") or "").strip()
                 payload["latest_concept"] = extracted_def
                 payload["latest_concept_source"] = {}
                 payload["latest_theories"] = []
+                measurement = str(node.get("measurement", "") or "").strip()
+                payload["measurement"] = measurement
+                payload["measurement_methods"] = (
+                    [{"variable": str(node.get("label") or node.get("name") or nid), "operationalized_as": [measurement]}]
+                    if measurement
+                    else []
+                )
 
             if node_type == "variable" and degree == 0:
                 reason = "unvalidated" if not is_validated else ("definition_only" if in_defs and not in_rel else ("relation_only" if in_rel and not in_defs else "no_relation_extracted"))

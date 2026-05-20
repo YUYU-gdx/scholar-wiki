@@ -18,6 +18,8 @@ class GraphNode(BaseModel):
     latest_concept: str = ""
     latest_concept_source: dict[str, Any] = {}
     latest_theories: list[str] = []
+    measurement: str = ""
+    measurement_methods: list[dict[str, Any]] = []
     library_name: str = ""
 
 

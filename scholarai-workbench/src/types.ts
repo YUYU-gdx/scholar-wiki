@@ -11,6 +11,8 @@ export interface GraphNode {
   relation_degree?: number;
   latest_concept?: string;
   latest_theories?: string[];
+  measurement?: string;
+  measurement_methods?: Array<string | { variable?: string; variable_name?: string; paper_id?: string; publication_year?: number | null; operationalized_as?: string[]; measurement?: string; measurement_text?: string }>;
   latest_concept_source?: {
     paper_id?: string;
     publication_year?: number;
