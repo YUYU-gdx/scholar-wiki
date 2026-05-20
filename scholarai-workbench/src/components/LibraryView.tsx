@@ -3,9 +3,11 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useApp } from '../app-context';
 import { api } from '../api';
 import type { GraphNode, LiteraturePaper } from '../types';
+import { journalListTags } from '../data/journalLists';
 import { hasTranslationBlocks } from './reader/TranslationMarkdown';
 
 const MODE_KEY = 'kn_graph_library_mode';
+const CUSTOM_PAPER_TAGS_STORAGE_KEY = 'library_custom_paper_tags_v1';
 
 type Mode = 'papers' | 'variables';
 type PaperFileAvailability = {
@@ -23,6 +25,7 @@ type LibraryPaperRow = {
   libraryId: string;
   title: string;
   metaLine: string;
+  journal: string;
   sourceMdPath: string;
   files: PaperFileAvailability;
   variables: GraphNode[];
@@ -45,6 +48,32 @@ type PersistedPaperTranslationJob = {
 };
 
 const LIB_TRANSLATION_JOB_STORAGE_KEY = 'library_translation_jobs_v1';
+
+function loadCustomPaperTags(): Record<string, string[]> {
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_PAPER_TAGS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, string[]> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!Array.isArray(value)) continue;
+      const tags = value.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 12);
+      if (tags.length) out[key] = Array.from(new Set(tags));
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveCustomPaperTags(tags: Record<string, string[]>): void {
+  try {
+    window.localStorage.setItem(CUSTOM_PAPER_TAGS_STORAGE_KEY, JSON.stringify(tags));
+  } catch {
+    // ignore
+  }
+}
 
 type SelectionState = {
   pivot: number;
@@ -102,6 +131,7 @@ export default function LibraryView() {
   const [papersLoading, setPapersLoading] = useState(false);
   const [paperTranslations, setPaperTranslations] = useState<Record<string, PaperTranslationState>>({});
   const [translatedPaperFlags, setTranslatedPaperFlags] = useState<Record<string, boolean>>({});
+  const [customPaperTags, setCustomPaperTags] = useState<Record<string, string[]>>(() => loadCustomPaperTags());
   const pollingJobsRef = useRef<Set<string>>(new Set());
 
   const persistPaperTranslationJobs = useCallback((jobs: PersistedPaperTranslationJob[]) => {
@@ -132,6 +162,32 @@ export default function LibraryView() {
     next.push(entry);
     persistPaperTranslationJobs(next);
   }, [loadPersistedPaperTranslationJobs, persistPaperTranslationJobs]);
+
+  const addCustomTagToPapers = useCallback((papers: LibraryPaperRow[]) => {
+    const raw = window.prompt('输入要添加的标签');
+    const tag = String(raw || '').trim();
+    if (!tag) return;
+    setCustomPaperTags((prev) => {
+      const next: Record<string, string[]> = { ...prev };
+      for (const p of papers) {
+        const current = next[p.scopedKey] || [];
+        next[p.scopedKey] = Array.from(new Set([...current, tag])).slice(0, 12);
+      }
+      saveCustomPaperTags(next);
+      return next;
+    });
+  }, []);
+
+  const clearCustomTagsForPapers = useCallback((papers: LibraryPaperRow[]) => {
+    setCustomPaperTags((prev) => {
+      const next: Record<string, string[]> = { ...prev };
+      for (const p of papers) {
+        delete next[p.scopedKey];
+      }
+      saveCustomPaperTags(next);
+      return next;
+    });
+  }, []);
 
   const selRef = useRef<SelectionState>(createSelection());
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; visible: boolean } | null>(null);
@@ -207,6 +263,7 @@ export default function LibraryView() {
         libraryId,
         title: firstTitle(d as unknown as Record<string, unknown>, paperId),
         metaLine: metaLine(d as unknown as Record<string, unknown>),
+        journal: String(d.journal || '').trim(),
         sourceMdPath: String(d.source_md_path || '').trim(),
         files: {
           pdf: !!d.files?.pdf,
@@ -365,6 +422,7 @@ export default function LibraryView() {
           if (window.desktopShell?.runtime === 'electron') {
             await window.desktopShell.writeLocalText(mdPath, translated);
           }
+          setTranslatedPaperFlags((prev) => ({ ...prev, [scopedKey]: true }));
           setPaperTranslations((prev) => ({
             ...prev,
             [scopedKey]: { jobId, progress: 100, status: 'completed', running: false },
@@ -560,6 +618,8 @@ export default function LibraryView() {
             const loadingFiles = !detected || !!detected.loading;
             const tr = paperTranslations[p.scopedKey];
             const translated = !!translatedPaperFlags[p.scopedKey];
+            const automaticTags = journalListTags(p.journal);
+            const userTags = customPaperTags[p.scopedKey] || [];
             return (
               <div
                 key={p.scopedKey}
@@ -581,9 +641,23 @@ export default function LibraryView() {
                       <div>
                         <div className="text-sm font-semibold text-on-surface">{p.title}</div>
                       <div className="text-xs text-on-surface-variant">{p.metaLine}</div>
-                      {translated && (
-                        <div className="mt-1 inline-flex items-center rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-700">
-                          已翻译
+                      {(translated || automaticTags.length > 0 || userTags.length > 0) && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          {translated && (
+                            <span className="inline-flex items-center rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-700">
+                              已翻译
+                            </span>
+                          )}
+                          {automaticTags.map((tag) => (
+                            <span key={`${p.scopedKey}-${tag}`} className="inline-flex items-center rounded-md border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[11px] text-sky-700">
+                              {tag}
+                            </span>
+                          ))}
+                          {userTags.map((tag) => (
+                            <span key={`${p.scopedKey}-custom-${tag}`} className="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-800">
+                              {tag}
+                            </span>
+                          ))}
                         </div>
                       )}
                       </div>
@@ -611,7 +685,7 @@ export default function LibraryView() {
                   )}
                 </div>
                 <div className="mt-2 text-xs text-on-surface-variant">变量: {previewVars.map((v) => v.label || v.name || v.id).join('、') || '无'}{remain > 0 && `（+${remain} 个已折叠）`}</div>
-                {!!tr && (
+                {!!tr && tr.status !== 'completed' && (
                   <div className="mt-2 text-xs text-on-surface-variant">
                     翻译任务: {tr.status} {tr.progress}%
                   </div>
@@ -637,6 +711,7 @@ export default function LibraryView() {
         const hasPdf = papers.some((p) => paperFilesByScopedKey[p.scopedKey]?.pdf);
         const hasMd = papers.some((p) => paperFilesByScopedKey[p.scopedKey]?.markdown);
         const allExpanded = papers.every((p) => expandedPapers[p.scopedKey]);
+        const hasCustomTags = papers.some((p) => (customPaperTags[p.scopedKey] || []).length > 0);
         return (
           <>
             <div className="fixed inset-0 z-40" onClick={() => setCtxMenu(null)} />
@@ -702,6 +777,26 @@ export default function LibraryView() {
               >
                 {allExpanded ? '折叠' : '展开'} ({papers.length} 篇)
               </button>
+              <button
+                className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-container"
+                onClick={() => {
+                  addCustomTagToPapers(papers);
+                  setCtxMenu(null);
+                }}
+              >
+                添加标签 ({papers.length} 篇)
+              </button>
+              {hasCustomTags && (
+                <button
+                  className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-container"
+                  onClick={() => {
+                    clearCustomTagsForPapers(papers);
+                    setCtxMenu(null);
+                  }}
+                >
+                  清空自定义标签
+                </button>
+              )}
               <div className="border-t border-outline-variant my-1" />
               <button
                 className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"

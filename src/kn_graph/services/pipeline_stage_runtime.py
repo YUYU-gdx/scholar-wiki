@@ -16,9 +16,6 @@ def _load_job_context(service: PipelineService, job_id: str) -> tuple[dict[str, 
     row = store.get_job(job_id) if hasattr(store, "get_job") else None
     if not isinstance(row, dict):
         raise RuntimeError(f"job_not_found:{job_id}")
-    input_pdf = Path(str(row.get("input_path", "") or "")).resolve()
-    if not input_pdf.exists():
-        raise RuntimeError(f"input_missing:{input_pdf}")
     options_raw = str(row.get("options_json", "") or "{}")
     try:
         options = json.loads(options_raw)
@@ -30,6 +27,17 @@ def _load_job_context(service: PipelineService, job_id: str) -> tuple[dict[str, 
     job_root_raw = str(options.get("_job_root", "") or "").strip()
     run_dir = (Path(job_root_raw).resolve() / "run") if job_root_raw else (service._runs_root / job_id)
     run_dir.mkdir(parents=True, exist_ok=True)
+    input_pdf = pipeline_runtime._resolve_existing_pipeline_input(
+        Path(str(row.get("input_path", "") or "")),
+        job_id,
+        options,
+        service._runs_root,
+    )
+    if not input_pdf.exists():
+        raise RuntimeError(f"input_missing:{input_pdf}")
+    stored_input = str(row.get("input_path", "") or "").strip()
+    if stored_input != str(input_pdf) and hasattr(store, "update_job"):
+        store.update_job(job_id, {"input_path": str(input_pdf), "file_name": input_pdf.name})
     return row, options, input_pdf, run_dir
 
 

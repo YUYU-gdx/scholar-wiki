@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -1104,6 +1105,61 @@ class PipelineService:
                     return input_path
             except Exception:
                 pass
+        return self._resolve_retry_input_from_job_dir(row)
+
+    def _resolve_retry_input_from_job_dir(self, row: dict[str, Any]) -> Path | None:
+        raw_input = str(row.get("input_path", "") or "").strip()
+        expected = Path(raw_input).resolve() if raw_input else None
+        expected_suffix = expected.suffix.lower() if expected else ""
+        expected_hash = str(row.get("file_hash", "") or "").strip().lower()
+        job_id = str(row.get("job_id", "") or "").strip()
+
+        input_dirs: list[Path] = []
+        if expected is not None:
+            input_dirs.append(expected.parent)
+
+        options_raw = str(row.get("options_json", "") or "").strip()
+        if options_raw:
+            try:
+                options_obj = json.loads(options_raw)
+                if isinstance(options_obj, dict):
+                    root_raw = str(options_obj.get("_job_root", "") or "").strip()
+                    if root_raw:
+                        input_dirs.append(Path(root_raw).resolve() / "input")
+            except Exception:
+                pass
+
+        if job_id:
+            input_dirs.append(self._runs_root.resolve() / job_id / "input")
+
+        seen: set[str] = set()
+        candidates: list[Path] = []
+        for input_dir in input_dirs:
+            try:
+                resolved_dir = input_dir.resolve()
+            except Exception:
+                continue
+            key = str(resolved_dir)
+            if key in seen or not resolved_dir.is_dir():
+                continue
+            seen.add(key)
+            candidates.extend(sorted(p.resolve() for p in resolved_dir.iterdir() if p.is_file()))
+
+        if not candidates:
+            return None
+        if expected_hash:
+            for candidate in candidates:
+                try:
+                    digest = hashlib.sha256(candidate.read_bytes()).hexdigest().lower()
+                except Exception:
+                    continue
+                if digest == expected_hash:
+                    return candidate
+        suffix_matches = [p for p in candidates if p.suffix.lower() == expected_suffix] if expected_suffix else []
+        if len(suffix_matches) == 1:
+            return suffix_matches[0]
+        if len(candidates) == 1:
+            return candidates[0]
         return None
 
     @property

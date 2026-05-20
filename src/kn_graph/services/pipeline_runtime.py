@@ -1246,12 +1246,45 @@ def _inject_pipeline_settings(options: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _resolve_existing_pipeline_input(input_path: Path, job_id: str, options: dict[str, Any], runs_root: Path) -> Path:
+    resolved_input = input_path.resolve()
+    if resolved_input.exists() and resolved_input.is_file():
+        return resolved_input
+
+    dirs: list[Path] = [resolved_input.parent]
+    job_root_raw = str(options.get("_job_root", "") or "").strip()
+    if job_root_raw:
+        dirs.append(Path(job_root_raw).resolve() / "input")
+    if job_id:
+        dirs.append(runs_root.resolve() / job_id / "input")
+
+    seen: set[str] = set()
+    candidates: list[Path] = []
+    for raw_dir in dirs:
+        try:
+            input_dir = raw_dir.resolve()
+        except Exception:
+            continue
+        key = str(input_dir)
+        if key in seen or not input_dir.is_dir():
+            continue
+        seen.add(key)
+        candidates.extend(sorted(p.resolve() for p in input_dir.iterdir() if p.is_file()))
+
+    same_suffix = [p for p in candidates if p.suffix.lower() == resolved_input.suffix.lower()]
+    if len(same_suffix) == 1:
+        return same_suffix[0]
+    if len(candidates) == 1:
+        return candidates[0]
+    return resolved_input
+
+
 def execute_pipeline(job_store: JobStore, job_id: str, input_path: str, options: dict[str, Any], runs_root: Path) -> None:
     options = _inject_pipeline_settings(options)
     job_root_raw = str(options.get("_job_root", "") or "").strip()
     run_dir = (Path(job_root_raw).resolve() / "run") if job_root_raw else (runs_root / job_id)
     run_dir.mkdir(parents=True, exist_ok=True)
-    input_pdf = Path(input_path).resolve()
+    input_pdf = _resolve_existing_pipeline_input(Path(input_path), job_id, options, runs_root)
     checkpoint = _detect_checkpoint(run_dir)
     cp_meta: dict[str, Any] = {}
     cp_meta_path = run_dir / "checkpoint_meta.json"

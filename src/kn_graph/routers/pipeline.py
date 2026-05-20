@@ -145,6 +145,7 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             source_path = pipeline_service.resolve_retry_source_pdf(row)
             if source_path is None:
                 return JSONResponse(status_code=404, content={"error": "retry_source_pdf_missing", "job_id": job_id})
+            source_path = source_path.resolve()
             lib = str(row.get("library_id", "") or "").strip()
             if not lib:
                 return JSONResponse(status_code=400, content={"error": "library_id_missing", "job_id": job_id})
@@ -172,6 +173,8 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
                     "error_code": "",
                     "error_detail": "",
                     "progress": 0,
+                    "input_path": str(source_path),
+                    "file_name": source_path.name,
                     "last_event": "retry_resume",
                     "requested_cancel": False,
                 },
@@ -179,7 +182,7 @@ def create_router(pipeline_service: PipelineService) -> APIRouter:
             pipeline_runtime.dispatch_inline(
                 pipeline_service.store,
                 job_id,
-                str(source_path.resolve()),
+                str(source_path),
                 parsed_options,
                 pipeline_service.runs_root,
             )
