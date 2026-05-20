@@ -46,6 +46,11 @@ type PersistedPaperTranslationJob = {
   status: string;
   running: boolean;
 };
+type CustomTagDialogState = {
+  visible: boolean;
+  scopedKeys: string[];
+  value: string;
+};
 
 const LIB_TRANSLATION_JOB_STORAGE_KEY = 'library_translation_jobs_v1';
 
@@ -132,6 +137,7 @@ export default function LibraryView() {
   const [paperTranslations, setPaperTranslations] = useState<Record<string, PaperTranslationState>>({});
   const [translatedPaperFlags, setTranslatedPaperFlags] = useState<Record<string, boolean>>({});
   const [customPaperTags, setCustomPaperTags] = useState<Record<string, string[]>>(() => loadCustomPaperTags());
+  const [customTagDialog, setCustomTagDialog] = useState<CustomTagDialogState>({ visible: false, scopedKeys: [], value: '' });
   const pollingJobsRef = useRef<Set<string>>(new Set());
 
   const persistPaperTranslationJobs = useCallback((jobs: PersistedPaperTranslationJob[]) => {
@@ -163,20 +169,26 @@ export default function LibraryView() {
     persistPaperTranslationJobs(next);
   }, [loadPersistedPaperTranslationJobs, persistPaperTranslationJobs]);
 
-  const addCustomTagToPapers = useCallback((papers: LibraryPaperRow[]) => {
-    const raw = window.prompt('输入要添加的标签');
-    const tag = String(raw || '').trim();
+  const openCustomTagDialog = useCallback((papers: LibraryPaperRow[]) => {
+    const scopedKeys = papers.map((p) => p.scopedKey).filter(Boolean);
+    if (!scopedKeys.length) return;
+    setCustomTagDialog({ visible: true, scopedKeys, value: '' });
+  }, []);
+
+  const saveCustomTagDialog = useCallback(() => {
+    const tag = String(customTagDialog.value || '').trim();
     if (!tag) return;
     setCustomPaperTags((prev) => {
       const next: Record<string, string[]> = { ...prev };
-      for (const p of papers) {
-        const current = next[p.scopedKey] || [];
-        next[p.scopedKey] = Array.from(new Set([...current, tag])).slice(0, 12);
+      for (const scopedKey of customTagDialog.scopedKeys) {
+        const current = next[scopedKey] || [];
+        next[scopedKey] = Array.from(new Set([...current, tag])).slice(0, 12);
       }
       saveCustomPaperTags(next);
       return next;
     });
-  }, []);
+    setCustomTagDialog({ visible: false, scopedKeys: [], value: '' });
+  }, [customTagDialog]);
 
   const clearCustomTagsForPapers = useCallback((papers: LibraryPaperRow[]) => {
     setCustomPaperTags((prev) => {
@@ -677,7 +689,7 @@ export default function LibraryView() {
                           className="text-xs px-2 py-1 rounded border border-outline-variant hover:border-secondary disabled:opacity-50"
                           title="全文对照翻译"
                         >
-                          全文对照翻译
+                          翻译
                         </button>
                       )}
                       <button onClick={(e) => (e.stopPropagation(), deletePaper(p))} className="text-xs px-2 py-1 rounded border border-red-200 hover:border-red-400 hover:bg-red-50 text-red-600 flex items-center gap-1">删除</button>
@@ -758,7 +770,7 @@ export default function LibraryView() {
                     setCtxMenu(null);
                   }}
                 >
-                  全文对照翻译 (MD) ({papers.filter((p) => paperFilesByScopedKey[p.scopedKey]?.markdown && !translatedPaperFlags[p.scopedKey]).length} 篇)
+                  翻译 (MD) ({papers.filter((p) => paperFilesByScopedKey[p.scopedKey]?.markdown && !translatedPaperFlags[p.scopedKey]).length} 篇)
                 </button>
               )}
               <button
@@ -780,8 +792,8 @@ export default function LibraryView() {
               <button
                 className="w-full text-left px-4 py-2 text-sm text-on-surface hover:bg-surface-container"
                 onClick={() => {
-                  addCustomTagToPapers(papers);
                   setCtxMenu(null);
+                  openCustomTagDialog(papers);
                 }}
               >
                 添加标签 ({papers.length} 篇)
@@ -826,6 +838,55 @@ export default function LibraryView() {
           </>
         );
       })()}
+
+      {customTagDialog.visible && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/35 px-4" onClick={() => setCustomTagDialog({ visible: false, scopedKeys: [], value: '' })}>
+          <form
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveCustomTagDialog();
+            }}
+          >
+            <div className="border-b border-outline-variant bg-surface-container-low px-5 py-4">
+              <div className="text-sm font-semibold text-on-surface">添加标签</div>
+              <div className="mt-1 text-xs text-on-surface-variant">
+                将标签添加到 {customTagDialog.scopedKeys.length} 篇文献，标签会显示在“已翻译”同一栏。
+              </div>
+            </div>
+            <div className="px-5 py-4">
+              <label className="block text-xs font-medium text-on-surface-variant">
+                标签名称
+                <input
+                  autoFocus
+                  value={customTagDialog.value}
+                  onChange={(e) => setCustomTagDialog((prev) => ({ ...prev, value: e.target.value }))}
+                  placeholder="例如：理论基础、待精读、方法参考"
+                  className="mt-2 w-full rounded-xl border border-outline-variant bg-surface-container-lowest px-3 py-2 text-sm text-on-surface outline-none transition focus:border-secondary focus:ring-2 focus:ring-secondary/20"
+                  maxLength={32}
+                />
+              </label>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-outline-variant bg-surface-container-low px-5 py-3">
+              <button
+                type="button"
+                className="rounded-lg px-3 py-1.5 text-xs font-medium text-on-surface-variant hover:bg-surface-container"
+                onClick={() => setCustomTagDialog({ visible: false, scopedKeys: [], value: '' })}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                disabled={!customTagDialog.value.trim()}
+                className="rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-on-secondary shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                保存
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {mode === 'variables' && (
         <section>

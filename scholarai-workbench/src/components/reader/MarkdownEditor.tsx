@@ -85,6 +85,33 @@ function resolveLocalResourceUrl(raw: string, markdownAbsolutePath: string): str
   return new URL(rel, toFileUrl(unpackedBase)).toString();
 }
 
+function decodeLinkText(value: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function normalizePaperLinkKey(value: string): string {
+  return decodeLinkText(value)
+    .replace(/^@+/, '')
+    .split('#', 1)[0]
+    .split('?', 1)[0]
+    .replace(/^file:\/+/i, '')
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .pop()!
+    .replace(/\.(md|markdown|pdf|html?)$/i, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function fileUrlToPath(fileUrl: string): string {
   try {
     const u = new URL(fileUrl);
@@ -954,18 +981,53 @@ export default function MarkdownEditor({
     </div>
   ), [renderedHtml]);
 
+  const app = useApp();
+  const graphData = app?.graphData ?? null;
+
+  const resolvePaperLinkTarget = useCallback((target: string, label: string = ''): { paperId: string; libraryId: string } | null => {
+    const keys = [target, label].map(normalizePaperLinkKey).filter(Boolean);
+    if (!keys.length) return null;
+    const papers = Object.entries(graphData?.paper_map || {});
+    for (const [scopedKey, paper] of papers) {
+      const candidateLibraryId = String(paper.library_id || scopedKey.split('::')[0] || libraryId || '').trim();
+      if (libraryId && candidateLibraryId && candidateLibraryId !== libraryId) continue;
+      const candidatePaperId = String(paper.paper_id || scopedKey.split('::').slice(1).join('::') || '').trim();
+      const values = [
+        candidatePaperId,
+        String(paper.paper_id_raw || ''),
+        String(paper.paper_key || ''),
+        String(paper.title || ''),
+        String(paper.display_title || ''),
+        String(paper.source_pdf_name || ''),
+        String(paper.source_md_path || ''),
+        String(paper.source_pdf_path || ''),
+      ].map(normalizePaperLinkKey).filter(Boolean);
+      if (keys.some((key) => values.includes(key))) {
+        return { paperId: candidatePaperId, libraryId: candidateLibraryId || libraryId };
+      }
+    }
+    return null;
+  }, [graphData, libraryId]);
+
+  const openPaperLinkTarget = useCallback((target: string, label: string = ''): boolean => {
+    const hit = resolvePaperLinkTarget(target, label);
+    if (!hit?.paperId) return false;
+    window.dispatchEvent(new CustomEvent('open-reader-tab', {
+      detail: { paperId: hit.paperId, libraryId: hit.libraryId || libraryId, type: 'markdown' },
+    }));
+    return true;
+  }, [libraryId, resolvePaperLinkTarget]);
+
   const handleWikiLinkNavigate = useCallback((target: string) => {
+    if (openPaperLinkTarget(target)) return;
     if (target.startsWith('@')) {
-      window.dispatchEvent(new CustomEvent('open-reader-tab', { detail: { paperId: target.slice(1) } }));
+      window.dispatchEvent(new CustomEvent('open-reader-tab', { detail: { paperId: target.slice(1), libraryId, type: 'markdown' } }));
     } else if (target.includes('/') || target.includes('\\') || target.includes('.')) {
       window.dispatchEvent(new CustomEvent('open-reader-file', { detail: { path: target } }));
     } else {
       window.dispatchEvent(new CustomEvent('navigate-to-node', { detail: { nodeId: target } }));
     }
-  }, []);
-
-  const app = useApp();
-  const graphData = app?.graphData ?? null;
+  }, [libraryId, openPaperLinkTarget]);
   useEffect(() => {
     if (graphData?.nodes) {
       setWikiLinkNodeCache(graphData.nodes.map((n) => ({ id: n.id, label: n.label || n.name || n.id })));
@@ -1216,6 +1278,10 @@ export default function MarkdownEditor({
                     const anchor = elem?.closest('a[href]') as HTMLAnchorElement | null;
                     if (anchor) {
                       const rawHref = anchor.getAttribute('data-original-href') || anchor.getAttribute('href') || '';
+                      if (openPaperLinkTarget(rawHref, anchor.textContent || '')) {
+                        evt.preventDefault();
+                        return;
+                      }
                       const path = resolveMarkdownLinkPath(rawHref, absolutePath)
                         || resolveMarkdownLinkPath(anchor.getAttribute('href') || '', absolutePath);
                       if (path) {
