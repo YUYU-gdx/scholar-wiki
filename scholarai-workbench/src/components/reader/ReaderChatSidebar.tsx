@@ -97,9 +97,9 @@ export default function ReaderChatSidebar({
             ? {
                 ...m,
                 content: payload.answer || m.content || '',
-                tool_trace: (m.tool_trace && m.tool_trace.length > 0)
-                  ? m.tool_trace
-                  : (Array.isArray(payload.tool_trace) ? payload.tool_trace : []),
+                tool_trace: Array.isArray(payload.tool_trace) && payload.tool_trace.length > 0
+                  ? payload.tool_trace
+                  : (m.tool_trace || []),
                 status: 'completed',
               }
             : m
@@ -246,10 +246,14 @@ export default function ReaderChatSidebar({
                 : 'bg-surface-container border border-outline-variant text-on-surface'
             }`}>
               {m.role !== 'assistant' && m.content}
-              {m.role === 'assistant' && (!Array.isArray(m.tool_trace) || m.tool_trace.length === 0) && (
+              {m.role === 'assistant' && (
                 <div
                   className="prose prose-sm max-w-none prose-p:my-1.5 prose-pre:my-1.5 prose-code:before:content-none prose-code:after:content-none"
-                  dangerouslySetInnerHTML={renderMarkdown(!m.content ? 'Thinking...' : m.content)}
+                  dangerouslySetInnerHTML={renderMarkdown(
+                    String(m.content || '').trim()
+                      ? m.content
+                      : ((!Array.isArray(m.tool_trace) || m.tool_trace.length === 0) && m.status === 'running' ? 'Thinking...' : ''),
+                  )}
                 />
               )}
               {m.status === 'failed' && <div className="mt-2 text-error">消息流失败：{m.error_detail || 'stream_failed'}</div>}
