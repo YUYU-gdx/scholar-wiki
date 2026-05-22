@@ -4,6 +4,7 @@ import { useApp } from '../app-context';
 import { api } from '../api';
 import type { ChatSession, ChatMessage, Citation as CitationType } from '../types';
 import { renderMarkdownToHtmlSync } from './markdown/markdownRenderer';
+import { renderMermaidDiagrams } from './markdown/mermaidRenderer';
 
 function stringifyToolPayload(payload: unknown): string {
   if (payload == null) return '';
@@ -451,6 +452,7 @@ export default function ChatView() {
     if (feedRef.current) {
       feedRef.current.scrollTop = feedRef.current.scrollHeight;
     }
+    void renderMermaidDiagrams(feedRef.current);
   }, [messages]);
 
   const runningAssistant = messages.find(m => m.role === 'assistant' && m.status === 'running');

@@ -3,6 +3,7 @@ import { Send, PanelRightClose, PanelRightOpen, BookOpen, ChevronDown } from 'lu
 import { api } from '../../api';
 import type { ChatMessage } from '../../types';
 import { renderMarkdownToHtmlSync } from '../markdown/markdownRenderer';
+import { renderMermaidDiagrams } from '../markdown/mermaidRenderer';
 import { toTimelineRow } from './readerToolTrace';
 
 interface ReaderChatSidebarProps {
@@ -192,6 +193,7 @@ export default function ReaderChatSidebar({
 
   useEffect(() => {
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
+    void renderMermaidDiagrams(feedRef.current);
   }, [messages]);
 
   const visibleMessages = messages.filter((m) => {

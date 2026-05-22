@@ -28,6 +28,10 @@ export interface MarkdownRenderOptions {
   resolveLocalResources?: boolean;
 }
 
+function escapeHtml(value: string): string {
+  return MarkdownIt().utils.escapeHtml(value);
+}
+
 const ALLOWED_TAGS = [
   'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'strong', 'em', 's', 'mark', 'u', 'sub', 'sup',
@@ -58,6 +62,15 @@ export function createMarkdownRenderer(options: MarkdownRenderOptions = {}): Mar
     breaks: profile === 'chat',
   });
   md.validateLink = validateReaderMarkdownLink;
+  const defaultFence = md.renderer.rules.fence;
+  md.renderer.rules.fence = (tokens, idx, renderOptions, env, self) => {
+    const token = tokens[idx];
+    const info = String(token.info || '').trim().split(/\s+/, 1)[0].toLowerCase();
+    if (info === 'mermaid') {
+      return `<div class="mermaid">${escapeHtml(token.content || '')}</div>\n`;
+    }
+    return defaultFence ? defaultFence(tokens, idx, renderOptions, env, self) : self.renderToken(tokens, idx, renderOptions);
+  };
   md
     .use(markdownItFootnote)
     .use(markdownItTaskLists, { enabled: true, label: true })

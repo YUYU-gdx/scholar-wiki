@@ -25,6 +25,7 @@ import {
 import { buildReaderPositionKey, readReaderPosition, writeReaderPosition } from './ReaderPositionStore';
 import { hasTranslationBlocks, removeTranslationBlocks } from './TranslationMarkdown';
 import { renderMarkdownToHtml } from '../markdown/markdownRenderer';
+import { renderMermaidDiagrams } from '../markdown/mermaidRenderer';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -112,6 +113,11 @@ export default function MarkdownEditor({
     });
     return () => window.cancelAnimationFrame(raf);
   }, [mode, readerPositionKey, renderedHtml]);
+
+  useEffect(() => {
+    if (mode !== 'read') return;
+    void renderMermaidDiagrams(readScrollRef.current);
+  }, [mode, renderedHtml]);
 
   useEffect(() => {
     if (mode !== 'read') return;

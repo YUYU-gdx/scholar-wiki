@@ -47,4 +47,23 @@ describe('shared markdown renderer', () => {
     expect(document).not.toContain('<script');
     expect(document).not.toContain('href="javascript:');
   });
+
+  it('emits mermaid fences as renderable diagram containers in every profile', async () => {
+    const source = [
+      '```mermaid',
+      'flowchart TD',
+      '  A[Start] --> B[Done]',
+      '```',
+    ].join('\n');
+
+    const chat = await renderMarkdownToHtml(source, { profile: 'chat' });
+    const document = await renderMarkdownToHtml(source, { profile: 'document' });
+
+    for (const html of [chat, document]) {
+      expect(html).toContain('class="mermaid"');
+      expect(html).toContain('flowchart TD');
+      expect(html).not.toContain('<pre><code class="language-mermaid"');
+      expect(html).not.toContain('code-block-header');
+    }
+  });
 });

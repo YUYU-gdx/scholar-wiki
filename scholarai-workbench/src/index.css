@@ -340,6 +340,17 @@
   border-color: #00c853;
 }
 
+.mermaid {
+  margin: 1em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
 /* ---- Highlight.js token colors ---- */
 .reader-markdown .hljs-keyword   { color: #c792ea; }
 .reader-markdown .hljs-string    { color: #c3e88d; }
