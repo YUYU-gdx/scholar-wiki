@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Send, PanelRightClose, PanelRightOpen, BookOpen, ChevronDown } from 'lucide-react';
-import MarkdownIt from 'markdown-it';
-import DOMPurify from 'dompurify';
 import { api } from '../../api';
 import type { ChatMessage } from '../../types';
+import { renderMarkdownToHtmlSync } from '../markdown/markdownRenderer';
 import { toTimelineRow } from './readerToolTrace';
 
 interface ReaderChatSidebarProps {
@@ -31,8 +30,7 @@ export default function ReaderChatSidebar({
   const [expandedToolItems, setExpandedToolItems] = useState<Record<string, boolean>>({});
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
-  const md = useMemo(() => new MarkdownIt({ html: false, linkify: true, breaks: true }), []);
-  const renderMarkdown = useCallback((text: string) => ({ __html: DOMPurify.sanitize(md.render(String(text || ''))) }), [md]);
+  const renderMarkdown = useCallback((text: string) => ({ __html: renderMarkdownToHtmlSync(text, { profile: 'chat' }) }), []);
 
   const ensureSession = useCallback(async (): Promise<string> => {
     if (sessionId) return sessionId;

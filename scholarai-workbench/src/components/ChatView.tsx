@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { PlusSquare, Bot, Send, Activity, Clock, Trash2, X, ChevronDown, Zap } from 'lucide-react';
-import MarkdownIt from 'markdown-it';
-import DOMPurify from 'dompurify';
 import { useApp } from '../app-context';
 import { api } from '../api';
 import type { ChatSession, ChatMessage, Citation as CitationType } from '../types';
+import { renderMarkdownToHtmlSync } from './markdown/markdownRenderer';
 
 function stringifyToolPayload(payload: unknown): string {
   if (payload == null) return '';
@@ -218,8 +217,7 @@ export default function ChatView() {
   const [expandedToolItems, setExpandedToolItems] = useState<Record<string, boolean>>({});
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
-  const md = useMemo(() => new MarkdownIt({ html: false, linkify: true, breaks: true }), []);
-  const renderMarkdown = useCallback((text: string) => ({ __html: DOMPurify.sanitize(md.render(String(text || ''))) }), [md]);
+  const renderMarkdown = useCallback((text: string) => ({ __html: renderMarkdownToHtmlSync(text, { profile: 'chat' }) }), []);
 
   const activeSession = sessions.find(s => s.session_id === activeSessionId);
   const openCitationInReader = useCallback((c: CitationType) => {
@@ -364,9 +362,9 @@ export default function ChatView() {
                 content: payload.answer || m.content || '',
                 citations: Array.isArray(payload.citations) && payload.citations.length > 0 ? payload.citations : (m.citations || []),
                 retrieval: (payload.retrieval_trace && typeof payload.retrieval_trace === 'object') ? payload.retrieval_trace : (m.retrieval || {}),
-                tool_trace: (m.tool_trace && m.tool_trace.length > 0)
-                  ? m.tool_trace
-                  : (Array.isArray(payload.tool_trace) ? payload.tool_trace : []),
+                tool_trace: Array.isArray(payload.tool_trace) && payload.tool_trace.length > 0
+                  ? payload.tool_trace
+                  : (m.tool_trace || []),
                 status: 'completed' as const,
               }
             : m
@@ -526,8 +524,7 @@ export default function ChatView() {
                   <div className={`max-w-[80%] ${m.role === 'user' ? 'bg-primary-container text-on-primary rounded-2xl rounded-tr-none px-6 py-4 shadow-lg border border-primary/10' : 'space-y-3'}`}>
                     {m.role === 'assistant' ? (
                       <>
-                        {(!Array.isArray(m.tool_trace) || m.tool_trace.length === 0) && (
-                          <div className="font-serif text-[15px] text-on-surface leading-relaxed antialiased">
+                        <div className="font-serif text-[15px] text-on-surface leading-relaxed antialiased">
                             <div
                               className="prose prose-sm max-w-none prose-p:my-2 prose-pre:my-2 prose-code:before:content-none prose-code:after:content-none"
                               dangerouslySetInnerHTML={renderMarkdown(
@@ -535,8 +532,7 @@ export default function ChatView() {
                               )}
                             />
                             {m.status === 'running' && <span className="animate-pulse-soft"> ▌</span>}
-                          </div>
-                        )}
+                        </div>
                         {m.status === 'failed' && m.error_detail && (
                           <div className="text-sm text-error bg-error-container/10 border border-error/20 rounded-lg px-3 py-2 mt-2">
                             失败: {m.error_detail}

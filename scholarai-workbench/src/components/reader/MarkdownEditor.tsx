@@ -1,13 +1,4 @@
 ﻿import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import MarkdownIt from 'markdown-it';
-import markdownItFootnote from 'markdown-it-footnote';
-import markdownItTaskLists from 'markdown-it-task-lists';
-import markdownItMark from 'markdown-it-mark';
-import markdownItDeflist from 'markdown-it-deflist';
-import markdownItKatex from '@vscode/markdown-it-katex';
-import DOMPurify from 'dompurify';
-import hljs from 'highlight.js';
-import 'katex/dist/katex.min.css';
 import type { ViewerMode } from './types';
 import SelectionActionPopover from './SelectionActionPopover';
 import { api } from '../../api';
@@ -25,14 +16,15 @@ import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } 
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { wikiLinkCompletionSource, wikiLinkPlugin, setWikiLinkNodeCache } from './WikiLink';
 import { livePreviewPlugin } from './LivePreviewPlugin';
-import { convertScriptOnlyKatexToHtml } from './katexScriptAlignment';
 import { useApp } from '../../app-context';
 import { isSelectionInside } from './selectionScope';
-import { resolveMarkdownLinkPath } from './readerLinks';
-import { sanitizeMarkdownBeforeRender } from './MarkdownRenderSanitizer';
-import { transformCallouts } from './MarkdownCallout';
+import {
+  normalizePaperLinkKey,
+  resolveMarkdownLinkPath,
+} from './readerLinks';
 import { buildReaderPositionKey, readReaderPosition, writeReaderPosition } from './ReaderPositionStore';
 import { hasTranslationBlocks, removeTranslationBlocks } from './TranslationMarkdown';
+import { renderMarkdownToHtml } from '../markdown/markdownRenderer';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -43,141 +35,6 @@ interface MarkdownEditorProps {
   mode?: ViewerMode;
   onModeChange?: (mode: ViewerMode) => void;
   onContentChange?: (content: string) => void;
-}
-
-function toFileUrl(absPath: string): string {
-  const win = String(absPath || '').replace(/\\/g, '/');
-  const withLeading = /^[a-zA-Z]:\//.test(win) ? `/${win}` : win;
-  return `file://${encodeURI(withLeading)}`;
-}
-
-function resolveLocalResourceUrl(raw: string, markdownAbsolutePath: string): string {
-  const s = String(raw || '').trim();
-  if (!s) return s;
-  if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('data:') || s.startsWith('blob:') || s.startsWith('#')) {
-    return s;
-  }
-  const mdPath = String(markdownAbsolutePath || '');
-  if (!mdPath) return s;
-  const mdDir = mdPath.replace(/[\\/][^\\/]*$/, '');
-  let rel = s;
-  if (s.startsWith('/paper/') && s.includes('/asset?')) {
-    try {
-      const u = new URL(s, 'http://localhost');
-      const qp = u.searchParams.get('rel_path');
-      if (qp) rel = qp;
-    } catch {
-      // keep original rel
-    }
-  }
-  if (/^[a-zA-Z]:[\\/]/.test(rel) || rel.startsWith('/')) {
-    return toFileUrl(rel);
-  }
-  const baseDir = mdDir.endsWith('/') || mdDir.endsWith('\\') ? mdDir : `${mdDir}/`;
-  const primary = new URL(rel, toFileUrl(baseDir)).toString();
-  const marker = '\\final_named\\';
-  const markerPos = mdPath.toLowerCase().indexOf(marker.toLowerCase());
-  if (markerPos < 0) return primary;
-  const fileStem = (mdPath.split(/[/\\]/).pop() || '').replace(/\.[^.]+$/, '');
-  if (!fileStem) return primary;
-  const root = mdPath.slice(0, markerPos);
-  const unpackedBase = `${root}\\unpacked\\${fileStem}\\`;
-  return new URL(rel, toFileUrl(unpackedBase)).toString();
-}
-
-function decodeLinkText(value: string): string {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
-
-function normalizePaperLinkKey(value: string): string {
-  return decodeLinkText(value)
-    .replace(/^@+/, '')
-    .split('#', 1)[0]
-    .split('?', 1)[0]
-    .replace(/^file:\/+/i, '')
-    .split(/[\\/]/)
-    .filter(Boolean)
-    .pop()!
-    .replace(/\.(md|markdown|pdf|html?)$/i, '')
-    .toLowerCase()
-    .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function fileUrlToPath(fileUrl: string): string {
-  try {
-    const u = new URL(fileUrl);
-    if (u.protocol !== 'file:') return '';
-    const decoded = decodeURIComponent(u.pathname || '');
-    if (/^\/[a-zA-Z]:\//.test(decoded)) return decoded.slice(1).replace(/\//g, '\\');
-    return decoded;
-  } catch {
-    return '';
-  }
-}
-
-function guessMimeByPath(p: string): string {
-  const lower = String(p || '').toLowerCase();
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  if (lower.endsWith('.gif')) return 'image/gif';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.svg')) return 'image/svg+xml';
-  if (lower.endsWith('.bmp')) return 'image/bmp';
-  return 'application/octet-stream';
-}
-
-function highlightCodeBlocks(doc: Document): void {
-  for (const code of Array.from(doc.querySelectorAll('pre > code'))) {
-    const className = code.className || '';
-    const lm = className.match(/language-(\w+)/);
-    const lang = lm ? lm[1] : '';
-    if (!lang || !hljs.getLanguage(lang)) continue;
-    try {
-      const raw = code.textContent || '';
-      const result = hljs.highlight(raw, { language: lang, ignoreIllegals: true });
-      code.innerHTML = result.value;
-      code.className = `${className} hljs`;
-    } catch (_) { /* leave unhighlighted */ }
-  }
-}
-
-function enhanceCodeBlocks(doc: Document): void {
-  for (const pre of Array.from(doc.querySelectorAll('pre'))) {
-    const code = pre.querySelector(':scope > code');
-    const className = code?.className || '';
-    const lm = className.match(/language-(\w+)/);
-    const lang = lm ? lm[1] : '';
-    if (!lang) continue;
-
-    const header = doc.createElement('div');
-    header.className = 'code-block-header';
-
-    const label = doc.createElement('span');
-    label.className = 'code-lang-label';
-    label.textContent = lang;
-    header.appendChild(label);
-
-    const copyBtn = doc.createElement('button');
-    copyBtn.className = 'code-copy-btn';
-    copyBtn.setAttribute('type', 'button');
-    copyBtn.setAttribute('data-code-copy', '');
-    copyBtn.textContent = 'Copy';
-    header.appendChild(copyBtn);
-
-    const parent = pre.parentNode;
-    if (parent) {
-      parent.insertBefore(header, pre);
-    }
-  }
 }
 
 export default function MarkdownEditor({
@@ -323,36 +180,6 @@ export default function MarkdownEditor({
     onModeChange?.(newMode);
   };
 
-  const md = useMemo(() => (
-    new MarkdownIt({
-      html: true,
-      linkify: true,
-      typographer: true,
-      breaks: false,
-    })
-      .use(markdownItFootnote)
-      .use(markdownItTaskLists, { enabled: true, label: true })
-      .use(markdownItMark)
-      .use(markdownItDeflist)
-      .use(markdownItKatex)
-  ), []);
-
-  useEffect(() => {
-    const openRules = ['paragraph_open', 'heading_open', 'blockquote_open', 'list_item_open'];
-    for (const ruleName of openRules) {
-      const base = md.renderer.rules[ruleName];
-      md.renderer.rules[ruleName] = (tokens, idx, options, env, self) => {
-        const t = tokens[idx];
-        const map = t.map || null;
-        if (map && map.length >= 2) {
-          t.attrSet('data-src-line-start', String(map[0]));
-          t.attrSet('data-src-line-end', String(Math.max(map[0], map[1] - 1)));
-        }
-        return base ? base(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options);
-      };
-    }
-  }, [md]);
-
   const findReaderNoteRanges = (raw: string): Array<{
     start: number;
     end: number;
@@ -411,59 +238,9 @@ export default function MarkdownEditor({
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      const clean = DOMPurify.sanitize(md.render(sanitizeMarkdownBeforeRender(text)), {
-        ALLOWED_TAGS: [
-          'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-          'strong', 'em', 's', 'mark', 'u', 'sub', 'sup',
-          'blockquote', 'code', 'pre', 'span', 'div',
-          'ul', 'ol', 'li', 'input', 'label',
-          'table', 'caption', 'colgroup', 'col', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
-          'a', 'img', 'details', 'summary', 'dl', 'dt', 'dd',
-        ],
-        ALLOWED_ATTR: [
-          'href', 'src', 'alt', 'title', 'target', 'rel',
-          'class', 'id', 'type', 'checked', 'disabled',
-          'colspan', 'rowspan', 'align', 'style',
-          'data-src-line-start', 'data-src-line-end', 'data-original-href',
-        ],
-        ALLOWED_URI_REGEXP: /^(?:(?:https?|file|data|blob):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
-      });
+      const clean = await renderMarkdownToHtml(text, { profile: 'document', absolutePath });
       const parser = new DOMParser();
       const doc = parser.parseFromString(clean, 'text/html');
-      convertScriptOnlyKatexToHtml(doc);
-      transformCallouts(doc);
-      highlightCodeBlocks(doc);
-      enhanceCodeBlocks(doc);
-      const rewriteAttr = async (el: Element, key: 'src' | 'href') => {
-        const raw = el.getAttribute(key);
-        if (!raw) return;
-        if (key === 'href') el.setAttribute('data-original-href', raw);
-        let next = resolveLocalResourceUrl(raw, absolutePath);
-        if (window.desktopShell?.runtime === 'electron' && absolutePath && !next.startsWith('http://') && !next.startsWith('https://') && !next.startsWith('data:') && !next.startsWith('blob:') && !next.startsWith('file://')) {
-          const r = await window.desktopShell.resolveLocalAsset(absolutePath, raw);
-          if (r?.ok && r.path) next = toFileUrl(r.path);
-        }
-        if (window.desktopShell?.runtime === 'electron' && absolutePath && next.startsWith('file://')) {
-          const relTry = raw.startsWith('file://') ? '' : raw;
-          if (relTry) {
-            const r = await window.desktopShell.resolveLocalAsset(absolutePath, relTry);
-            if (r?.ok && r.path) next = toFileUrl(r.path);
-          }
-        }
-        if (key === 'src' && next.startsWith('file://') && window.desktopShell?.runtime === 'electron') {
-          const localPath = fileUrlToPath(next);
-          if (localPath) {
-            const read = await window.desktopShell.readLocalFile(localPath);
-            if (read?.ok && read.data) {
-              const mime = guessMimeByPath(localPath);
-              next = `data:${mime};base64,${read.data}`;
-            }
-          }
-        }
-        el.setAttribute(key, next);
-      };
-      await Promise.all(Array.from(doc.querySelectorAll('img')).map((el) => rewriteAttr(el, 'src')));
-      await Promise.all(Array.from(doc.querySelectorAll('a')).map((el) => rewriteAttr(el, 'href')));
       const notes = findReaderNoteRanges(text);
       let noteIdx = 0;
       // Primary: matched callouts that were transformed from [!NOTE] Reader Note
@@ -537,7 +314,7 @@ export default function MarkdownEditor({
     };
     run();
     return () => { cancelled = true; };
-  }, [absolutePath, md, text]);
+  }, [absolutePath, text]);
 
   useEffect(() => {
     if (mode !== 'read' && mode !== 'live-preview') {
@@ -1278,15 +1055,15 @@ export default function MarkdownEditor({
                     const anchor = elem?.closest('a[href]') as HTMLAnchorElement | null;
                     if (anchor) {
                       const rawHref = anchor.getAttribute('data-original-href') || anchor.getAttribute('href') || '';
-                      if (openPaperLinkTarget(rawHref, anchor.textContent || '')) {
-                        evt.preventDefault();
-                        return;
-                      }
                       const path = resolveMarkdownLinkPath(rawHref, absolutePath)
                         || resolveMarkdownLinkPath(anchor.getAttribute('href') || '', absolutePath);
                       if (path) {
                         evt.preventDefault();
                         window.dispatchEvent(new CustomEvent('open-reader-file', { detail: { path, libraryId } }));
+                        return;
+                      }
+                      if (openPaperLinkTarget(rawHref, anchor.textContent || '')) {
+                        evt.preventDefault();
                         return;
                       }
                     }

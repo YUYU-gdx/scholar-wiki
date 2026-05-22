@@ -20,7 +20,7 @@ type VariableCard = {
   definition: string;
   measurement: string;
   aliases: string[];
-  relatedPapers: Array<{ paperId: string; title: string }>;
+  relatedPapers: Array<{ paperId: string; libraryId: string; title: string }>;
 };
 
 function cleanVarName(raw: string): string {
@@ -79,10 +79,11 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
     const defs = Array.isArray((paper as any)?.variable_definitions) ? (paper as any).variable_definitions : [];
     const operationalization = ((paper as any)?.operationalization || {}) as Record<string, { operationalized_as?: unknown[] }>;
 
-    const aliasToPapers = new Map<string, Array<{ paperId: string; title: string }>>();
+    const aliasToPapers = new Map<string, Array<{ paperId: string; libraryId: string; title: string }>>();
     for (const [k, p] of Object.entries(graphData.paper_map || {})) {
       const pid = String((p as any)?.paper_id || k.split('::').at(-1) || '').trim();
       if (!pid) continue;
+      const plib = String((p as any)?.library_id || k.split('::')[0] || libraryId || '').trim();
       const ptitle = String((p as any)?.display_title || (p as any)?.title || pid).trim();
       const pdefs = Array.isArray((p as any)?.variable_definitions) ? (p as any).variable_definitions : [];
       for (const d of pdefs) {
@@ -93,7 +94,7 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
           const key = normVar(nm);
           if (!key) continue;
           const arr = aliasToPapers.get(key) || [];
-          if (!arr.some((x) => x.paperId === pid)) arr.push({ paperId: pid, title: ptitle });
+          if (!arr.some((x) => x.paperId === pid && x.libraryId === plib)) arr.push({ paperId: pid, libraryId: plib, title: ptitle });
           aliasToPapers.set(key, arr);
         }
       }
@@ -113,12 +114,12 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
         || formatMeasurementMethods((d as any)?.measurement_methods)
         || formatMeasurementMethods(opFromPaper);
       const aliasNames = [name, ...aliases.map((x: any) => String(x || '').trim())].filter(Boolean);
-      const relatedMap = new Map<string, { paperId: string; title: string }>();
+      const relatedMap = new Map<string, { paperId: string; libraryId: string; title: string }>();
       for (const a of aliasNames) {
         const arr = aliasToPapers.get(normVar(a)) || [];
         for (const rp of arr) {
-          if (rp.paperId === paperId) continue;
-          relatedMap.set(rp.paperId, rp);
+          if (rp.paperId === paperId && (!rp.libraryId || rp.libraryId === libraryId)) continue;
+          relatedMap.set(`${rp.libraryId}::${rp.paperId}`, rp);
         }
       }
       variableCards.push({
@@ -151,6 +152,13 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
   }
 
   const relationCount = paperEdges.length + paperModerations.length + paperInteractions.length;
+  const openRelatedPaper = (target: { paperId: string; libraryId?: string }) => {
+    const targetPaperId = String(target.paperId || '').trim();
+    if (!targetPaperId) return;
+    window.dispatchEvent(new CustomEvent('open-reader-tab', {
+      detail: { paperId: targetPaperId, libraryId: String(target.libraryId || libraryId || '').trim(), type: 'markdown' },
+    }));
+  };
   const jumpToText = (query: string) => {
     const q = String(query || '').replace(/\s+/g, ' ').trim();
     if (!q) return;
@@ -222,9 +230,15 @@ export default function RelatedEntities({ paperId, libraryId, graphData, isOpen,
                     {v.relatedPapers.length ? (
                       <div className="mt-0.5 space-y-0.5">
                         {v.relatedPapers.map((p) => (
-                          <div key={`${v.variableName}-${p.paperId}`} className="truncate" title={p.paperId}>
+                          <button
+                            key={`${v.variableName}-${p.libraryId}-${p.paperId}`}
+                            type="button"
+                            className="block w-full truncate text-left underline decoration-dotted hover:text-on-surface"
+                            title={`${p.title}（${p.paperId}）`}
+                            onClick={() => openRelatedPaper(p)}
+                          >
                             {p.title}（{p.paperId}）
-                          </div>
+                          </button>
                         ))}
                       </div>
                     ) : '无'}

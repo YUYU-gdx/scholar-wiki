@@ -1,10 +1,12 @@
-function toFileUrl(absPath: string): string {
+export const LOCAL_MARKDOWN_ALLOWED_URI_REGEXP = /^(?:(?:https?|file|data|blob):|[a-zA-Z]:[\\/]|\/|#|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
+
+export function toFileUrl(absPath: string): string {
   const win = String(absPath || '').replace(/\\/g, '/');
   const withLeading = /^[a-zA-Z]:\//.test(win) ? `/${win}` : win;
   return `file://${encodeURI(withLeading)}`;
 }
 
-function fileUrlToPath(fileUrl: string): string {
+export function fileUrlToPath(fileUrl: string): string {
   try {
     const u = new URL(fileUrl);
     if (u.protocol !== 'file:') return '';
@@ -16,6 +18,39 @@ function fileUrlToPath(fileUrl: string): string {
   }
 }
 
+export function decodeLinkText(value: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+export function normalizePaperLinkKey(value: string): string {
+  return decodeLinkText(value)
+    .replace(/^@+/, '')
+    .split('#', 1)[0]
+    .split('?', 1)[0]
+    .replace(/^file:\/+/i, '')
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .pop()!
+    .replace(/\.(md|markdown|pdf|html?)$/i, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function validateReaderMarkdownLink(url: string): boolean {
+  const raw = String(url || '').trim();
+  if (!raw) return true;
+  return !/^\s*(?:javascript|vbscript):/i.test(raw);
+}
+
 export function resolveMarkdownLinkPath(rawHref: string, markdownAbsolutePath: string): string {
   const raw = String(rawHref || '').trim();
   if (!raw) return '';
@@ -24,7 +59,7 @@ export function resolveMarkdownLinkPath(rawHref: string, markdownAbsolutePath: s
   const withoutHash = raw.split('#', 1)[0].trim();
   if (!withoutHash) return '';
   const lower = withoutHash.toLowerCase();
-  if (!lower.endsWith('.md') && !lower.endsWith('.markdown')) return '';
+  if (!/\.(md|markdown|html?|pdf)$/.test(lower)) return '';
 
   if (withoutHash.startsWith('file://')) {
     return fileUrlToPath(withoutHash);
