@@ -29,6 +29,7 @@ class MockEventSource {
 vi.mock('../../api', () => ({
   api: {
     chat: {
+      getSession: vi.fn(),
       createSession: vi.fn(),
       sendMessage: vi.fn(),
       streamEvents: vi.fn(),
@@ -40,7 +41,22 @@ describe('ReaderChatSidebar', () => {
   let source: MockEventSource;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     source = new MockEventSource();
+    window.desktopShell = {
+      runtime: 'electron',
+      readLocalText: vi.fn().mockResolvedValue({ ok: true, data: '' }),
+      writeLocalText: vi.fn().mockResolvedValue({ ok: true }),
+    } as unknown as typeof window.desktopShell;
+    vi.mocked(api.chat.getSession).mockResolvedValue({
+      session: {
+        session_id: 'session-1',
+        title: 'Reader paper-1',
+        default_mode: 'agent',
+        library_id: 'library-1',
+      },
+      messages: [],
+    });
     vi.mocked(api.chat.createSession).mockResolvedValue({
       session_id: 'session-1',
       title: 'Reader paper-1',
@@ -84,7 +100,9 @@ describe('ReaderChatSidebar', () => {
       />,
     );
 
+    await waitFor(() => expect(window.desktopShell?.readLocalText).toHaveBeenCalled());
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Summarize this paper' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /发送/ })).not.toBeDisabled());
     fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
 
     await waitFor(() => expect(api.chat.streamEvents).toHaveBeenCalledWith('session-1', 'assistant-1'));
@@ -117,5 +135,47 @@ describe('ReaderChatSidebar', () => {
     ));
     expect(assistantMessages.length).toBeGreaterThan(0);
     expect(screen.getByText(/RAG/)).toBeInTheDocument();
+    await waitFor(() => expect(window.desktopShell?.writeLocalText).toHaveBeenCalled());
+  });
+
+  it('restores the previous reader chat session from the markdown file', async () => {
+    vi.mocked(window.desktopShell!.readLocalText).mockResolvedValue({
+      ok: true,
+      data: [
+        '# Paper',
+        '',
+        '<!-- scholar-wiki-reader-chat-session {"libraryId":"library-1","paperId":"paper-1","sessionId":"session-existing"} -->',
+        '',
+      ].join('\n'),
+    });
+    vi.mocked(api.chat.getSession).mockResolvedValue({
+      session: {
+        session_id: 'session-existing',
+        title: 'Reader paper-1',
+        default_mode: 'agent',
+        library_id: 'library-1',
+      },
+      messages: [{
+        message_id: 'assistant-old',
+        session_id: 'session-existing',
+        role: 'assistant',
+        content: 'Previous answer from this paper session.',
+        status: 'completed',
+      }],
+    });
+
+    render(
+      <ReaderChatSidebar
+        paperId="paper-1"
+        libraryId="library-1"
+        absolutePath="D:\\papers\\paper-1.md"
+        isOpen
+        onToggle={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(api.chat.getSession).toHaveBeenCalledWith('session-existing', 'library-1'));
+    expect(screen.getByText(/Previous answer from this paper session/)).toBeInTheDocument();
+    expect(api.chat.createSession).not.toHaveBeenCalled();
   });
 });

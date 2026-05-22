@@ -4,6 +4,7 @@ import { api } from '../../api';
 import type { ChatMessage } from '../../types';
 import { renderMarkdownToHtmlSync } from '../markdown/markdownRenderer';
 import { renderMermaidDiagrams } from '../markdown/mermaidRenderer';
+import { readReaderChatSessionRef, writeReaderChatSessionRef } from './ReaderChatSessionMarkdown';
 import { toTimelineRow } from './readerToolTrace';
 
 interface ReaderChatSidebarProps {
@@ -28,6 +29,7 @@ export default function ReaderChatSidebar({
   const [input, setInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [chatError, setChatError] = useState('');
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [expandedToolItems, setExpandedToolItems] = useState<Record<string, boolean>>({});
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
@@ -38,8 +40,13 @@ export default function ReaderChatSidebar({
     const title = `Reader ${paperId}`;
     const session = await api.chat.createSession(title, libraryId, 'agent');
     setSessionId(session.session_id);
+    void writeReaderChatSessionRef(absolutePath, {
+      libraryId,
+      paperId,
+      sessionId: session.session_id,
+    });
     return session.session_id;
-  }, [libraryId, paperId, sessionId]);
+  }, [absolutePath, libraryId, paperId, sessionId]);
 
   const attachStream = useCallback((sid: string, messageId: string) => {
     if (streamRef.current) streamRef.current.close();
@@ -130,7 +137,7 @@ export default function ReaderChatSidebar({
 
   const sendMessage = useCallback(async () => {
     const question = input.trim();
-    if (!question || submitting) return;
+    if (!question || submitting || loadingHistory) return;
     setInput('');
     setChatError('');
     setSubmitting(true);
@@ -179,17 +186,42 @@ export default function ReaderChatSidebar({
     } finally {
       setSubmitting(false);
     }
-  }, [absolutePath, attachStream, ensureSession, input, libraryId, sessionId, submitting]);
+  }, [absolutePath, attachStream, ensureSession, input, libraryId, loadingHistory, sessionId, submitting]);
 
   useEffect(() => {
+    let cancelled = false;
     setSessionId(null);
     setMessages([]);
     setChatError('');
+    setLoadingHistory(false);
     if (streamRef.current) {
       streamRef.current.close();
       streamRef.current = null;
     }
-  }, [paperId, libraryId]);
+    const loadHistory = async () => {
+      if (!absolutePath || !paperId || !libraryId) return;
+      setLoadingHistory(true);
+      try {
+        const ref = await readReaderChatSessionRef(absolutePath, libraryId, paperId);
+        if (cancelled || !ref?.sessionId) return;
+        const history = await api.chat.getSession(ref.sessionId, libraryId);
+        if (cancelled) return;
+        setSessionId(history.session.session_id || ref.sessionId);
+        setMessages(Array.isArray(history.messages) ? history.messages : []);
+      } catch {
+        if (!cancelled) {
+          setSessionId(null);
+          setMessages([]);
+        }
+      } finally {
+        if (!cancelled) setLoadingHistory(false);
+      }
+    };
+    void loadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [absolutePath, paperId, libraryId]);
 
   useEffect(() => {
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
@@ -296,6 +328,9 @@ export default function ReaderChatSidebar({
             </div>
           </div>
         ))}
+        {loadingHistory && visibleMessages.length === 0 && (
+          <div className="text-xs text-outline px-1 py-2">Loading previous chat...</div>
+        )}
       </div>
 
       <div className="p-4 border-t border-outline-variant bg-surface-container-low">
@@ -317,7 +352,7 @@ export default function ReaderChatSidebar({
           />
           <button
             onClick={sendMessage}
-            disabled={!input.trim() || submitting}
+            disabled={!input.trim() || submitting || loadingHistory}
             className="px-3 py-2.5 rounded-lg bg-secondary text-on-secondary disabled:opacity-50 inline-flex items-center gap-1"
           >
             <Send className="w-3.5 h-3.5" />
