@@ -563,9 +563,11 @@ export default function ChatView() {
                         {Array.isArray(m.tool_trace) && m.tool_trace.length > 0 && (
                           <div className="space-y-2 mt-2">
                             {(() => {
+                              const hasRenderedContent = String(m.content || '').trim().length > 0;
                               const timelineRows = m.tool_trace
                                 .map((t) => toTimelineRow((t && typeof t === 'object') ? (t as Record<string, unknown>) : {}))
-                                .filter((x): x is TimelineRow => !!x);
+                                .filter((x): x is TimelineRow => !!x)
+                                .filter((x) => !(x.kind === 'delta_text' && hasRenderedContent));
                               return (
                                 <>
                                   {timelineRows.map((timeline, idx) => {
@@ -573,9 +575,11 @@ export default function ChatView() {
                                     const itemExpanded = !!expandedToolItems[itemKey];
                                     if (timeline.kind === 'delta_text') {
                                       return (
-                                        <div key={idx} className="text-sm text-on-surface-variant whitespace-pre-wrap break-words px-1 py-0.5">
-                                          {timeline.detail}
-                                        </div>
+                                        <div
+                                          key={idx}
+                                          className="prose prose-sm max-w-none text-on-surface-variant px-1 py-0.5 prose-p:my-1.5 prose-pre:my-1.5 prose-code:before:content-none prose-code:after:content-none"
+                                          dangerouslySetInnerHTML={renderMarkdown(timeline.detail)}
+                                        />
                                       );
                                     }
                                     return (

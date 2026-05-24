@@ -294,14 +294,17 @@ export default function ReaderChatSidebar({
                   {m.tool_trace
                     .map((t) => toTimelineRow((t && typeof t === 'object') ? (t as Record<string, unknown>) : {}))
                     .filter((x): x is NonNullable<ReturnType<typeof toTimelineRow>> => !!x)
+                    .filter((timeline) => !(timeline.kind === 'delta_text' && String(m.content || '').trim().length > 0))
                     .map((timeline, idx) => {
                       const itemKey = `${m.message_id}-inline-${idx}`;
                       const itemExpanded = !!expandedToolItems[itemKey];
                       if (timeline.kind === 'delta_text') {
                         return (
-                          <div key={itemKey} className="text-xs text-on-surface-variant whitespace-pre-wrap break-words px-1 py-0.5">
-                            {timeline.detail}
-                          </div>
+                          <div
+                            key={itemKey}
+                            className="prose prose-sm max-w-none text-on-surface-variant px-1 py-0.5 prose-p:my-1.5 prose-pre:my-1.5 prose-code:before:content-none prose-code:after:content-none"
+                            dangerouslySetInnerHTML={renderMarkdown(timeline.detail)}
+                          />
                         );
                       }
                       return (
