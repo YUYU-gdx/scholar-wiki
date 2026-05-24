@@ -182,6 +182,7 @@ scrapling extract stealthy-fetch "https://example.com" output.md --solve-cloudfl
 ## 8. 执行要求（默认）
 
 - 优先下载可公开访问/开放获取的 PDF。
+- 浏览器抓取默认要求优先使用本机浏览器（如 Chrome，启用 `--real-chrome`），以便复用用户机构网络与登录权限环境。
 - 每次任务都输出 `download_manifest.json`。
 - 对失败链接记录原因（403/404/timeout/非 PDF）。
 - 不要把脚本散落在根目录；统一写入 `crawler_scripts/`。

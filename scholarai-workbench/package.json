@@ -1,7 +1,7 @@
 {
     "name": "scholar-wiki",
     "private": true,
-    "version": "0.1.10",
+    "version": "0.1.11",
     "description": "Scholar Wiki - Desktop app for academic knowledge graph exploration and AI-powered research",
     "main": "electron/main.cjs",
     "type": "module",
