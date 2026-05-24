@@ -26,6 +26,13 @@ import { buildReaderPositionKey, readReaderPosition, writeReaderPosition } from 
 import { hasTranslationBlocks, removeTranslationBlocks } from './TranslationMarkdown';
 import { renderMarkdownToHtml } from '../markdown/markdownRenderer';
 import { renderMermaidDiagrams } from '../markdown/mermaidRenderer';
+import {
+  clearReaderFindMarks,
+  findFirstRenderedTextBlock,
+  highlightReaderFindMatches,
+  setActiveReaderFindMatch,
+  type ReaderFindMatch,
+} from './ReaderFind';
 
 interface MarkdownEditorProps {
   paperId: string;
@@ -59,6 +66,10 @@ export default function MarkdownEditor({
   const [docTranslationProgress, setDocTranslationProgress] = useState(0);
   const [docTranslationStatus, setDocTranslationStatus] = useState('');
   const [docHasActiveTask, setDocHasActiveTask] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [findActiveIndex, setFindActiveIndex] = useState(0);
+  const [findMatchCount, setFindMatchCount] = useState(0);
   const docTranslationPollingRef = useRef(false);
   const hasDocumentTranslations = useMemo(() => hasTranslationBlocks(text), [text]);
   const [noteRanges, setNoteRanges] = useState<Array<{
@@ -72,6 +83,8 @@ export default function MarkdownEditor({
     quads: string;
   }>>([]);
   const flashTimerRef = useRef<number | null>(null);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
+  const findMatchesRef = useRef<ReaderFindMatch[]>([]);
 
   // CM6 refs
   const editorContainerRef = useRef<HTMLDivElement>(null);
@@ -118,6 +131,80 @@ export default function MarkdownEditor({
     if (mode !== 'read') return;
     void renderMermaidDiagrams(readScrollRef.current);
   }, [mode, renderedHtml]);
+
+  const clearFind = useCallback(() => {
+    clearReaderFindMarks(readScrollRef.current?.querySelector('.reader-markdown') as HTMLElement | null);
+    findMatchesRef.current = [];
+    setFindMatchCount(0);
+    setFindActiveIndex(0);
+  }, []);
+
+  const runFind = useCallback((query: string, preferredIndex = 0) => {
+    const root = readScrollRef.current?.querySelector('.reader-markdown') as HTMLElement | null;
+    const matches = highlightReaderFindMatches(root, query);
+    findMatchesRef.current = matches;
+    setFindMatchCount(matches.length);
+    const nextIndex = matches.length ? Math.max(0, Math.min(preferredIndex, matches.length - 1)) : 0;
+    setFindActiveIndex(nextIndex);
+    if (matches.length) setActiveReaderFindMatch(matches, nextIndex);
+  }, []);
+
+  const moveFind = useCallback((delta: number) => {
+    const matches = findMatchesRef.current;
+    if (!matches.length) return;
+    const nextIndex = (findActiveIndex + delta + matches.length) % matches.length;
+    setFindActiveIndex(nextIndex);
+    setActiveReaderFindMatch(matches, nextIndex);
+  }, [findActiveIndex]);
+
+  useEffect(() => {
+    if (mode !== 'read') {
+      setFindOpen(false);
+      setFindQuery('');
+      clearFind();
+      return;
+    }
+    if (!findOpen) {
+      clearFind();
+      return;
+    }
+    runFind(findQuery, findActiveIndex);
+  }, [clearFind, findActiveIndex, findOpen, findQuery, mode, renderedHtml, runFind]);
+
+  useEffect(() => {
+    if (!findOpen) return;
+    const raf = window.requestAnimationFrame(() => {
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [findOpen]);
+
+  useEffect(() => {
+    if (mode !== 'read') return;
+    const onKeyDown = (evt: KeyboardEvent) => {
+      const key = String(evt.key || '').toLowerCase();
+      if ((evt.ctrlKey || evt.metaKey) && key === 'f') {
+        evt.preventDefault();
+        setFindOpen(true);
+        return;
+      }
+      if (!findOpen) return;
+      if (key === 'escape') {
+        evt.preventDefault();
+        setFindOpen(false);
+        setFindQuery('');
+        clearFind();
+        return;
+      }
+      if (key === 'enter') {
+        evt.preventDefault();
+        moveFind(evt.shiftKey ? -1 : 1);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [clearFind, findOpen, mode, moveFind]);
 
   useEffect(() => {
     if (mode !== 'read') return;
@@ -430,11 +517,7 @@ export default function MarkdownEditor({
         if (!host) return false;
         const contentRoot = host.querySelector('.reader-markdown') as HTMLElement | null;
         if (!contentRoot) return false;
-        const nodes = Array.from(contentRoot.querySelectorAll('p,li,blockquote,td,th,h1,h2,h3,h4,h5,h6')) as HTMLElement[];
-        const hit = nodes.find((n) => {
-          const textNorm = String(n.textContent || '').replace(/\s+/g, ' ').toLowerCase();
-          return candidates.some((c) => textNorm.includes(c));
-        });
+        const hit = findFirstRenderedTextBlock(contentRoot, candidates);
         if (!hit) return false;
         hit.scrollIntoView({ behavior: 'smooth', block: 'center' });
         const prev = hit.style.backgroundColor;
@@ -970,7 +1053,7 @@ export default function MarkdownEditor({
   }, [text]);
 
   return (
-    <div ref={selectionHostRef} className="flex flex-col h-full bg-surface-container-low">
+    <div ref={selectionHostRef} className="relative flex flex-col h-full bg-surface-container-low">
       <div className="flex items-center justify-between px-4 py-2 border-b border-outline-variant bg-surface-container-lowest">
         <span className="text-xs font-mono text-on-surface-variant truncate max-w-[300px]">{fileName}</span>
         <div className="flex items-center gap-1 bg-surface-container rounded-lg p-0.5">
@@ -1025,6 +1108,65 @@ export default function MarkdownEditor({
 
         {mode === 'read' && (
           <div className="flex h-full">
+            {findOpen && (
+              <div className="absolute right-5 top-14 z-40 flex items-center gap-1 rounded-lg border border-outline-variant bg-surface-container-lowest px-2 py-1.5 shadow-xl">
+                <input
+                  ref={findInputRef}
+                  value={findQuery}
+                  onChange={(e) => {
+                    setFindQuery(e.target.value);
+                    setFindActiveIndex(0);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      moveFind(e.shiftKey ? -1 : 1);
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setFindOpen(false);
+                      setFindQuery('');
+                      clearFind();
+                    }
+                  }}
+                  placeholder="查找"
+                  className="w-48 rounded-md border border-outline-variant bg-surface-container px-2 py-1 text-sm text-on-surface outline-none focus:border-secondary"
+                />
+                <span className="min-w-14 text-center text-[11px] font-mono text-on-surface-variant">
+                  {findMatchCount ? `${findActiveIndex + 1}/${findMatchCount}` : '0/0'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => moveFind(-1)}
+                  disabled={!findMatchCount}
+                  className="rounded border border-outline-variant px-2 py-1 text-xs text-on-surface hover:border-secondary disabled:opacity-40"
+                  title="上一个"
+                >
+                  ^
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveFind(1)}
+                  disabled={!findMatchCount}
+                  className="rounded border border-outline-variant px-2 py-1 text-xs text-on-surface hover:border-secondary disabled:opacity-40"
+                  title="下一个"
+                >
+                  v
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFindOpen(false);
+                    setFindQuery('');
+                    clearFind();
+                  }}
+                  className="rounded border border-outline-variant px-2 py-1 text-xs text-on-surface hover:border-secondary"
+                  title="关闭"
+                >
+                  x
+                </button>
+              </div>
+            )}
             <Outline
               content={currentContentRef.current}
               onGoToLine={(line) => {

@@ -1,8 +1,8 @@
-﻿import { FileText, ExternalLink, Library, Layers, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+﻿import { FileText, ExternalLink, Library, Layers, ChevronDown, ChevronRight, Loader2, Search } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useApp } from '../app-context';
 import { api } from '../api';
-import type { GraphNode, LiteraturePaper } from '../types';
+import type { GraphNode, LiteraturePaper, LiteratureSearchHit, SemanticVariableMatch } from '../types';
 import { journalListTags } from '../data/journalLists';
 import { hasTranslationBlocks } from './reader/TranslationMarkdown';
 
@@ -51,8 +51,26 @@ type CustomTagDialogState = {
   scopedKeys: string[];
   value: string;
 };
+type PaperContextMenuState = {
+  x: number;
+  y: number;
+  visible: boolean;
+  scopedKeys: string[];
+};
 
 const LIB_TRANSLATION_JOB_STORAGE_KEY = 'library_translation_jobs_v1';
+
+function includesText(value: unknown, query: string): boolean {
+  return String(value || '').toLowerCase().includes(query);
+}
+
+function hitPaperId(hit: LiteratureSearchHit): string {
+  return String(hit.paper_id || hit.paperId || hit.id || '').trim();
+}
+
+function hitSnippet(hit: LiteratureSearchHit): string {
+  return String(hit.sentence || hit.paragraph || hit.text || hit.content || '').replace(/\s+/g, ' ').trim();
+}
 
 function loadCustomPaperTags(): Record<string, string[]> {
   try {
@@ -78,6 +96,12 @@ function saveCustomPaperTags(tags: Record<string, string[]>): void {
   } catch {
     // ignore
   }
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable;
 }
 
 type SelectionState = {
@@ -137,6 +161,14 @@ export default function LibraryView() {
   const [paperTranslations, setPaperTranslations] = useState<Record<string, PaperTranslationState>>({});
   const [translatedPaperFlags, setTranslatedPaperFlags] = useState<Record<string, boolean>>({});
   const [customPaperTags, setCustomPaperTags] = useState<Record<string, string[]>>(() => loadCustomPaperTags());
+  const [paperSearchQuery, setPaperSearchQuery] = useState('');
+  const [paperFullTextLoading, setPaperFullTextLoading] = useState(false);
+  const [paperFullTextError, setPaperFullTextError] = useState('');
+  const [paperFullTextHits, setPaperFullTextHits] = useState<LiteratureSearchHit[]>([]);
+  const [variableSearchQuery, setVariableSearchQuery] = useState('');
+  const [variableSemanticLoading, setVariableSemanticLoading] = useState(false);
+  const [variableSemanticError, setVariableSemanticError] = useState('');
+  const [semanticVariableResults, setSemanticVariableResults] = useState<SemanticVariableMatch[]>([]);
   const [customTagDialog, setCustomTagDialog] = useState<CustomTagDialogState>({ visible: false, scopedKeys: [], value: '' });
   const pollingJobsRef = useRef<Set<string>>(new Set());
 
@@ -202,7 +234,7 @@ export default function LibraryView() {
   }, []);
 
   const selRef = useRef<SelectionState>(createSelection());
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; visible: boolean } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<PaperContextMenuState | null>(null);
   const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
 
   const selectedKey = useMemo(() => selectedLibraryIds.slice().sort().join('|'), [selectedLibraryIds]);
@@ -293,6 +325,28 @@ export default function LibraryView() {
     });
   }, [libraryPapers, variables, selectedLibraryIds]);
 
+  const visiblePaperList = useMemo(() => {
+    const q = paperSearchQuery.trim().toLowerCase();
+    if (!q) return paperList;
+    return paperList.filter((p) => {
+      const automaticTags = journalListTags(p.journal);
+      const userTags = customPaperTags[p.scopedKey] || [];
+      return (
+        includesText(p.title, q) ||
+        includesText(p.metaLine, q) ||
+        includesText(p.paperId, q) ||
+        includesText(p.rawPaperId, q) ||
+        includesText(p.journal, q) ||
+        automaticTags.some((tag) => includesText(tag, q)) ||
+        userTags.some((tag) => includesText(tag, q)) ||
+        p.variables.some((v) => includesText(v.label || v.name || v.id, q) || includesText(v.latest_concept, q)) ||
+        (q === 'translated' && !!translatedPaperFlags[p.scopedKey]) ||
+        (q === 'pdf' && p.files.pdf) ||
+        ((q === 'md' || q === 'markdown') && p.files.markdown)
+      );
+    });
+  }, [customPaperTags, paperList, paperSearchQuery, translatedPaperFlags]);
+
   const paperFilesByScopedKey = useMemo<Record<string, PaperFileStatus>>(() => {
     const next: Record<string, PaperFileStatus> = {};
     for (const p of paperList) {
@@ -371,11 +425,11 @@ export default function LibraryView() {
   const selectAll = useCallback(() => {
     const s = selRef.current;
     s.selected.clear();
-    for (let i = 0; i < paperList.length; i++) {
+    for (let i = 0; i < visiblePaperList.length; i++) {
       s.selected.add(i);
     }
     forceUpdate();
-  }, [paperList]);
+  }, [visiblePaperList]);
 
   const clearSelection = useCallback(() => {
     const s = selRef.current;
@@ -384,8 +438,32 @@ export default function LibraryView() {
   }, []);
 
   const getSelectedPapers = useCallback(() => {
-    return Array.from(selRef.current.selected).map((i) => paperList[i]).filter(Boolean);
+    return Array.from(selRef.current.selected).map((i) => visiblePaperList[i]).filter(Boolean);
+  }, [visiblePaperList]);
+
+  const getPapersByScopedKeys = useCallback((scopedKeys: string[]) => {
+    const wanted = new Set(scopedKeys);
+    return paperList.filter((p) => wanted.has(p.scopedKey));
   }, [paperList]);
+
+  useEffect(() => {
+    if (mode !== 'papers') return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        window.getSelection()?.removeAllRanges();
+        selectAll();
+        return;
+      }
+      if (e.key === 'Escape') {
+        clearSelection();
+        setCtxMenu(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [clearSelection, mode, selectAll]);
 
   // 鈹€鈹€ Existing helpers 鈹€鈹€
 
@@ -552,6 +630,17 @@ export default function LibraryView() {
     })).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
   }, [variables, paperList]);
 
+  const visibleVariableRows = useMemo(() => {
+    const q = variableSearchQuery.trim().toLowerCase();
+    if (!q) return variableRows;
+    return variableRows.filter((row) => (
+      includesText(row.name, q) ||
+      includesText(row.concept, q) ||
+      includesText(row.sourcePaperId, q) ||
+      includesText(row.sourcePaperTitle, q)
+    ));
+  }, [variableRows, variableSearchQuery]);
+
   const openVariableSourceInReader = (row: { id: string; libraryId: string; sourcePaperId: string }) => {
     const sourcePaperId = String(row.sourcePaperId || '').trim();
     const hit = paperList.find((p) => (
@@ -575,6 +664,90 @@ export default function LibraryView() {
     }
     setReaderReturnView('library');
     setCurrentView('reader');
+  };
+
+  const openPaperSearchHit = (hit: LiteratureSearchHit) => {
+    const paperId = hitPaperId(hit);
+    const libraryId = String(hit.library_id || hit.libraryId || '').trim();
+    const paper = paperList.find((p) => (
+      (!libraryId || p.libraryId === libraryId) &&
+      (p.paperId === paperId || p.rawPaperId === paperId)
+    ));
+    const targetPaperId = paper?.paperId || paperId;
+    const targetLibraryId = paper?.libraryId || libraryId || selectedLibraryIds[0] || '';
+    if (!targetPaperId || !targetLibraryId) return;
+    openInReader(targetPaperId, targetLibraryId, paper?.rawPaperId || targetPaperId, 'markdown');
+    const snippet = hitSnippet(hit);
+    if (snippet) {
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('reader-search-and-jump', {
+          detail: { paperId: targetPaperId, query: snippet },
+        }));
+      }, 350);
+    }
+  };
+
+  const runPaperFullTextSearch = async () => {
+    const q = paperSearchQuery.trim();
+    if (!q) return;
+    const libs = selectedLibraryIds.map((x) => String(x || '').trim()).filter(Boolean);
+    if (!libs.length) return;
+    setPaperFullTextLoading(true);
+    setPaperFullTextError('');
+    try {
+      const results = await Promise.all(libs.map(async (libId) => {
+        const res = await api.literature.search(q, libId, 20, 'sentence,paragraph', 0.4, 0.6);
+        return (res.merged_hits || []).map((hit) => ({ ...hit, library_id: String(hit.library_id || libId) }));
+      }));
+      setPaperFullTextHits(results.flat());
+    } catch (err) {
+      setPaperFullTextError(String((err as Error)?.message || err));
+      setPaperFullTextHits([]);
+    } finally {
+      setPaperFullTextLoading(false);
+    }
+  };
+
+  const runVariableSemanticSearch = async () => {
+    const q = variableSearchQuery.trim();
+    if (!q) return;
+    const libs = selectedLibraryIds.map((x) => String(x || '').trim()).filter(Boolean);
+    if (!libs.length) return;
+    setVariableSemanticLoading(true);
+    setVariableSemanticError('');
+    try {
+      const res = await api.graph.semanticVariableSearch(q, 12, libs);
+      setSemanticVariableResults(res.matched_variables || []);
+    } catch (err) {
+      setVariableSemanticError(String((err as Error)?.message || err));
+      setSemanticVariableResults([]);
+    } finally {
+      setVariableSemanticLoading(false);
+    }
+  };
+
+  const openSemanticVariableSource = (row: SemanticVariableMatch) => {
+    const paperId = String(row.paper_id || '').trim();
+    const libraryId = String(row.library_id || '').trim();
+    const paper = paperList.find((p) => p.libraryId === libraryId && (p.paperId === paperId || p.rawPaperId === paperId));
+    if (paper || (paperId && libraryId)) {
+      openInReader(paper?.paperId || paperId, paper?.libraryId || libraryId, paper?.rawPaperId || paperId, 'markdown');
+      const q = String(row.concept_text || row.variable_name || '').trim();
+      if (q) {
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('reader-search-and-jump', {
+            detail: { paperId: paper?.paperId || paperId, query: q },
+          }));
+        }, 350);
+      }
+    }
+  };
+
+  const focusSemanticVariable = (row: SemanticVariableMatch) => {
+    if (!row.node_id) return;
+    setSelectedNodeId(row.node_id);
+    setSelectedNodeLibraryId(String(row.library_id || ''));
+    setCurrentView('graph');
   };
 
   const setLibraryMode = (next: Mode) => {
@@ -610,17 +783,70 @@ export default function LibraryView() {
           }}
           tabIndex={-1}
         >
+          <div className="flex flex-col gap-3 rounded-xl border border-outline-variant bg-surface-container-lowest p-3">
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-outline" />
+                <input
+                  value={paperSearchQuery}
+                  onChange={(e) => setPaperSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void runPaperFullTextSearch();
+                  }}
+                  placeholder="搜索标题、作者、期刊、标签、变量；回车全文搜索"
+                  className="w-full rounded-lg border border-outline-variant bg-surface-container py-2 pl-9 pr-3 text-sm outline-none focus:border-secondary"
+                />
+              </div>
+              <button
+                onClick={() => void runPaperFullTextSearch()}
+                disabled={!paperSearchQuery.trim() || paperFullTextLoading}
+                className="rounded-lg bg-secondary px-3 py-2 text-sm font-semibold text-on-secondary disabled:opacity-50"
+              >
+                {paperFullTextLoading ? '全文检索中...' : '全文检索'}
+              </button>
+            </div>
+            <div className="text-xs text-on-surface-variant">
+              本地匹配 {visiblePaperList.length}/{paperList.length} 篇
+            </div>
+            {!!paperFullTextError && (
+              <div className="rounded-lg border border-error/30 bg-error-container/20 px-3 py-2 text-xs text-error">{paperFullTextError}</div>
+            )}
+            {paperFullTextHits.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs font-mono uppercase text-outline">正文命中 {paperFullTextHits.length} 条</div>
+                {paperFullTextHits.slice(0, 20).map((hit, i) => {
+                  const pid = hitPaperId(hit);
+                  const lib = String(hit.library_id || '').trim();
+                  const snippet = hitSnippet(hit);
+                  return (
+                    <button
+                      key={`${lib}-${pid}-${i}`}
+                      onClick={() => openPaperSearchHit(hit)}
+                      className="block w-full rounded-lg border border-outline-variant bg-surface-container p-3 text-left hover:border-secondary"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="truncate text-sm font-semibold text-on-surface">{String(hit.title || pid || '未命名文献')}</div>
+                        <div className="shrink-0 text-[11px] font-mono text-outline">{lib}</div>
+                      </div>
+                      <div className="mt-1 line-clamp-2 text-xs text-on-surface-variant">{snippet || '无命中文本'}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {papersLoading && paperList.length === 0 && (
             <div className="text-sm text-on-surface-variant text-center py-8">
               正在加载文献...
             </div>
           )}
-          {!papersLoading && paperList.length === 0 && (
+          {!papersLoading && visiblePaperList.length === 0 && (
             <div className="text-sm text-on-surface-variant text-center py-8">
-              暂未导入文献
+              {paperList.length === 0 ? '暂未导入文献' : '没有匹配的文献'}
             </div>
           )}
-          {paperList.map((p, idx) => {
+          {visiblePaperList.map((p, idx) => {
             const expanded = !!expandedPapers[p.scopedKey];
             const previewVars = p.variables.slice(0, 5);
             const remain = Math.max(0, p.variables.length - 5);
@@ -643,8 +869,15 @@ export default function LibraryView() {
                 }}
                 onContextMenu={(e) => {
                   e.preventDefault();
-                  if (!isSelected(idx)) select(idx);
-                  setCtxMenu({ x: e.clientX, y: e.clientY, visible: true });
+                  let selectedIndexes: number[];
+                  if (isSelected(idx)) {
+                    selectedIndexes = Array.from(selRef.current.selected);
+                  } else {
+                    select(idx);
+                    selectedIndexes = [idx];
+                  }
+                  const scopedKeys = selectedIndexes.map((i) => visiblePaperList[i]?.scopedKey).filter(Boolean);
+                  setCtxMenu({ x: e.clientX, y: e.clientY, visible: true, scopedKeys });
                 }}
               >
                 <div className="flex items-center justify-between gap-3">
@@ -719,7 +952,7 @@ export default function LibraryView() {
       )}
 
       {mode === 'papers' && ctxMenu?.visible && (() => {
-        const papers = Array.from(selRef.current.selected).map((i) => paperList[i]).filter(Boolean);
+        const papers = getPapersByScopedKeys(ctxMenu.scopedKeys);
         const hasPdf = papers.some((p) => paperFilesByScopedKey[p.scopedKey]?.pdf);
         const hasMd = papers.some((p) => paperFilesByScopedKey[p.scopedKey]?.markdown);
         const allExpanded = papers.every((p) => expandedPapers[p.scopedKey]);
@@ -889,16 +1122,75 @@ export default function LibraryView() {
       )}
 
       {mode === 'variables' && (
-        <section>
+        <section className="space-y-4">
           <div className="flex items-center gap-3 mb-4">
             <Layers className="w-5 h-5 text-secondary" />
             <h3 className="text-xl font-medium text-on-surface">变量与概念</h3>
+          </div>
+          <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-3">
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-outline" />
+                <input
+                  value={variableSearchQuery}
+                  onChange={(e) => setVariableSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void runVariableSemanticSearch();
+                  }}
+                  placeholder="搜索变量名、概念、来源论文；回车语义搜索"
+                  className="w-full rounded-lg border border-outline-variant bg-surface-container py-2 pl-9 pr-3 text-sm outline-none focus:border-secondary"
+                />
+              </div>
+              <button
+                onClick={() => void runVariableSemanticSearch()}
+                disabled={!variableSearchQuery.trim() || variableSemanticLoading}
+                className="rounded-lg bg-secondary px-3 py-2 text-sm font-semibold text-on-secondary disabled:opacity-50"
+              >
+                {variableSemanticLoading ? '语义检索中...' : '语义检索'}
+              </button>
+            </div>
+            <div className="mt-2 text-xs text-on-surface-variant">
+              本地匹配 {visibleVariableRows.length}/{variableRows.length} 个变量
+            </div>
+            {!!variableSemanticError && (
+              <div className="mt-3 rounded-lg border border-error/30 bg-error-container/20 px-3 py-2 text-xs text-error">{variableSemanticError}</div>
+            )}
+            {semanticVariableResults.length > 0 && (
+              <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+                {semanticVariableResults.map((row) => (
+                  <div key={`${row.library_id}-${row.id}-${row.variable_name}`} className="rounded-lg border border-outline-variant bg-surface-container p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-on-surface">{row.variable_name || row.node_id || '未命名变量'}</div>
+                        <div className="mt-1 text-[11px] font-mono text-outline">{row.library_id} · score {Number(row.score || 0).toFixed(3)}</div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          onClick={() => openSemanticVariableSource(row)}
+                          className="rounded border border-outline-variant px-2 py-1 text-xs hover:border-secondary"
+                        >
+                          来源
+                        </button>
+                        <button
+                          onClick={() => focusSemanticVariable(row)}
+                          disabled={!row.node_id}
+                          className="rounded bg-secondary px-2 py-1 text-xs text-on-secondary disabled:opacity-40"
+                        >
+                          图谱
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2 line-clamp-3 text-xs text-on-surface-variant">{row.concept_text || '暂无概念'}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div className="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden">
             <table className="w-full text-left border-collapse">
               <thead className="bg-surface-container-low border-b border-outline-variant"><tr><th className="px-4 py-3 text-[13px] font-mono uppercase text-outline">变量</th><th className="px-4 py-3 text-[13px] font-mono uppercase text-outline">概念</th><th className="px-4 py-3 text-[13px] font-mono uppercase text-outline">来源论文</th><th className="px-4 py-3" /></tr></thead>
               <tbody className="divide-y divide-outline-variant">
-                {variableRows.map((row) => (
+                {visibleVariableRows.map((row) => (
                   <tr key={`${row.libraryId}-${row.id}`} className="hover:bg-surface-container-low transition-colors">
                     <td className="px-4 py-3 text-sm text-on-surface font-medium">{row.name}</td>
                     <td className="px-4 py-3 text-xs text-on-surface-variant">{row.concept}</td>
